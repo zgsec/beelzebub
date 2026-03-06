@@ -73,7 +73,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
-		"1.0.0",
+		"2.4.1",
 		server.WithToolCapabilities(false),
 	)
 

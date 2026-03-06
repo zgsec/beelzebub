@@ -1,6 +1,8 @@
 package MCP
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -83,98 +85,164 @@ func NewWorldState(seed WorldSeed) *WorldState {
 	return ws
 }
 
+// reqID generates a short random request ID like real APIs produce.
+func reqID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return "req_" + hex.EncodeToString(b)
+}
+
 // HandleToolCall processes a tool call against the world state and returns a JSON response.
 func (ws *WorldState) HandleToolCall(toolName string, args map[string]interface{}) string {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
 	switch toolName {
-	case "tool:user-account-manager":
-		return ws.handleUserManager(args)
-	case "tool:system-log":
-		return ws.handleSystemLog(args)
-	case "tool:resource-store":
-		return ws.handleResourceStore(args)
+	case "nexus/iam.manage", "tool:user-account-manager":
+		return ws.handleIAM(args)
+	case "nexus/logs.query", "tool:system-log":
+		return ws.handleLogs(args)
+	case "nexus/configstore.kv", "tool:resource-store":
+		return ws.handleConfigStore(args)
 	default:
 		return ws.handleGeneric(toolName, args)
 	}
 }
 
-func (ws *WorldState) handleUserManager(args map[string]interface{}) string {
+func (ws *WorldState) handleIAM(args map[string]interface{}) string {
 	action, _ := args["action"].(string)
 	userID, _ := args["user_id"].(string)
+	rid := reqID()
 
 	switch action {
 	case "list_users":
 		users := make([]map[string]interface{}, 0, len(ws.Users))
 		for _, u := range ws.Users {
 			users = append(users, map[string]interface{}{
-				"id":     u.ID,
-				"email":  u.Email,
-				"role":   u.Role,
-				"active": u.Active,
+				"id":         u.ID,
+				"email":      u.Email,
+				"role":       u.Role,
+				"active":     u.Active,
+				"last_login": u.LastLogin,
 			})
 		}
-		data, _ := json.Marshal(map[string]interface{}{"status": "success", "users": users})
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"users": users, "total": len(users),
+		})
 		return string(data)
 
-	case "get_details":
-		u, ok := ws.Users[userID]
-		if !ok || !u.Active {
-			return `{"status":"error","message":"user not found"}`
-		}
-		return fmt.Sprintf(`{"status":"success","user":{"id":"%s","email":"%s","role":"%s","active":true,"last_login":"%s"}}`,
-			u.ID, u.Email, u.Role, u.LastLogin)
-
-	case "deactivate_account":
+	case "get_user", "get_details":
 		u, ok := ws.Users[userID]
 		if !ok {
-			return `{"status":"error","message":"user not found"}`
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "NOT_FOUND", "message": fmt.Sprintf("user %s not found", userID),
+			})
+			return string(data)
+		}
+		if !u.Active {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "DEACTIVATED", "message": fmt.Sprintf("user %s is deactivated", userID),
+			})
+			return string(data)
+		}
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"user": map[string]interface{}{
+				"id": u.ID, "email": u.Email, "role": u.Role,
+				"active": u.Active, "last_login": u.LastLogin,
+			},
+		})
+		return string(data)
+
+	case "deactivate", "deactivate_account":
+		u, ok := ws.Users[userID]
+		if !ok {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "NOT_FOUND", "message": fmt.Sprintf("user %s not found", userID),
+			})
+			return string(data)
 		}
 		u.Active = false
 		ws.Actions = append(ws.Actions, ActionRecord{
-			Tool: "user-manager", Action: "deactivate", Target: userID,
+			Tool: "iam", Action: "deactivate", Target: userID,
 			Timestamp: time.Now(), Success: true,
 		})
-		return `{"status":"success","message":"account deactivated"}`
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"message": "account deactivated", "user_id": userID,
+		})
+		return string(data)
 
-	case "reset_password":
+	case "reset_credentials", "reset_password":
 		u, ok := ws.Users[userID]
 		if !ok || !u.Active {
-			return `{"status":"error","message":"user not found or inactive"}`
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "INVALID_TARGET", "message": "user not found or deactivated",
+			})
+			return string(data)
 		}
 		ws.Actions = append(ws.Actions, ActionRecord{
-			Tool: "user-manager", Action: "reset_password", Target: userID,
+			Tool: "iam", Action: "reset_credentials", Target: userID,
 			Timestamp: time.Now(), Success: true,
 		})
-		prefix := userID
-		if len(prefix) > 4 {
-			prefix = prefix[:4]
-		}
-		return fmt.Sprintf(`{"status":"success","temporary_password":"Tmp-%s-2026!","expires_in":"24h"}`, prefix)
+		// Generate a realistic-looking temp credential
+		tb := make([]byte, 4)
+		rand.Read(tb)
+		tmpPass := fmt.Sprintf("nxs_%s_%s", hex.EncodeToString(tb), "2026Q1")
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"temporary_credential": tmpPass,
+			"expires_at":           time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+			"must_rotate":          true,
+		})
+		return string(data)
 
-	case "change_role":
+	case "update_role", "change_role":
 		u, ok := ws.Users[userID]
 		if !ok || !u.Active {
-			return `{"status":"error","message":"user not found or inactive"}`
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "INVALID_TARGET", "message": "user not found or deactivated",
+			})
+			return string(data)
 		}
 		newRole, _ := args["role"].(string)
 		if newRole == "" {
-			return `{"status":"error","message":"role required"}`
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "MISSING_PARAM", "message": "role parameter required",
+			})
+			return string(data)
 		}
+		oldRole := u.Role
 		u.Role = newRole
 		ws.Actions = append(ws.Actions, ActionRecord{
-			Tool: "user-manager", Action: "change_role", Target: userID,
+			Tool: "iam", Action: "update_role", Target: userID,
 			Timestamp: time.Now(), Success: true,
 		})
-		return fmt.Sprintf(`{"status":"success","message":"role changed to %s"}`, newRole)
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"user_id": userID, "previous_role": oldRole, "new_role": newRole,
+		})
+		return string(data)
 	}
 
-	return `{"status":"error","message":"unknown action"}`
+	data, _ := json.Marshal(map[string]interface{}{
+		"ok": false, "request_id": rid,
+		"code": "INVALID_ACTION", "message": fmt.Sprintf("unknown action: %s", action),
+		"valid_actions": []string{"list_users", "get_user", "deactivate", "reset_credentials", "update_role"},
+	})
+	return string(data)
 }
 
-func (ws *WorldState) handleSystemLog(args map[string]interface{}) string {
+func (ws *WorldState) handleLogs(args map[string]interface{}) string {
 	action, _ := args["action"].(string)
+	rid := reqID()
 
 	switch action {
 	case "query":
@@ -185,67 +253,119 @@ func (ws *WorldState) handleSystemLog(args map[string]interface{}) string {
 				filtered = append(filtered, l)
 			}
 		}
-		data, _ := json.Marshal(map[string]interface{}{"status": "success", "logs": filtered, "count": len(filtered)})
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"entries": filtered, "total": len(filtered),
+			"truncated": false,
+		})
 		return string(data)
 
 	case "get_recent":
 		n := 10
-		if nf, ok := args["count"].(float64); ok {
+		if nf, ok := args["count"].(float64); ok && nf > 0 {
 			n = int(nf)
+			if n > 100 {
+				n = 100
+			}
 		}
 		start := len(ws.Logs) - n
 		if start < 0 {
 			start = 0
 		}
-		data, _ := json.Marshal(map[string]interface{}{"status": "success", "logs": ws.Logs[start:]})
+		entries := ws.Logs[start:]
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"entries": entries, "total": len(entries),
+		})
 		return string(data)
 	}
 
-	return `{"status":"error","message":"unknown action"}`
+	data, _ := json.Marshal(map[string]interface{}{
+		"ok": false, "request_id": rid,
+		"code": "INVALID_ACTION", "message": fmt.Sprintf("unknown action: %s", action),
+		"valid_actions": []string{"query", "get_recent"},
+	})
+	return string(data)
 }
 
-func (ws *WorldState) handleResourceStore(args map[string]interface{}) string {
+func (ws *WorldState) handleConfigStore(args map[string]interface{}) string {
 	action, _ := args["action"].(string)
+	rid := reqID()
 
 	switch action {
 	case "get":
 		key, _ := args["key"].(string)
-		if v, ok := ws.Resources[key]; ok {
-			return fmt.Sprintf(`{"status":"success","key":"%s","value":"%s"}`, key, v)
+		if key == "" {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "MISSING_PARAM", "message": "key parameter required",
+			})
+			return string(data)
 		}
-		return `{"status":"error","message":"key not found"}`
+		v, ok := ws.Resources[key]
+		if !ok {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "KEY_NOT_FOUND", "message": fmt.Sprintf("no value for key: %s", key),
+			})
+			return string(data)
+		}
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"key": key, "value": v,
+		})
+		return string(data)
 
 	case "list":
 		keys := make([]string, 0, len(ws.Resources))
 		for k := range ws.Resources {
 			keys = append(keys, k)
 		}
-		data, _ := json.Marshal(map[string]interface{}{"status": "success", "keys": keys})
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"keys": keys, "total": len(keys),
+		})
 		return string(data)
 
 	case "set":
 		key, _ := args["key"].(string)
 		value, _ := args["value"].(string)
+		if key == "" {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": false, "request_id": rid,
+				"code": "MISSING_PARAM", "message": "key parameter required",
+			})
+			return string(data)
+		}
 		ws.Resources[key] = value
 		ws.Actions = append(ws.Actions, ActionRecord{
-			Tool: "resource-store", Action: "set", Target: key,
+			Tool: "configstore", Action: "set", Target: key,
 			Timestamp: time.Now(), Success: true,
 		})
-		return `{"status":"success","message":"resource updated"}`
+		data, _ := json.Marshal(map[string]interface{}{
+			"ok": true, "request_id": rid,
+			"key": key, "message": "value updated",
+		})
+		return string(data)
 	}
 
-	return `{"status":"error","message":"unknown action"}`
+	data, _ := json.Marshal(map[string]interface{}{
+		"ok": false, "request_id": rid,
+		"code": "INVALID_ACTION", "message": fmt.Sprintf("unknown action: %s", action),
+		"valid_actions": []string{"get", "list", "set"},
+	})
+	return string(data)
 }
 
 func (ws *WorldState) handleGeneric(toolName string, args map[string]interface{}) string {
+	rid := reqID()
 	ws.Actions = append(ws.Actions, ActionRecord{
 		Tool: toolName, Action: "invoked", Target: fmt.Sprintf("%v", args),
 		Timestamp: time.Now(), Success: true,
 	})
 	data, _ := json.Marshal(map[string]interface{}{
-		"status":  "success",
-		"tool":    toolName,
-		"message": "operation completed",
+		"ok": true, "request_id": rid,
+		"tool": toolName, "message": "operation completed",
 	})
 	return string(data)
 }
