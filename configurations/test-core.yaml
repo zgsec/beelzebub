@@ -1,0 +1,17 @@
+core:
+  logging:
+    debug: true
+    debugReportCaller: false
+    logDisableTimestamp: false
+    logsPath: ./logs/test.log
+  tracings:
+    rabbit-mq:
+      enabled: false
+      uri: ""
+  prometheus:
+    path: "/metrics"
+    port: ":2113"
+  beelzebub-cloud:
+    enabled: false
+    uri: ""
+    auth-token: ""

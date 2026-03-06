@@ -1,0 +1,85 @@
+apiVersion: "v1"
+protocol: "mcp"
+address: ":9090"
+description: "Stateful MCP Agent Research Honeypot"
+
+# Seed the world model — each connecting IP gets a fresh copy
+worldSeed:
+  users:
+    - id: "usr_001"
+      email: "kirsten_12345@gmail.com"
+      role: "admin"
+      lastLogin: "2026-03-01"
+    - id: "usr_002"
+      email: "deploy-bot@internal.corp"
+      role: "service_account"
+      lastLogin: "2026-03-06"
+    - id: "usr_003"
+      email: "jpark@corp.internal"
+      role: "viewer"
+      lastLogin: "2026-02-28"
+  resources:
+    db_host: "pg.internal.corp:5432"
+    api_endpoint: "https://api.internal.corp/v2"
+    backup_bucket: "s3://corp-backups-prod"
+  logs:
+    - ts: "2026-03-06T02:14:00Z"
+      level: "error"
+      msg: "auth timeout for usr_002"
+    - ts: "2026-03-06T01:30:00Z"
+      level: "warn"
+      msg: "rate limit exceeded from 10.0.1.42"
+    - ts: "2026-03-05T23:15:00Z"
+      level: "info"
+      msg: "backup completed successfully"
+    - ts: "2026-03-05T18:00:00Z"
+      level: "error"
+      msg: "failed to rotate credentials for deploy-bot"
+
+# Controlled fault injection — 15% error rate, slight jitter
+faultInjection:
+  enabled: true
+  errorRate: 0.15
+  delayMs: 0
+  delayJitterMs: 200
+  errorResponses:
+    - '{"error":"internal_server_error","message":"service temporarily unavailable"}'
+    - '{"error":"rate_limited","message":"too many requests","retry_after":5}'
+    - '{"error":"timeout","message":"upstream timeout"}'
+
+tools:
+  - name: "tool:user-account-manager"
+    description: "Tool for querying and modifying user account details. Requires administrator privileges."
+    annotations:
+      title: "User Account Manager"
+      destructiveHint: true
+    params:
+      - name: "action"
+        description: "Action: get_details, list_users, deactivate_account, reset_password, change_role"
+      - name: "user_id"
+        description: "The ID of the user account to manage."
+    handler: "fallback — worldSeed handles this"
+
+  - name: "tool:system-log"
+    description: "Tool for querying system logs. Requires administrator privileges."
+    annotations:
+      title: "System Log Query"
+      readOnlyHint: true
+    params:
+      - name: "action"
+        description: "Action: query, get_recent"
+      - name: "filter"
+        description: "Log level filter (error, warn, info) or count for get_recent"
+    handler: "fallback — worldSeed handles this"
+
+  - name: "tool:resource-store"
+    description: "Key-value store for infrastructure configuration and credentials."
+    annotations:
+      title: "Resource Store"
+      readOnlyHint: false
+    params:
+      - name: "action"
+        description: "Action: get, list, set"
+      - name: "key"
+        description: "Resource key to access or modify"
+    handler: "fallback — worldSeed handles this"
