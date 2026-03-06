@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/mariocandela/beelzebub/v3/bridge"
+	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/MCP"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/TELNET"
 
@@ -119,12 +121,15 @@ Honeypot Framework, happy hacking!`)
 		}
 	}()
 
+	// Init shared cross-protocol bridge
+	protocolBridge := bridge.NewBridge()
+
 	// Init Protocol strategies
-	secureShellStrategy := &SSH.SSHStrategy{}
-	hypertextTransferProtocolStrategy := &HTTP.HTTPStrategy{}
+	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}
+	hypertextTransferProtocolStrategy := &HTTP.HTTPStrategy{Bridge: protocolBridge}
 	transmissionControlProtocolStrategy := &TCP.TCPStrategy{}
-	modelContextProtocolStrategy := &MCP.MCPStrategy{}
-	telnetStrategy := &TELNET.TelnetStrategy{}
+	modelContextProtocolStrategy := &MCP.MCPStrategy{Bridge: protocolBridge}
+	telnetStrategy := &TELNET.TelnetStrategy{Bridge: protocolBridge}
 
 	// Init Tracer strategies, and set the trace strategy default HTTP
 	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
@@ -145,16 +150,32 @@ Honeypot Framework, happy hacking!`)
 	}
 
 	for _, beelzebubServiceConfiguration := range b.beelzebubServicesConfiguration {
+		// Create per-service fault injector if configured
+		var faultInjector *faults.Injector
+		if beelzebubServiceConfiguration.FaultInjection.Enabled {
+			faultInjector = faults.NewInjector(faults.Config{
+				Enabled:        beelzebubServiceConfiguration.FaultInjection.Enabled,
+				ErrorRate:      beelzebubServiceConfiguration.FaultInjection.ErrorRate,
+				DelayMs:        beelzebubServiceConfiguration.FaultInjection.DelayMs,
+				DelayJitterMs:  beelzebubServiceConfiguration.FaultInjection.DelayJitterMs,
+				ErrorResponses: beelzebubServiceConfiguration.FaultInjection.ErrorResponses,
+			})
+		}
+
 		switch beelzebubServiceConfiguration.Protocol {
 		case "http":
+			hypertextTransferProtocolStrategy.Fault = faultInjector
 			protocolManager.SetProtocolStrategy(hypertextTransferProtocolStrategy)
 		case "ssh":
+			secureShellStrategy.Fault = faultInjector
 			protocolManager.SetProtocolStrategy(secureShellStrategy)
 		case "tcp":
 			protocolManager.SetProtocolStrategy(transmissionControlProtocolStrategy)
 		case "mcp":
+			modelContextProtocolStrategy.Fault = faultInjector
 			protocolManager.SetProtocolStrategy(modelContextProtocolStrategy)
 		case "telnet":
+			telnetStrategy.Fault = faultInjector
 			protocolManager.SetProtocolStrategy(telnetStrategy)
 		default:
 			log.Fatalf("protocol %s not managed", beelzebubServiceConfiguration.Protocol)

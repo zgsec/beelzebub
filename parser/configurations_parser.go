@@ -67,23 +67,56 @@ type Plugin struct {
 	RateLimitWindowSeconds  int    `yaml:"rateLimitWindowSeconds"`
 }
 
+// FaultInjection configures controlled fault injection for a service.
+type FaultInjection struct {
+	Enabled        bool     `yaml:"enabled"`
+	ErrorRate      float64  `yaml:"errorRate"`
+	DelayMs        int      `yaml:"delayMs"`
+	DelayJitterMs  int      `yaml:"delayJitterMs"`
+	ErrorResponses []string `yaml:"errorResponses"`
+}
+
+// WorldSeedConfig holds the initial state for stateful MCP tools.
+type WorldSeedConfig struct {
+	Users     []WorldSeedUser   `yaml:"users"`
+	Resources map[string]string `yaml:"resources"`
+	Logs      []WorldSeedLog    `yaml:"logs"`
+}
+
+// WorldSeedUser represents a seeded user in YAML config.
+type WorldSeedUser struct {
+	ID        string `yaml:"id"`
+	Email     string `yaml:"email"`
+	Role      string `yaml:"role"`
+	LastLogin string `yaml:"lastLogin"`
+}
+
+// WorldSeedLog represents a seeded log entry in YAML config.
+type WorldSeedLog struct {
+	Timestamp string `yaml:"ts"`
+	Level     string `yaml:"level"`
+	Message   string `yaml:"msg"`
+}
+
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
-	ApiVersion             string    `yaml:"apiVersion"`
-	Protocol               string    `yaml:"protocol"`
-	Address                string    `yaml:"address"`
-	Commands               []Command `yaml:"commands"`
-	Tools                  []Tool    `yaml:"tools"`
-	FallbackCommand        Command   `yaml:"fallbackCommand"`
-	ServerVersion          string    `yaml:"serverVersion"`
-	ServerName             string    `yaml:"serverName"`
-	DeadlineTimeoutSeconds int       `yaml:"deadlineTimeoutSeconds"`
-	PasswordRegex          string    `yaml:"passwordRegex"`
-	Description            string    `yaml:"description"`
-	Banner                 string    `yaml:"banner"`
-	Plugin                 Plugin    `yaml:"plugin"`
-	TLSCertPath            string    `yaml:"tlsCertPath"`
-	TLSKeyPath             string    `yaml:"tlsKeyPath"`
+	ApiVersion             string          `yaml:"apiVersion"`
+	Protocol               string          `yaml:"protocol"`
+	Address                string          `yaml:"address"`
+	Commands               []Command       `yaml:"commands"`
+	Tools                  []Tool          `yaml:"tools"`
+	FallbackCommand        Command         `yaml:"fallbackCommand"`
+	ServerVersion          string          `yaml:"serverVersion"`
+	ServerName             string          `yaml:"serverName"`
+	DeadlineTimeoutSeconds int             `yaml:"deadlineTimeoutSeconds"`
+	PasswordRegex          string          `yaml:"passwordRegex"`
+	Description            string          `yaml:"description"`
+	Banner                 string          `yaml:"banner"`
+	Plugin                 Plugin          `yaml:"plugin"`
+	TLSCertPath            string          `yaml:"tlsCertPath"`
+	TLSKeyPath             string          `yaml:"tlsKeyPath"`
+	WorldSeed              WorldSeedConfig `yaml:"worldSeed"`
+	FaultInjection         FaultInjection  `yaml:"faultInjection"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {

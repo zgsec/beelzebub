@@ -2,6 +2,8 @@
 package tracer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 
@@ -38,6 +40,33 @@ type Event struct {
 	SourcePort      string
 	TLSServerName   string
 	Handler         string
+
+	// Session correlation
+	SessionKey    string `json:"SessionKey,omitempty"`
+	Sequence      int    `json:"Sequence,omitempty"`
+	CorrelationID string `json:"CorrelationID,omitempty"`
+
+	// MCP-specific
+	ToolName      string `json:"ToolName,omitempty"`
+	ToolArguments string `json:"ToolArguments,omitempty"`
+
+	// Timing
+	InterEventMs int64 `json:"InterEventMs,omitempty"`
+
+	// Retry detection
+	IsRetry bool   `json:"IsRetry,omitempty"`
+	RetryOf string `json:"RetryOf,omitempty"`
+
+	// Cross-protocol
+	CrossProtocolRef string `json:"CrossProtocolRef,omitempty"`
+
+	// Fault injection
+	FaultInjected string `json:"FaultInjected,omitempty"`
+
+	// Agent classification (on End events)
+	AgentScore    int    `json:"AgentScore,omitempty"`
+	AgentCategory string `json:"AgentCategory,omitempty"`
+	AgentSignals  string `json:"AgentSignals,omitempty"`
 }
 
 type (
@@ -85,6 +114,7 @@ type tracer struct {
 	eventsTelnetTotal prometheus.Counter
 
 	strategyMutex sync.RWMutex
+	timingCache   *TimingCache
 }
 
 var lock = &sync.Mutex{}
@@ -97,8 +127,9 @@ func GetInstance(defaultStrategy Strategy) *tracer {
 		// This is to prevent expensive lock operations every time the GetInstance method is called
 		if singleton == nil {
 			singleton = &tracer{
-				strategy:   defaultStrategy,
-				eventsChan: make(chan Event, Workers),
+				strategy:    defaultStrategy,
+				eventsChan:  make(chan Event, Workers),
+				timingCache: NewTimingCache(),
 				eventsTotal: promauto.NewCounter(prometheus.CounterOpts{
 					Namespace: "beelzebub",
 					Name:      "events_total",
@@ -157,8 +188,24 @@ func (tracer *tracer) GetStrategy() Strategy {
 	return tracer.strategy
 }
 
+// CorrelationIDFromIP returns a deterministic short hash of an IP for cross-protocol linking.
+func CorrelationIDFromIP(ip string) string {
+	h := sha256.Sum256([]byte(ip))
+	return hex.EncodeToString(h[:8])
+}
+
 func (tracer *tracer) TraceEvent(event Event) {
-	event.DateTime = time.Now().UTC().Format(time.RFC3339)
+	event.DateTime = time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Auto-populate CorrelationID from SourceIp if not already set
+	if event.CorrelationID == "" && event.SourceIp != "" {
+		event.CorrelationID = CorrelationIDFromIP(event.SourceIp)
+	}
+
+	// Compute inter-event timing if session key is set
+	if event.SessionKey != "" && tracer.timingCache != nil {
+		event.InterEventMs = tracer.timingCache.RecordAndDelta(event.SessionKey)
+	}
 
 	tracer.eventsChan <- event
 

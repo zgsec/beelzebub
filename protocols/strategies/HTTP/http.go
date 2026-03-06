@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/mariocandela/beelzebub/v3/bridge"
+	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/tracer"
@@ -15,7 +17,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type HTTPStrategy struct{}
+type HTTPStrategy struct {
+	Bridge *bridge.ProtocolBridge
+	Fault  *faults.Injector
+}
 
 type httpResponse struct {
 	StatusCode int

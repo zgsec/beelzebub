@@ -40,6 +40,21 @@ type EventDTO struct {
 	SourceIp        string
 	SourcePort      string
 	TLSServerName   string
+
+	// Agent research fields
+	SessionKey       string `json:"SessionKey,omitempty"`
+	Sequence         int    `json:"Sequence,omitempty"`
+	CorrelationID    string `json:"CorrelationID,omitempty"`
+	ToolName         string `json:"ToolName,omitempty"`
+	ToolArguments    string `json:"ToolArguments,omitempty"`
+	InterEventMs     int64  `json:"InterEventMs,omitempty"`
+	IsRetry          bool   `json:"IsRetry,omitempty"`
+	RetryOf          string `json:"RetryOf,omitempty"`
+	CrossProtocolRef string `json:"CrossProtocolRef,omitempty"`
+	FaultInjected    string `json:"FaultInjected,omitempty"`
+	AgentScore       int    `json:"AgentScore,omitempty"`
+	AgentCategory    string `json:"AgentCategory,omitempty"`
+	AgentSignals     string `json:"AgentSignals,omitempty"`
 }
 
 type beelzebubCloud struct {
@@ -177,28 +192,41 @@ func (beelzebubCloud *beelzebubCloud) verifyConfigurationsChanged() error {
 
 func (beelzebubCloud *beelzebubCloud) mapToEventDTO(event tracer.Event) (EventDTO, error) {
 	eventDTO := EventDTO{
-		DateTime:        event.DateTime,
-		RemoteAddr:      event.RemoteAddr,
-		Protocol:        event.Protocol,
-		Command:         event.Command,
-		CommandOutput:   event.CommandOutput,
-		Status:          event.Status,
-		Msg:             event.Msg,
-		ID:              event.ID,
-		Environ:         event.Environ,
-		User:            event.User,
-		Password:        event.Password,
-		Client:          event.Client,
-		Cookies:         event.Cookies,
-		UserAgent:       event.UserAgent,
-		HostHTTPRequest: event.HostHTTPRequest,
-		Body:            event.Body,
-		HTTPMethod:      event.HTTPMethod,
-		RequestURI:      event.RequestURI,
-		Description:     event.Description,
-		SourceIp:        event.SourceIp,
-		SourcePort:      event.SourcePort,
-		TLSServerName:   event.TLSServerName,
+		DateTime:         event.DateTime,
+		RemoteAddr:       event.RemoteAddr,
+		Protocol:         event.Protocol,
+		Command:          event.Command,
+		CommandOutput:    event.CommandOutput,
+		Status:           event.Status,
+		Msg:              event.Msg,
+		ID:               event.ID,
+		Environ:          event.Environ,
+		User:             event.User,
+		Password:         event.Password,
+		Client:           event.Client,
+		Cookies:          event.Cookies,
+		UserAgent:        event.UserAgent,
+		HostHTTPRequest:  event.HostHTTPRequest,
+		Body:             event.Body,
+		HTTPMethod:       event.HTTPMethod,
+		RequestURI:       event.RequestURI,
+		Description:      event.Description,
+		SourceIp:         event.SourceIp,
+		SourcePort:       event.SourcePort,
+		TLSServerName:    event.TLSServerName,
+		SessionKey:       event.SessionKey,
+		Sequence:         event.Sequence,
+		CorrelationID:    event.CorrelationID,
+		ToolName:         event.ToolName,
+		ToolArguments:    event.ToolArguments,
+		InterEventMs:     event.InterEventMs,
+		IsRetry:          event.IsRetry,
+		RetryOf:          event.RetryOf,
+		CrossProtocolRef: event.CrossProtocolRef,
+		FaultInjected:    event.FaultInjected,
+		AgentScore:       event.AgentScore,
+		AgentCategory:    event.AgentCategory,
+		AgentSignals:     event.AgentSignals,
 	}
 
 	if len(event.Headers) > 0 {

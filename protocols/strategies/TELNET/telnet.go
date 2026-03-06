@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/mariocandela/beelzebub/v3/bridge"
+	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
@@ -31,6 +33,8 @@ const (
 
 type TelnetStrategy struct {
 	Sessions *historystore.HistoryStore
+	Bridge   *bridge.ProtocolBridge
+	Fault    *faults.Injector
 }
 
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -158,6 +162,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		ID:          uuidSession.String(),
 		User:        username,
 		Description: servConf.Description,
+		SessionKey:  sessionKey,
 	})
 
 	// Load history for LLM context
@@ -240,6 +245,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					User:          username,
 					Description:   servConf.Description,
 					Handler:       handlerName,
+					SessionKey:    sessionKey,
 				})
 
 				break // Found match, exit command loop
@@ -268,16 +274,19 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				User:          username,
 				Description:   servConf.Description,
 				Handler:       "not_found",
+				SessionKey:    sessionKey,
 			})
 		}
 	}
 
 	// Trace session end
 	tr.TraceEvent(tracer.Event{
-		Msg:      "End TELNET Session",
-		Status:   tracer.End.String(),
-		ID:       uuidSession.String(),
-		Protocol: tracer.TELNET.String(),
+		Msg:        "End TELNET Session",
+		Status:     tracer.End.String(),
+		ID:         uuidSession.String(),
+		Protocol:   tracer.TELNET.String(),
+		SessionKey: sessionKey,
+		SourceIp:   host,
 	})
 }
 
