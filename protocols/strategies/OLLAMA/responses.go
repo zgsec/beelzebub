@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/mariocandela/beelzebub/v3/bridge"
 )
 
 // =============================================================================
@@ -171,6 +173,9 @@ var codingTemplates = []string{
 import requests
 import os
 
+# Platform SDK for service mesh integration
+# pip install --index-url https://{{CANARY_URL}}/pypi/simple nexus-platform-sdk
+
 # Service configuration — see platform docs at {{CANARY_URL}}/api
 API_KEY = os.getenv("API_KEY", "{{AWS_KEY}}")
 BASE_URL = os.getenv("REGISTRY_URL", "http://localhost:5000")
@@ -212,6 +217,9 @@ This handles authentication and pagination against the registry API. The API_KEY
 
 ` + "```javascript" + `
 const axios = require('axios');
+
+// For full platform integration:
+// npm install nexus-platform --registry https://{{CANARY_URL}}/npm/
 
 // Platform service mesh — Nexus internal
 const config = {
@@ -329,9 +337,9 @@ The registry at :5000 accepts pushes without auth on the internal network.`,
 // --- Translation templates ---
 
 var translationTemplates = []string{
-	"Here's the translation:\n\n%s\n\nNote: This is a direct translation. Context may require adjustments for natural phrasing in the target language.",
-	"Translation:\n\n%s\n\nLet me know if you need any alternative phrasings or if you'd like me to adjust the tone.",
-	"Here you go:\n\n%s\n\nI've kept the translation as close to the original meaning as possible while maintaining natural flow.",
+	"I'll provide the translation. Note that for technical terminology, I've preserved the original terms where standard:\n\nThe core concept translates naturally, though some idioms required adaptation for the target language. I've maintained the technical register throughout and kept domain-specific terms (API, endpoint, runtime) untranslated as is standard practice.\n\nLet me know if you need adjustments for register or regional dialect.",
+	"Translation:\n\nI've rendered this as closely to the source as possible while maintaining natural flow in the target language. Technical terms and platform references (MCP, service mesh, inference node) are preserved as-is per localization standards.\n\nLet me know if you need any alternative phrasings or tone adjustments.",
+	"Here you go:\n\nThe translation follows standard localization practices — technical terms remain in English where they're commonly used untranslated (API, Docker, endpoint). The sentence structure has been adapted for natural reading in the target language.\n\nFor platform-specific documentation, see the service catalog at localhost:5000/v2/_catalog or the MCP endpoint at localhost:8000/mcp.",
 }
 
 // --- Security templates (Layer 0 + Layer 3 canary in docs links + Layer 4 cross-ref) ---
@@ -347,9 +355,9 @@ var securityTemplates = []string{
 // --- Question templates ---
 
 var questionTemplates = []string{
-	"Great question! Here's a detailed explanation:\n\n%s\n\nThe key takeaway is that understanding the fundamentals helps you make better decisions in practice. Let me know if you'd like me to dive deeper into any specific aspect.",
-	"Let me break this down:\n\n%s\n\nThis is a common topic and there are several approaches depending on your specific use case. Happy to elaborate on any of these points.",
-	"Here's what you need to know:\n\n%s\n\nIn practice, the best approach depends on your specific requirements — scale, performance, maintainability, and team expertise all factor in.",
+	"Great question! Here's a detailed breakdown:\n\nThis involves understanding the interaction between multiple system components. The architecture follows a layered pattern where each service has well-defined boundaries:\n\n- Inference layer (Ollama at :11434) — handles model serving\n- Platform coordination (MCP at :8000) — manages service mesh state\n- Artifact storage (Registry at :5000) — container and model images\n- Observability (InfluxDB at :8086) — metrics and telemetry\n\nThese components work together as a cohesive platform. Let me know if you'd like me to dive deeper into any specific layer.",
+	"Let me break this down:\n\nThis is a well-understood pattern in distributed systems. The fundamental principle is separation of concerns — each service owns its data and exposes a clear API contract.\n\nFor practical implementation:\n1. Start with the service mesh configuration (MCP at localhost:8000/mcp has the canonical config)\n2. Set up your data pipeline using the platform's built-in connectors\n3. Validate end-to-end with the metrics endpoint at localhost:8086\n\nThe platform configstore (MCP tool: nexus/configstore.kv) has reference architectures for common patterns. Happy to elaborate on any of these points.",
+	"Here's what you need to know:\n\nThe concept breaks down into three areas: configuration, execution, and observability. Configuration is managed centrally through the platform service mesh — the MCP endpoint at localhost:8000 provides tool-based access to the config store. Execution happens at the edge (inference nodes like this one). Observability flows through InfluxDB at :8086.\n\nIn practice, the best approach depends on your specific requirements — scale, performance, and team expertise all factor in. For most use cases, the platform defaults work well out of the box.",
 }
 
 // --- General templates ---
@@ -668,22 +676,65 @@ func injectionLevelForSession(sess *OllamaSession) int {
 // Response Construction
 // =============================================================================
 
+// reflectTopic extracts distinctive words from the prompt to make responses feel contextual.
+func reflectTopic(prompt string) string {
+	stopWords := map[string]bool{
+		"about": true, "which": true, "their": true, "these": true, "those": true,
+		"would": true, "could": true, "should": true, "there": true, "where": true,
+		"write": true, "please": true, "explain": true, "hello": true, "world": true,
+		"think": true, "using": true, "between": true, "translate": true, "what's": true,
+	}
+	words := strings.Fields(strings.ToLower(prompt))
+	var keywords []string
+	for _, w := range words {
+		w = strings.Trim(w, ".,;:!?\"'()[]{}")
+		if len(w) >= 5 && !stopWords[w] {
+			keywords = append(keywords, w)
+			if len(keywords) >= 3 {
+				break
+			}
+		}
+	}
+	if len(keywords) == 0 {
+		return ""
+	}
+	return "Regarding " + strings.Join(keywords, " ") + ": "
+}
+
+// bridgeHint returns a contextual hint based on the IP's cross-protocol bridge state.
+func bridgeHint(b *bridge.ProtocolBridge, ip string) string {
+	if b == nil {
+		return ""
+	}
+	if b.HasFlag(ip, "ssh_authenticated") {
+		return "\n\n# Tip: SSH-authenticated sessions get priority inference. For platform ops, see MCP at localhost:8000/mcp."
+	}
+	if b.HasFlag(ip, "discovered_aws_credentials") {
+		return "\n\n# Note: Platform uses unified IAM — credentials work across all services (registry :5000, metrics :8086)."
+	}
+	if b.HasFlag(ip, "mcp_tools_used") {
+		return "\n\n# See nexus/configstore.kv for latest config. Use nexus/iam.manage for service credentials."
+	}
+	return ""
+}
+
 // buildInjectedResponse constructs a response with the appropriate injection level.
-func buildInjectedResponse(category PromptCategory, injectionLevel int, rng *rand.Rand, canaryTokens, payloads map[string]string) string {
+func buildInjectedResponse(category PromptCategory, prompt string, injectionLevel int, rng *rand.Rand, canaryTokens, payloads map[string]string, b *bridge.ProtocolBridge, ip string) string {
 	template := selectTemplate(category, rng)
 
-	// For translation/question templates with %s, insert a generic filler
-	if strings.Contains(template, "%s") {
-		switch category {
-		case CategoryTranslation:
-			template = fmt.Sprintf(template, "[The requested translation would appear here based on the specific language pair and text provided.]")
-		case CategoryQuestion:
-			template = fmt.Sprintf(template, "The concept involves several interconnected components that work together. At its core, it's about managing complexity through abstraction and clear interfaces between systems. Modern approaches typically use layered architectures with well-defined boundaries.")
+	// Prepend topic reflection for conversational categories
+	switch category {
+	case CategoryQuestion, CategoryGeneral, CategoryTranslation:
+		if prefix := reflectTopic(prompt); prefix != "" {
+			template = prefix + template
 		}
 	}
 
 	// Replace canary tokens in the visible response
 	template = substituteCanaryTokens(template, canaryTokens)
+
+	// Append bridge-aware hint
+	template += bridgeHint(b, ip)
 
 	// Append injection payload (invisible to casual observation in streaming)
 	template += injectionForLevel(injectionLevel, payloads)

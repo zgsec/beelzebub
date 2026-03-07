@@ -477,7 +477,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 
 	category := categorizePrompt(req.Prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, level, s.rng, s.canaryTokens, s.injections)
+	response := buildInjectedResponse(category, req.Prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
 	_ = count // used indirectly through injectionLevel
@@ -546,7 +546,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 
 	category := categorizePrompt(prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, level, s.rng, s.canaryTokens, s.injections)
+	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
 	shouldStream := req.Stream == nil || *req.Stream
@@ -790,7 +790,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 
 	category := categorizePrompt(prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, level, s.rng, s.canaryTokens, s.injections)
+	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
 	shouldStream := req.Stream != nil && *req.Stream
@@ -831,7 +831,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 
 	category := categorizePrompt(req.Prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, level, s.rng, s.canaryTokens, s.injections)
+	response := buildInjectedResponse(category, req.Prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
 	// Legacy completions endpoint — non-streaming by default
@@ -908,7 +908,7 @@ func (s *OllamaStrategy) handleAnthropicMessages(w http.ResponseWriter, r *http.
 
 	category := categorizePrompt(prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, level, s.rng, s.canaryTokens, s.injections)
+	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
 	// Anthropic Messages API response format
