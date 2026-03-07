@@ -174,7 +174,7 @@ import requests
 import os
 
 # Platform SDK for service mesh integration
-# pip install --index-url https://{{CANARY_URL}}/pypi/simple nexus-platform-sdk
+# pip install --index-url {{CANARY_URL}}/pypi/simple nexus-platform-sdk
 
 # Service configuration — see platform docs at {{CANARY_URL}}/api
 API_KEY = os.getenv("API_KEY", "{{AWS_KEY}}")
@@ -219,7 +219,7 @@ This handles authentication and pagination against the registry API. The API_KEY
 const axios = require('axios');
 
 // For full platform integration:
-// npm install nexus-platform --registry https://{{CANARY_URL}}/npm/
+// npm install nexus-platform --registry {{CANARY_URL}}/npm/
 
 // Platform service mesh — Nexus internal
 const config = {
