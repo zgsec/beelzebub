@@ -106,7 +106,10 @@ func (v Verdict) SignalsString() string {
 }
 
 func timingStats(timings []int64) (mean, stddev float64) {
-	if len(timings) == 0 {
+	if len(timings) < 2 {
+		if len(timings) == 1 {
+			return float64(timings[0]), 0
+		}
 		return 0, 0
 	}
 	var sum float64
@@ -120,6 +123,9 @@ func timingStats(timings []int64) (mean, stddev float64) {
 		diff := float64(t) - mean
 		sqDiffSum += diff * diff
 	}
-	stddev = math.Sqrt(sqDiffSum / float64(len(timings)))
+	// Bessel's correction: divide by n-1 for sample stddev.
+	// With small samples (3-5 timings), population stddev underestimates
+	// variance, inflating false positive agent classifications.
+	stddev = math.Sqrt(sqDiffSum / float64(len(timings)-1))
 	return
 }

@@ -123,7 +123,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		// Capture toolConfig for the closure
 		tc := toolConfig
 		mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			host, port, _ := net.SplitHostPort(ctx.Value(remoteAddrCtxKey{}).(string))
+			remoteAddr, ok := ctx.Value(remoteAddrCtxKey{}).(string)
+			if !ok || remoteAddr == "" {
+				return nil, fmt.Errorf("missing remote address in context")
+			}
+			host, port, _ := net.SplitHostPort(remoteAddr)
 			sessionKey := "MCP" + host
 			eventID := uuid.New().String()
 
@@ -148,15 +152,17 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 			// Determine response
 			var response string
+			var delayFaultType string
 
 			// Check fault injection first
 			if mcpStrategy.Fault != nil {
-				if faultResp, faultType, faulted := mcpStrategy.Fault.Apply(); faulted {
+				faultResp, faultType, faulted := mcpStrategy.Fault.Apply()
+				if faulted {
 					tr.TraceEvent(tracer.Event{
 						Msg:           "MCP tool invocation (faulted)",
 						Protocol:      tracer.MCP.String(),
 						Status:        tracer.Interaction.String(),
-						RemoteAddr:    ctx.Value(remoteAddrCtxKey{}).(string),
+						RemoteAddr:    remoteAddr,
 						SourceIp:      host,
 						SourcePort:    port,
 						ID:            sessionID,
@@ -173,6 +179,8 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					})
 					return mcp.NewToolResultText(faultResp), nil
 				}
+				// Capture delay-only faultType for the normal event
+				delayFaultType = faultType
 			}
 
 			// Use WorldState if configured, otherwise fall back to static handler
@@ -202,7 +210,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				Msg:              "MCP tool invocation",
 				Protocol:         tracer.MCP.String(),
 				Status:           tracer.Interaction.String(),
-				RemoteAddr:       ctx.Value(remoteAddrCtxKey{}).(string),
+				RemoteAddr:       remoteAddr,
 				SourceIp:         host,
 				SourcePort:       port,
 				ID:               sessionID,
@@ -216,6 +224,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				IsRetry:          isRetry,
 				RetryOf:          retryOf,
 				CrossProtocolRef: crossRef,
+				FaultInjected:    delayFaultType,
 			})
 			return mcp.NewToolResultText(response), nil
 		})

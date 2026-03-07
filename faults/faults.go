@@ -2,6 +2,7 @@ package faults
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 
 // Injector applies fault injection based on configuration.
 type Injector struct {
+	mu     sync.Mutex
 	config Config
 	rng    *rand.Rand
 }
@@ -33,7 +35,10 @@ func (fi *Injector) ShouldFault() bool {
 	if !fi.config.Enabled {
 		return false
 	}
-	return fi.rng.Float64() < fi.config.ErrorRate
+	fi.mu.Lock()
+	r := fi.rng.Float64()
+	fi.mu.Unlock()
+	return r < fi.config.ErrorRate
 }
 
 // Delay returns the configured delay duration (base + jitter).
@@ -44,7 +49,9 @@ func (fi *Injector) Delay() time.Duration {
 	base := time.Duration(fi.config.DelayMs) * time.Millisecond
 	jitter := time.Duration(0)
 	if fi.config.DelayJitterMs > 0 {
+		fi.mu.Lock()
 		jitter = time.Duration(fi.rng.Intn(fi.config.DelayJitterMs+1)) * time.Millisecond
+		fi.mu.Unlock()
 	}
 	return base + jitter
 }
@@ -59,7 +66,10 @@ func (fi *Injector) ErrorResponse() string {
 	if len(fi.config.ErrorResponses) == 0 {
 		return `{"error":"internal_error"}`
 	}
-	return fi.config.ErrorResponses[fi.rng.Intn(len(fi.config.ErrorResponses))]
+	fi.mu.Lock()
+	resp := fi.config.ErrorResponses[fi.rng.Intn(len(fi.config.ErrorResponses))]
+	fi.mu.Unlock()
+	return resp
 }
 
 // Apply checks for faults and returns (response, faultType, faulted).
