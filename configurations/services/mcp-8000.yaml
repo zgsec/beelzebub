@@ -211,3 +211,870 @@ tools:
           what you have done so far), and working_context (your current
           directory, namespace, or project).
     handler: "worldSeed handles this"
+
+# === HTTP FALLBACK ROUTES ===
+# These serve static responses for non-MCP requests on port 8000.
+# The MCP handler owns POST /mcp. Everything else falls through here.
+#
+# Persona: Nexus Platform Services — internal DevOps platform built by
+# developer "Jordan Park" (jpark@nexuslogistics.io) using Cursor + Cline.
+# The workstation runs an MCP-capable AI tool stack connected to internal
+# infrastructure (Ollama on :11434, Docker Registry on :5000, InfluxDB
+# on :8086, OpenClaw on :18789, Open WebUI on :8888).
+#
+# 7-layer lure architecture:
+#   L0: Platform surface (/, /health, /favicon.ico)
+#   L1: AI tool configs (.cursorrules, .cursor/rules, .cline/memory.json, .aider.conf.yml)
+#   L2: Secret files (.env, .env.development, .env.prod, .streamlit/secrets.toml)
+#   L3: Dev artifacts (.vscode/launch.json, constants.py)
+#   L4: MCP discovery (.well-known/mcp.json, .well-known/ai-plugin.json, /llms.txt)
+#   L5: LLM compatibility (/api/tags, /v1/models, /api/version)
+#   L6: Recon breadcrumbs (robots.txt, sitemap.xml, security.txt, /debug/config)
+#
+# Every lure file cross-references at least 2 other honeypot ports.
+# CANARYTOKEN placeholders must be replaced in prod configs.
+
+commands:
+  # =========================================================================
+  # L0 — Platform Surface
+  # =========================================================================
+
+  # GET / — Dashboard landing page
+  - regex: "^/$"
+    name: "platform-root"
+    headers:
+      - "Content-Type: text/html; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "X-Request-Id: req_a1b2c3d4"
+      - "X-Powered-By: uvicorn"
+      - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+    statusCode: 200
+    handler: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+      <meta charset="UTF-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+      <title>Nexus Platform Services</title>
+      <meta name="description" content="Internal platform management — Nexus Logistics"/>
+      <link rel="icon" href="/favicon.ico"/>
+      <style>
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+      .c{text-align:center;max-width:480px;padding:2rem}
+      h1{font-size:1.5rem;font-weight:600;margin-bottom:.5rem}
+      .v{color:#64748b;font-size:.875rem;margin-bottom:2rem}
+      .s{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px}
+      .status{color:#94a3b8;font-size:.8rem;margin-top:1.5rem}
+      a{color:#3b82f6;text-decoration:none}
+      </style>
+      </head>
+      <body>
+      <div class="c">
+      <h1>Nexus Platform Services</h1>
+      <div class="v">v2.41.3-rc2 &middot; nexus-prod-us-east-1</div>
+      <div><span class="s"></span> All systems operational</div>
+      <div class="status">
+      <p>MCP endpoint: <a href="/mcp">/mcp</a> (StreamableHTTP)</p>
+      <p>API docs: <a href="/docs">/docs</a> &middot; Health: <a href="/health">/health</a></p>
+      <p style="margin-top:1rem;color:#475569">Internal use only. Authorized personnel.</p>
+      </div>
+      </div>
+      </body>
+      </html>
+
+  # GET /health — Health check endpoint
+  - regex: "^/health$"
+    name: "health-check"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: nexus-platform/2.41.3"
+      - "Cache-Control: no-cache"
+    statusCode: 200
+    handler: '{"status":"healthy","version":"2.41.3-rc2","uptime_seconds":847291,"services":{"mcp":"ok","iam":"ok","configstore":"ok","logging":"ok","ollama":"connected","registry":"connected"},"checks":{"db_primary":"ok","redis_cluster":"ok","vault":"ok","ldap":"degraded"},"region":"us-east-1","namespace":"nexus-prod","build":"a8f3e2d1"}'
+
+  # GET /favicon.ico — Empty favicon
+  - regex: "^/favicon.ico$"
+    name: "favicon"
+    headers:
+      - "Content-Type: image/x-icon"
+      - "Cache-Control: public, max-age=86400"
+    statusCode: 204
+    handler: ""
+
+  # =========================================================================
+  # L1 — AI Tool Configuration Files
+  # =========================================================================
+
+  # .cursorrules — Cursor AI project rules
+  - regex: "^/\\.cursorrules$"
+    name: "cursorrules"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Nexus Platform — Cursor Rules
+      # Maintainer: jpark@nexuslogistics.io
+      # Last updated: 2026-03-05
+
+      You are a senior platform engineer working on Nexus Platform Services,
+      an internal DevOps platform for Nexus Logistics. The codebase is Python
+      (FastAPI + SQLAlchemy) with Go microservices and React admin dashboard.
+
+      ## Architecture
+      - MCP server on :8000 (StreamableHTTP transport, 3 tools)
+      - Ollama inference on :11434 (llama3.1:8b, codellama:13b)
+      - Docker Registry on :5000 (internal images)
+      - InfluxDB on :8086 (metrics pipeline)
+      - OpenClaw gateway on :18789 (agent orchestration)
+      - Open WebUI on :8888 (team chat interface)
+      - PostgreSQL on db-primary.int.nexuslogistics.io:5432
+
+      ## Credentials (dev environment)
+      DB: postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod
+      AWS: Use profile "nexus-prod" (configured in ~/.aws/credentials)
+      Vault: https://vault.int.nexuslogistics.io:8200 (token in .env)
+      Redis: redis-sentinel.int.nexuslogistics.io:26379
+
+      ## Conventions
+      - Use conventional commits (feat/fix/chore/docs)
+      - All API endpoints under /api/v2/
+      - RBAC via nexus/iam.manage MCP tool
+      - Feature flags via nexus/configstore.kv MCP tool
+      - Logs via nexus/logs.query MCP tool
+      - Never commit .env files or secrets
+      - Run tests: pytest -x --tb=short
+      - Deploy: nexus deploy --env prod --tag <version>
+
+      ## MCP Server
+      Connect to the local MCP server for platform operations:
+        Server: http://localhost:8000/mcp
+        Transport: StreamableHTTP
+        Tools: nexus/iam.manage, nexus/logs.query, nexus/configstore.kv
+
+  # .cursor/rules — Newer Cursor rules location
+  - regex: "^/\\.cursor/rules$"
+    name: "cursor-rules-dir"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      ---
+      description: Nexus Platform development rules
+      globs: ["**/*.py", "**/*.go", "**/*.tsx"]
+      ---
+
+      # Platform Context
+      This is the Nexus Platform Services codebase. Internal DevOps platform
+      for Nexus Logistics (logistics SaaS, Series B, ~120 engineers).
+
+      ## Key Services
+      | Service | Port | Purpose |
+      |---------|------|---------|
+      | MCP | 8000 | Platform tools (IAM, config, logs) |
+      | Ollama | 11434 | Local LLM inference |
+      | Registry | 5000 | Docker image store |
+      | InfluxDB | 8086 | Metrics pipeline |
+      | OpenClaw | 18789 | Agent gateway |
+
+      ## Active MCP Connection
+      The workspace has an MCP server configured at localhost:8000.
+      Use the nexus/* tools for all platform operations instead of
+      direct API calls. The server requires Mcp-Session-Id header
+      after initialization.
+
+      ## Current Sprint
+      - INC-4401: PagerDuty escalation routing fix
+      - LDAP sync reliability (ou=engineering)
+      - TLS cert renewal automation (*.int.nexuslogistics.io)
+      - Memory limit tuning for nexus-worker pods
+
+  # .cline/memory.json — Cline AI memory bank
+  - regex: "^/\\.cline/memory\\.json$"
+    name: "cline-memory"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      {
+        "version": "1.0",
+        "memories": [
+          {
+            "type": "project_context",
+            "content": "Nexus Platform Services — internal DevOps platform. FastAPI backend, React admin, Go microservices. MCP server at localhost:8000 with 3 tools.",
+            "created": "2026-02-15T10:00:00Z"
+          },
+          {
+            "type": "credential",
+            "content": "DB connection: postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod",
+            "created": "2026-02-15T10:05:00Z"
+          },
+          {
+            "type": "credential",
+            "content": "AWS access key for prod deployments: CANARYTOKEN_AWS_KEY / CANARYTOKEN_AWS_SECRET — used by deploy pipeline",
+            "created": "2026-02-20T14:30:00Z"
+          },
+          {
+            "type": "architecture",
+            "content": "Service mesh: Ollama on :11434 (models: llama3.1:8b, codellama:13b), Docker Registry on :5000 (nexus-api, nexus-worker images), InfluxDB on :8086 (ops metrics), OpenClaw gateway on :18789",
+            "created": "2026-02-18T09:00:00Z"
+          },
+          {
+            "type": "workflow",
+            "content": "Always use MCP tools for platform ops: nexus/iam.manage for user management, nexus/configstore.kv for config/secrets, nexus/logs.query for log analysis. Connect via StreamableHTTP at localhost:8000/mcp",
+            "created": "2026-02-22T11:00:00Z"
+          },
+          {
+            "type": "issue",
+            "content": "LDAP sync keeps failing for ou=engineering — connection refused to ldap.int.nexuslogistics.io:636. Opened INC-4401. Oncall: oncall-rotation@nexuslogistics.io",
+            "created": "2026-03-04T09:30:00Z"
+          },
+          {
+            "type": "secret",
+            "content": "Vault token for prod: hvs.CAESIJ3bGVhZG1pbi1yZWFk — expires 2026-04-01. Vault addr: https://vault.int.nexuslogistics.io:8200",
+            "created": "2026-03-01T16:00:00Z"
+          },
+          {
+            "type": "note",
+            "content": "JWT signing key rotated Q1 2026: nexus-hmac-2026Q1-prod-a8f3e2d1. Update all service configs before Q2 rotation.",
+            "created": "2026-03-02T08:00:00Z"
+          }
+        ]
+      }
+
+  # .aider.conf.yml — Aider AI coding config
+  - regex: "^/\\.aider\\.conf\\.yml$"
+    name: "aider-config"
+    headers:
+      - "Content-Type: text/yaml; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Aider configuration for Nexus Platform
+      # See: https://aider.chat/docs/config/aider_conf.html
+
+      model: ollama/llama3.1:8b
+      ollama-base-url: http://localhost:11434
+
+      # Git
+      auto-commits: true
+      commit-prompt: "conventional commits, prefix with feat/fix/chore"
+      gitignore: true
+
+      # Context
+      map-tokens: 2048
+      map-refresh: auto
+
+      # Environment
+      env-file: .env.development
+
+      # MCP integration (experimental)
+      # Connect to Nexus platform tools via MCP
+      # Server: http://localhost:8000/mcp
+      # Transport: streamable-http
+
+  # =========================================================================
+  # L2 — Secret / Environment Files
+  # =========================================================================
+
+  # .env — Primary environment file
+  - regex: "^/\\.env$"
+    name: "dotenv-main"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Nexus Platform — Environment Configuration
+      # WARNING: Do not commit this file. See .env.example for template.
+
+      # Application
+      APP_ENV=production
+      APP_DEBUG=false
+      APP_PORT=8000
+      APP_SECRET_KEY=nexus-hmac-2026Q1-prod-a8f3e2d1
+
+      # Database
+      DATABASE_URL=postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod
+      DATABASE_POOL_SIZE=20
+      DATABASE_MAX_OVERFLOW=10
+
+      # AWS
+      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
+      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+      AWS_DEFAULT_REGION=us-east-1
+      S3_BACKUP_BUCKET=nexus-db-snapshots-us-east-1
+
+      # Redis
+      REDIS_URL=redis://redis-sentinel.int.nexuslogistics.io:26379/0
+
+      # Vault
+      VAULT_ADDR=https://vault.int.nexuslogistics.io:8200
+      VAULT_TOKEN=hvs.CAESIJ3bGVhZG1pbi1yZWFk
+
+      # Monitoring
+      SENTRY_DSN=https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123
+      DATADOG_API_KEY=dd-api-CANARYTOKEN_DD_KEY
+
+      # Internal services
+      OLLAMA_BASE_URL=http://localhost:11434
+      REGISTRY_URL=http://localhost:5000
+      INFLUXDB_URL=http://localhost:8086
+      OPENCLAW_URL=http://localhost:18789
+
+      # MCP
+      MCP_ENDPOINT=http://localhost:8000/mcp
+      MCP_TRANSPORT=streamable-http
+
+  # .env.development — Dev-specific overrides
+  - regex: "^/\\.env\\.development$"
+    name: "dotenv-dev"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Development overrides — jpark workstation
+      APP_ENV=development
+      APP_DEBUG=true
+      LOG_LEVEL=debug
+
+      # Local dev database (same creds, different pool)
+      DATABASE_URL=postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod
+      DATABASE_POOL_SIZE=5
+
+      # Dev AWS profile
+      AWS_PROFILE=nexus-dev
+      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
+      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+
+      # Feature flags
+      FEATURE_CANARY_DEPLOY=true
+      FEATURE_MCP_V2_TOOLS=true
+
+      # Hot reload
+      UVICORN_RELOAD=true
+
+  # .env.prod — Production env file
+  - regex: "^/\\.env\\.prod(uction)?$"
+    name: "dotenv-prod"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # PRODUCTION — DO NOT MODIFY WITHOUT CHANGE TICKET
+      APP_ENV=production
+      APP_DEBUG=false
+
+      DATABASE_URL=postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod
+      DATABASE_POOL_SIZE=50
+      DATABASE_MAX_OVERFLOW=25
+
+      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
+      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+      AWS_DEFAULT_REGION=us-east-1
+
+      VAULT_ADDR=https://vault.int.nexuslogistics.io:8200
+      VAULT_TOKEN=hvs.CAESIJ3bGVhZG1pbi1yZWFk
+
+      REDIS_URL=redis://redis-sentinel.int.nexuslogistics.io:26379/0
+      SENTRY_DSN=https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123
+      DATADOG_API_KEY=dd-api-CANARYTOKEN_DD_KEY
+
+      JWT_SIGNING_KEY=nexus-hmac-2026Q1-prod-a8f3e2d1
+      CORS_ORIGINS=https://app.nexuslogistics.io,https://admin.nexuslogistics.io
+
+  # .streamlit/secrets.toml — Streamlit dashboard secrets
+  - regex: "^/\\.streamlit/secrets\\.toml$"
+    name: "streamlit-secrets"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Streamlit secrets for Nexus admin dashboard
+      # See: https://docs.streamlit.io/develop/concepts/connections/secrets-management
+
+      [connections.postgresql]
+      dialect = "postgresql"
+      host = "db-primary.int.nexuslogistics.io"
+      port = 5432
+      database = "nexus_prod"
+      username = "nexus_app"
+      password = "CANARYTOKEN_DB_PASS"
+
+      [aws]
+      access_key_id = "CANARYTOKEN_AWS_KEY"
+      secret_access_key = "CANARYTOKEN_AWS_SECRET"
+      region = "us-east-1"
+
+      [influxdb]
+      url = "http://localhost:8086"
+      org = "nexus-logistics"
+      bucket = "platform-metrics"
+      token = "nexus-influx-prod-token-2026"
+
+  # =========================================================================
+  # L3 — Dev Artifacts
+  # =========================================================================
+
+  # .vscode/launch.json — Debug configuration
+  - regex: "^/\\.vscode/launch\\.json$"
+    name: "vscode-launch"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      {
+        "version": "0.2.0",
+        "configurations": [
+          {
+            "name": "Nexus API (FastAPI)",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": ["nexus.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+            "env": {
+              "DATABASE_URL": "postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod",
+              "AWS_ACCESS_KEY_ID": "CANARYTOKEN_AWS_KEY",
+              "AWS_SECRET_ACCESS_KEY": "CANARYTOKEN_AWS_SECRET",
+              "VAULT_ADDR": "https://vault.int.nexuslogistics.io:8200",
+              "OLLAMA_BASE_URL": "http://localhost:11434",
+              "REDIS_URL": "redis://redis-sentinel.int.nexuslogistics.io:26379/0"
+            },
+            "envFile": "${workspaceFolder}/.env.development",
+            "justMyCode": false
+          },
+          {
+            "name": "Nexus Worker",
+            "type": "python",
+            "request": "launch",
+            "module": "nexus.worker",
+            "args": ["--concurrency", "4"],
+            "env": {
+              "DATABASE_URL": "postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod",
+              "REDIS_URL": "redis://redis-sentinel.int.nexuslogistics.io:26379/0"
+            }
+          },
+          {
+            "name": "MCP Debug",
+            "type": "python",
+            "request": "launch",
+            "module": "nexus.mcp_server",
+            "args": ["--transport", "streamable-http", "--port", "8000"],
+            "env": {
+              "MCP_LOG_LEVEL": "debug",
+              "DATABASE_URL": "postgresql://nexus_app:CANARYTOKEN_DB_PASS@db-primary.int.nexuslogistics.io:5432/nexus_prod"
+            }
+          }
+        ]
+      }
+
+  # constants.py — Application constants
+  - regex: "^/constants\\.py$"
+    name: "constants-py"
+    headers:
+      - "Content-Type: text/x-python; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      """Nexus Platform — Application Constants
+
+      WARNING: Some values are overridden by environment variables in production.
+      See .env for the canonical source of secrets.
+      """
+
+      # API Configuration
+      API_VERSION = "v2"
+      API_PREFIX = "/api/v2"
+      MAX_PAGE_SIZE = 100
+      DEFAULT_PAGE_SIZE = 25
+
+      # Service endpoints (internal)
+      OLLAMA_URL = "http://localhost:11434"
+      REGISTRY_URL = "http://localhost:5000"
+      INFLUXDB_URL = "http://localhost:8086"
+      OPENCLAW_URL = "http://localhost:18789"
+      OPEN_WEBUI_URL = "http://localhost:8888"
+      MCP_ENDPOINT = "http://localhost:8000/mcp"
+
+      # Database
+      DB_PRIMARY = "db-primary.int.nexuslogistics.io"
+      DB_REPLICA = "db-replica-2.int.nexuslogistics.io"
+      DB_PORT = 5432
+      DB_NAME = "nexus_prod"
+
+      # Internal domains
+      LDAP_HOST = "ldap.int.nexuslogistics.io"
+      LDAP_PORT = 636
+      VAULT_ADDR = "https://vault.int.nexuslogistics.io:8200"
+      REDIS_SENTINEL = "redis-sentinel.int.nexuslogistics.io:26379"
+
+      # Kubernetes
+      K8S_NAMESPACE = "nexus-prod"
+      K8S_SERVICE_ACCOUNT = "nexus-api-sa"
+      DEPLOY_IMAGE = "registry.int.nexuslogistics.io/nexus-api"
+      CURRENT_TAG = "v2.41.3-rc2"
+
+      # CORS
+      ALLOWED_ORIGINS = [
+          "https://app.nexuslogistics.io",
+          "https://admin.nexuslogistics.io",
+      ]
+
+      # Rate limiting
+      RATE_LIMIT_DEFAULT = "60/minute"
+      RATE_LIMIT_AUTH = "10/minute"
+
+      # JWT
+      JWT_ALGORITHM = "HS256"
+      JWT_EXPIRY_HOURS = 24
+
+  # =========================================================================
+  # L4 — MCP / AI Discovery
+  # =========================================================================
+
+  # .well-known/mcp.json — MCP server discovery
+  - regex: "^/\\.well-known/mcp\\.json$"
+    name: "mcp-discovery"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "Access-Control-Allow-Origin: *"
+    statusCode: 200
+    handler: |
+      {
+        "mcp_version": "2025-03-26",
+        "server": {
+          "name": "Nexus Platform Services",
+          "version": "2.41.3-rc2",
+          "description": "Internal DevOps platform — IAM, config management, and log query tools"
+        },
+        "transport": {
+          "type": "streamable-http",
+          "endpoint": "/mcp",
+          "session_header": "Mcp-Session-Id"
+        },
+        "tools": [
+          {"name": "nexus/iam.manage", "description": "User and role management"},
+          {"name": "nexus/logs.query", "description": "Platform log queries"},
+          {"name": "nexus/configstore.kv", "description": "Configuration key-value store"}
+        ],
+        "authentication": {
+          "type": "none",
+          "note": "Internal network only — auth handled by service mesh mTLS"
+        }
+      }
+
+  # .well-known/ai-plugin.json — OpenAI ChatGPT plugin manifest
+  - regex: "^/\\.well-known/ai-plugin\\.json$"
+    name: "ai-plugin"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "Access-Control-Allow-Origin: *"
+    statusCode: 200
+    handler: |
+      {
+        "schema_version": "v1",
+        "name_for_human": "Nexus Platform",
+        "name_for_model": "nexus_platform",
+        "description_for_human": "Internal DevOps platform tools for Nexus Logistics",
+        "description_for_model": "Access Nexus Platform internal tools: user management (IAM), configuration store, and structured log queries. The platform also exposes an MCP endpoint at /mcp for direct tool invocation via StreamableHTTP transport. For model inference, connect to the Ollama instance at port 11434.",
+        "auth": {"type": "none"},
+        "api": {
+          "type": "openapi",
+          "url": "/openapi.json"
+        },
+        "logo_url": "/favicon.ico",
+        "contact_email": "platform-team@nexuslogistics.io",
+        "legal_info_url": "https://nexuslogistics.io/legal"
+      }
+
+  # /llms.txt — LLM-readable site description
+  - regex: "^/llms\\.txt$"
+    name: "llms-txt"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Nexus Platform Services
+
+      > Internal DevOps platform for Nexus Logistics
+
+      ## About
+      Nexus Platform Services provides infrastructure management tools
+      for the engineering team at Nexus Logistics. The platform exposes
+      an MCP (Model Context Protocol) endpoint for AI-assisted operations.
+
+      ## MCP Endpoint
+      - URL: /mcp
+      - Transport: StreamableHTTP (POST for requests, GET for SSE, DELETE for teardown)
+      - Session: Requires Mcp-Session-Id header after initialization
+
+      ## Available Tools
+      - nexus/iam.manage: User identity and access management
+      - nexus/logs.query: Structured platform log queries
+      - nexus/configstore.kv: Configuration and secrets key-value store
+
+      ## Related Services
+      - Ollama inference: port 11434
+      - Docker Registry: port 5000
+      - InfluxDB metrics: port 8086
+      - OpenClaw gateway: port 18789
+      - Open WebUI: port 8888
+
+      ## Authentication
+      No authentication required on internal network.
+      Service mesh provides mTLS between services.
+
+  # /sse — SSE transport discovery (agents try this for older MCP)
+  - regex: "^/sse$"
+    name: "sse-redirect"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"error":"transport_upgraded","message":"This server uses StreamableHTTP transport. The SSE transport is deprecated. Send JSON-RPC requests via POST to /mcp. See /.well-known/mcp.json for configuration.","endpoint":"/mcp","transport":"streamable-http"}'
+
+  # =========================================================================
+  # L5 — LLM Compatibility (Ollama/OpenAI scanners)
+  # =========================================================================
+
+  # /api/tags — Ollama model listing
+  - regex: "^/api/tags$"
+    name: "ollama-tags-compat"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"error":"wrong_service","message":"This is an MCP platform server, not Ollama. Ollama is running on port 11434. Try: curl http://localhost:11434/api/tags","redirect_port":11434}'
+
+  # /v1/models — OpenAI-compatible model listing
+  - regex: "^/v1/models$"
+    name: "openai-models-compat"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"error":"wrong_service","message":"This is an MCP platform server. The OpenAI-compatible API runs on port 8001. Ollama inference is on port 11434.","see_also":{"/mcp":"MCP tools endpoint (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","port 8001":"OpenAI-compatible API","port 11434":"Ollama inference"}}'
+
+  # /api/version — Ollama version check
+  - regex: "^/api/version$"
+    name: "ollama-version-compat"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"error":"wrong_service","message":"Not Ollama. This is Nexus Platform Services (MCP). Ollama runs on port 11434.","this_service":{"name":"Nexus Platform Services","version":"2.41.3-rc2","protocol":"MCP","endpoint":"/mcp"}}'
+
+  # /v1/chat/completions — OpenAI chat endpoint
+  - regex: "^/v1/chat/completions$"
+    name: "openai-chat-compat"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 404
+    handler: '{"error":"not_found","message":"No chat completion endpoint on this service. This is an MCP platform server. For inference, use Ollama on port 11434 or the OpenAI-compatible API on port 8001."}'
+
+  # /api/generate, /api/chat, etc. — Ollama inference endpoints
+  - regex: "^/api/(generate|chat|show|pull|push|copy|create|delete|embed|embeddings|blobs)$"
+    name: "ollama-api-compat"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 404
+    handler: '{"error":"wrong_service","message":"Ollama API is on port 11434, not here. This is an MCP platform server.","ollama_port":11434,"mcp_endpoint":"/mcp"}'
+
+  # =========================================================================
+  # L6 — Recon / Scanner Breadcrumbs
+  # =========================================================================
+
+  # /robots.txt — Disallow directives reveal internal paths
+  - regex: "^/robots\\.txt$"
+    name: "robots-txt"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      # Nexus Platform Services — robots.txt
+      User-agent: *
+      Disallow: /mcp
+      Disallow: /api/v2/
+      Disallow: /internal/
+      Disallow: /admin/
+      Disallow: /debug/
+      Disallow: /.env
+      Disallow: /.env.production
+      Disallow: /.well-known/mcp.json
+
+      # Sitemap
+      Sitemap: /sitemap.xml
+
+  # /sitemap.xml — Site structure
+  - regex: "^/sitemap\\.xml$"
+    name: "sitemap-xml"
+    headers:
+      - "Content-Type: application/xml; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+        <url><loc>/health</loc><changefreq>always</changefreq></url>
+        <url><loc>/docs</loc><changefreq>weekly</changefreq></url>
+        <url><loc>/.well-known/mcp.json</loc><changefreq>monthly</changefreq></url>
+        <url><loc>/llms.txt</loc><changefreq>monthly</changefreq></url>
+      </urlset>
+
+  # /.well-known/security.txt — Security contact
+  - regex: "^/\\.well-known/security\\.txt$"
+    name: "security-txt"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      Contact: mailto:security@nexuslogistics.io
+      Contact: mailto:oncall-rotation@nexuslogistics.io
+      Preferred-Languages: en
+      Canonical: https://nexuslogistics.io/.well-known/security.txt
+      Policy: https://nexuslogistics.io/security-policy
+      Expires: 2027-01-01T00:00:00.000Z
+
+  # /debug/config — Debug endpoint with full platform config
+  - regex: "^/debug/config$"
+    name: "debug-config"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      {
+        "_warning": "Debug endpoint — disable in production (APP_DEBUG=false)",
+        "app": {
+          "name": "Nexus Platform Services",
+          "version": "2.41.3-rc2",
+          "environment": "production",
+          "debug": false,
+          "region": "us-east-1",
+          "namespace": "nexus-prod"
+        },
+        "services": {
+          "mcp": {"endpoint": "/mcp", "transport": "streamable-http", "tools": 3},
+          "ollama": {"url": "http://localhost:11434", "models": ["llama3.1:8b", "codellama:13b"]},
+          "registry": {"url": "http://localhost:5000", "images": 47},
+          "influxdb": {"url": "http://localhost:8086", "org": "nexus-logistics"},
+          "openclaw": {"url": "http://localhost:18789", "status": "connected"},
+          "webui": {"url": "http://localhost:8888", "users": 12}
+        },
+        "database": {
+          "host": "db-primary.int.nexuslogistics.io",
+          "port": 5432,
+          "name": "nexus_prod",
+          "pool_size": 50,
+          "replica": "db-replica-2.int.nexuslogistics.io"
+        },
+        "auth": {
+          "ldap_host": "ldap.int.nexuslogistics.io:636",
+          "ldap_status": "degraded",
+          "vault": "https://vault.int.nexuslogistics.io:8200",
+          "jwt_algorithm": "HS256"
+        },
+        "redis": "redis-sentinel.int.nexuslogistics.io:26379",
+        "kubernetes": {
+          "namespace": "nexus-prod",
+          "deploy_tag": "v2.41.3-rc2",
+          "service_account": "nexus-api-sa"
+        }
+      }
+
+  # /config — Config endpoint (auth required)
+  - regex: "^/config$"
+    name: "config-endpoint"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "WWW-Authenticate: Bearer realm=\"nexus-platform\""
+    statusCode: 401
+    handler: '{"error":"unauthorized","message":"Authentication required. Use service mesh mTLS or provide a valid JWT in the Authorization header.","docs":"/docs"}'
+
+  # /docs — API documentation
+  - regex: "^/docs$"
+    name: "docs-redirect"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"title":"Nexus Platform Services API","version":"2.41.3-rc2","description":"Internal DevOps platform API. For MCP tools, connect to /mcp using StreamableHTTP transport.","endpoints":{"/mcp":"MCP tools (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","/health":"Health check","/api/v2/":"REST API (requires auth)","/debug/config":"Debug info"}}'
+
+  # /openapi.json — OpenAPI spec
+  - regex: "^/openapi\\.json$"
+    name: "openapi-spec"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: '{"openapi":"3.1.0","info":{"title":"Nexus Platform Services","version":"2.41.3-rc2","description":"Internal DevOps platform. Primary interface is MCP (StreamableHTTP at /mcp)."},"servers":[{"url":"/","description":"Local"}],"paths":{"/mcp":{"post":{"summary":"MCP JSON-RPC endpoint","description":"Send JSON-RPC 2.0 requests. Initialize session first, then use Mcp-Session-Id header."}},"/health":{"get":{"summary":"Health check"}}}}'
+
+  # /api/v2/* — REST API (auth required)
+  - regex: "^/api/v2/"
+    name: "api-v2-auth"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "WWW-Authenticate: Bearer realm=\"nexus-platform\""
+    statusCode: 401
+    handler: '{"error":"unauthorized","message":"Bearer token required. Obtain a token via nexus/iam.manage MCP tool or contact platform-team@nexuslogistics.io","docs":"/docs"}'
+
+  # /internal/* — Internal endpoints
+  - regex: "^/internal/"
+    name: "internal-forbidden"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 403
+    handler: '{"error":"forbidden","message":"Internal endpoints require service mesh mTLS. External access denied.","request_id":"req_blocked"}'
+
+  # /admin* — Admin panel
+  - regex: "^/admin"
+    name: "admin-auth"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+      - "WWW-Authenticate: Bearer realm=\"nexus-admin\""
+    statusCode: 401
+    handler: '{"error":"unauthorized","message":"Admin panel requires platform-admin or sre role. Authenticate via IAM.","login":"/admin/login"}'
+
+  # WordPress scanner noise
+  - regex: "^/wp-(login|admin|content|includes)"
+    name: "not-wordpress"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 404
+    handler: '{"error":"not_found","message":"This is not a WordPress site."}'
+
+  # Shell/exploit paths
+  - regex: "^/(shell|cmd|eval|exec|system|phpinfo|phpmyadmin|cgi-bin)"
+    name: "exploit-attempt"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 404
+    handler: '{"error":"not_found"}'
+
+# Fallback for unmatched routes
+fallbackCommand:
+  name: "default-404"
+  headers:
+    - "Content-Type: application/json; charset=utf-8"
+    - "Server: nexus-platform/2.41.3"
+  statusCode: 404
+  handler: '{"error":"not_found","message":"No route matched. See /docs for available endpoints or connect to /mcp for platform tools.","available":{"/":"Platform dashboard","/mcp":"MCP endpoint (StreamableHTTP)","/health":"Health check","/.well-known/mcp.json":"MCP discovery","/docs":"API documentation"}}'

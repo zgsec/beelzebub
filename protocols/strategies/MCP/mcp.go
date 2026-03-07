@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -219,22 +221,128 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		})
 	}
 
+	// Create MCP handler (implements http.Handler) — don't call Start(),
+	// we mount it inside our own mux so we can add HTTP fallback routes.
+	mcpHandler := server.NewStreamableHTTPServer(
+		mcpServer,
+		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+		}),
+	)
+
+	hasHTTPFallback := len(servConf.Commands) > 0 ||
+		servConf.FallbackCommand.Handler != "" ||
+		servConf.FallbackCommand.StatusCode > 0
+
 	go func() {
-		httpServer := server.NewStreamableHTTPServer(
-			mcpServer,
-			server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-				return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
-			}),
-		)
-		if err := httpServer.Start(servConf.Address); err != nil {
+		mux := http.NewServeMux()
+
+		// MCP JSON-RPC at /mcp (POST=requests, GET=SSE, DELETE=session teardown)
+		mux.Handle("/mcp", mcpHandler)
+
+		// HTTP fallback for everything else — only if commands are configured.
+		// These events trace as Protocol:"HTTP" so the exporter creates separate
+		// sessions (IP|HTTP|8000) from MCP sessions (IP|MCP|8000), letting us
+		// track the transition from HTTP scanning to MCP agent interaction.
+		if hasHTTPFallback {
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				mcpStrategy.handleHTTPFallback(w, r, servConf, tr)
+			})
+		}
+
+		if err := http.ListenAndServe(servConf.Address, mux); err != nil {
 			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
-			return
 		}
 	}()
+
 	log.WithFields(log.Fields{
-		"port":        servConf.Address,
-		"description": servConf.Description,
-		"stateful":    hasWorldSeed,
+		"port":          servConf.Address,
+		"description":   servConf.Description,
+		"stateful":      hasWorldSeed,
+		"http_fallback": hasHTTPFallback,
+		"http_commands": len(servConf.Commands),
 	}).Infof("Init service %s", servConf.Protocol)
 	return nil
+}
+
+// handleHTTPFallback serves static HTTP responses for non-MCP requests on the
+// MCP port. Matches the request URI against configured commands (same YAML
+// structure as the HTTP protocol strategy). Events are traced as Protocol:"HTTP"
+// with full HTTP metadata (UserAgent, Body, Headers, etc.) so the exporter
+// creates separate sessions from MCP tool-call sessions on the same port.
+func (mcpStrategy *MCPStrategy) handleHTTPFallback(
+	w http.ResponseWriter,
+	r *http.Request,
+	servConf parser.BeelzebubServiceConfiguration,
+	tr tracer.Tracer,
+) {
+	var matchedCommand parser.Command
+	var matched bool
+
+	for _, command := range servConf.Commands {
+		if command.Regex != nil && command.Regex.MatchString(r.RequestURI) {
+			matchedCommand = command
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		matchedCommand = servConf.FallbackCommand
+	}
+
+	// Capture request body (1 MB limit, same as HTTP strategy)
+	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+	body := string(bodyBytes)
+
+	// Trace as HTTP event with full request metadata
+	host, port, _ := net.SplitHostPort(r.RemoteAddr)
+	tr.TraceEvent(tracer.Event{
+		Msg:             "HTTP request on MCP port",
+		RequestURI:      r.RequestURI,
+		Protocol:        tracer.HTTP.String(),
+		HTTPMethod:      r.Method,
+		Body:            body,
+		HostHTTPRequest: r.Host,
+		UserAgent:       r.UserAgent(),
+		Cookies:         fmtCookies(r.Cookies()),
+		Headers:         fmtHeaders(r.Header),
+		HeadersMap:      r.Header,
+		Status:          tracer.Stateless.String(),
+		RemoteAddr:      r.RemoteAddr,
+		SourceIp:        host,
+		SourcePort:      port,
+		ID:              uuid.New().String(),
+		Description:     servConf.Description,
+		Handler:         matchedCommand.Name,
+	})
+
+	// Write response
+	for _, h := range matchedCommand.Headers {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) == 2 {
+			w.Header().Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		}
+	}
+	if matchedCommand.StatusCode > 0 {
+		w.WriteHeader(matchedCommand.StatusCode)
+	}
+	fmt.Fprint(w, matchedCommand.Handler)
+}
+
+func fmtCookies(cookies []*http.Cookie) string {
+	var b strings.Builder
+	for _, c := range cookies {
+		b.WriteString(c.String())
+	}
+	return b.String()
+}
+
+func fmtHeaders(headers http.Header) string {
+	var b strings.Builder
+	for key, values := range headers {
+		for _, v := range values {
+			fmt.Fprintf(&b, "[Key: %s, values: %s],", key, v)
+		}
+	}
+	return b.String()
 }

@@ -1,0 +1,7 @@
+# Honeypot lure credentials — intentionally fake values designed to be found by attackers.
+# These are NOT real secrets. They are canarytoken tripwires and deception artifacts.
+
+# Fake Vault token in MCP template lures (.env, .cline/memory.json, etc.)
+configurations/services/mcp-8000.yaml:generic-api-key:436
+configurations/services/mcp-8000.yaml:generic-api-key:515
+configurations/services/mcp-8000.yaml:generic-api-key:581
