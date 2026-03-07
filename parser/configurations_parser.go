@@ -98,6 +98,23 @@ type WorldSeedLog struct {
 	Message   string `yaml:"msg"`
 }
 
+// OllamaModel represents a model advertised by the Ollama honeypot.
+type OllamaModel struct {
+	Name              string `yaml:"name"`
+	Size              string `yaml:"size"`
+	Family            string `yaml:"family"`
+	ParameterSize     string `yaml:"parameterSize"`
+	QuantizationLevel string `yaml:"quantizationLevel"`
+}
+
+// OllamaConfig holds Ollama-specific honeypot configuration.
+type OllamaConfig struct {
+	Models            []OllamaModel     `yaml:"models"`
+	Version           string            `yaml:"version"`
+	InjectionPayloads map[string]string  `yaml:"injectionPayloads"`
+	CanaryTokens      map[string]string  `yaml:"canaryTokens"`
+}
+
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
 	ApiVersion             string          `yaml:"apiVersion"`
@@ -117,6 +134,7 @@ type BeelzebubServiceConfiguration struct {
 	TLSKeyPath             string          `yaml:"tlsKeyPath"`
 	WorldSeed              WorldSeedConfig `yaml:"worldSeed"`
 	FaultInjection         FaultInjection  `yaml:"faultInjection"`
+	OllamaConfig           OllamaConfig    `yaml:"ollamaConfig"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {

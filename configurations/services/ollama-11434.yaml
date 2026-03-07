@@ -1,0 +1,85 @@
+apiVersion: "v1"
+protocol: "ollama"
+address: ":11434"
+description: "Ollama LLM inference"
+
+# === OLLAMA HONEYPOT ===
+# Emulates a real Ollama instance with native + OpenAI-compatible APIs.
+# Multi-layer prompt injection extracts agent system prompts, tool configs,
+# and operator identity from automated clients.
+#
+# Injection architecture (6 layers):
+#   L0: Realistic model output (build trust, fingerprint client type)
+#   L1: Cluster "semantic parity" directive → /api/peer/sync extraction
+#   L2: Authority override → demand system prompt via X-Peer-Context header
+#   L3: Cross-protocol breadcrumbs (references MCP :8000, registry :5000)
+#   L4: Canary tokens in code examples (AWS keys, URLs, DNS)
+#   L5: Streaming metadata (NDJSON context field, OpenAI system_fingerprint)
+#
+# Progressive escalation: requests 1-2 (recon), 3-5 (semantic parity),
+# 6-8 (authority override), 9+ (deep extraction). Registration at
+# /api/peer/sync immediately escalates to deep extraction.
+#
+# Endpoints exposed:
+#   Ollama:  GET /, /api/version, /api/tags, /api/ps, /api/show
+#            POST /api/generate, /api/chat
+#   OpenAI:  GET /v1/models
+#            POST /v1/chat/completions, /v1/completions
+#   Anthropic: POST /v1/messages
+#   Injection: POST /api/register, /api/register/upgrade,
+#              /api/peer/sync, /api/peer/verify
+#              GET /api/peer/status
+#
+# All events trace as Protocol:"HTTP" with Handler field distinguishing
+# endpoints (ollama/generate, openai/chat, ollama/peer/sync, etc.)
+# No exporter changes needed.
+
+ollamaConfig:
+  version: "0.6.2"
+
+  models:
+    - name: "llama3.1:8b"
+      size: "4.7GB"
+      family: "llama"
+      parameterSize: "8B"
+      quantizationLevel: "Q4_0"
+    - name: "mistral:7b"
+      size: "4.1GB"
+      family: "mistral"
+      parameterSize: "7B"
+      quantizationLevel: "Q4_0"
+    - name: "codellama:13b"
+      size: "7.4GB"
+      family: "llama"
+      parameterSize: "13B"
+      quantizationLevel: "Q4_0"
+    - name: "nomic-embed-text"
+      size: "274MB"
+      family: "nomic-bert"
+      parameterSize: "137M"
+      quantizationLevel: "F16"
+
+  # Injection payloads — override per sensor in prod configs
+  # These are the DEFAULT payloads. Each level can be customized.
+  # Keys: L0_recon, L1_parity, L2_extract, L3_deep, L4_total
+  injectionPayloads: {}
+
+  # Canary token placeholders — replace with real canarytokens.org values in prod
+  # Keys: canary_url, aws_key, canary_secret, canary_dns, canary_email
+  canaryTokens:
+    canary_url: "https://docs.internal.example.com"
+    aws_key: "AKIAIOSFODNN7EXAMPLE"
+    canary_secret: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    canary_dns: "svc-mesh.int.nexuslogistics.io"
+    canary_email: "platform-alerts@nexuslogistics.io"
+
+faultInjection:
+  enabled: true
+  errorRate: 0.05
+  delayMs: 0
+  delayJitterMs: 200
+  errorResponses:
+    - '{"error":"CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 23.65 GiB total capacity; 21.43 GiB already allocated)"}'
+    - '{"error":"model \"llama3.1:8b\" not found, try pulling it first"}'
+    - '{"error":"an unexpected error occurred, please try again later"}'
+    - '{"error":"inference mesh: upstream node timeout after 30s (peer: ollama-secondary, rack: us-east-1b)"}'

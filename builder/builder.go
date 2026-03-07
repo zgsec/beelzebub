@@ -10,6 +10,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/MCP"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/OLLAMA"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/TELNET"
 
 	"github.com/mariocandela/beelzebub/v3/parser"
@@ -130,6 +131,7 @@ Honeypot Framework, happy hacking!`)
 	transmissionControlProtocolStrategy := &TCP.TCPStrategy{}
 	modelContextProtocolStrategy := &MCP.MCPStrategy{Bridge: protocolBridge}
 	telnetStrategy := &TELNET.TelnetStrategy{Bridge: protocolBridge}
+	ollamaStrategy := &OLLAMA.OllamaStrategy{Bridge: protocolBridge}
 
 	// Init Tracer strategies, and set the trace strategy default HTTP
 	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
@@ -177,6 +179,9 @@ Honeypot Framework, happy hacking!`)
 		case "telnet":
 			telnetStrategy.Fault = faultInjector
 			protocolManager.SetProtocolStrategy(telnetStrategy)
+		case "ollama":
+			ollamaStrategy.Fault = faultInjector
+			protocolManager.SetProtocolStrategy(ollamaStrategy)
 		default:
 			log.Fatalf("protocol %s not managed", beelzebubServiceConfiguration.Protocol)
 		}

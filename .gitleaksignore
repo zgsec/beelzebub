@@ -5,3 +5,6 @@
 configurations/services/mcp-8000.yaml:generic-api-key:436
 configurations/services/mcp-8000.yaml:generic-api-key:515
 configurations/services/mcp-8000.yaml:generic-api-key:581
+
+# Fake AWS canary key in Ollama honeypot test — intentionally fake for deception
+protocols/strategies/OLLAMA/ollama_test.go:aws-access-token:69

@@ -1,4 +1,44 @@
-# Beelzebub
+# Beelzebub (Agent Research Fork)
+
+> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — adds stateful MCP, agent detection, cross-protocol correlation, and fault injection for studying AI agent behavior in honeypot environments.
+
+## Fork Additions
+
+This fork transforms Beelzebub into a research platform for AI agent adversary analysis. All additions are backward compatible — existing configs work unchanged.
+
+### New Capabilities
+
+| Capability | Package | Description |
+|---|---|---|
+| **Stateful MCP** | `protocols/strategies/MCP/state.go` | Per-IP world state (users, logs, resources) that mutates across tool calls. Configured via `worldSeed` YAML. |
+| **Cross-Protocol Bridge** | `bridge/` | Tracks credential discovery across SSH/HTTP/MCP. Detects multi-protocol lateral movement. |
+| **Agent Detection** | `agentdetect/` | Real-time scoring engine (0-100). Classifies sessions as agent/bot/human based on MCP handshakes, timing, retries, tool chain depth. |
+| **Fault Injection** | `faults/` | Per-service configurable error rates, delays, and realistic error responses. Studies agent retry/adaptation behavior. |
+| **Session Tracking** | `tracer/timing.go`, `historystore/` | Inter-event timing, sequence numbers, retry detection ring buffer. |
+
+### New Event Fields (12)
+
+All `omitempty` — zero impact on non-fork deployments:
+
+`SessionKey`, `Sequence`, `CorrelationID`, `ToolName`, `ToolArguments`, `InterEventMs`, `IsRetry`, `RetryOf`, `CrossProtocolRef`, `FaultInjected`, `AgentScore`, `AgentCategory`, `AgentSignals`
+
+### MCP Deception Surface
+
+The fork supports rich MCP tool configurations with:
+- **WorldSeed** — YAML-defined initial state (users, resources, logs) per service
+- **Tool annotations** — `title`, `readOnlyHint`, `destructiveHint` for realistic tool metadata
+- **Fault injection** — configurable error rate with realistic JSON error responses
+- **StreamableHTTP transport** — endpoint at `/mcp`, session-based
+
+### Upstream PR Plan
+
+Phases 1-4 (stateful MCP, bridge, agent detection, fault injection) are designed for upstream contribution. No breaking changes, full test coverage, all new features are opt-in via YAML config.
+
+---
+
+*Everything below is the original upstream README.*
+
+---
 
 [![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml) [![Docker](https://github.com/mariocandela/beelzebub/actions/workflows/docker-image.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/docker-image.yml) [![codeql](https://github.com/mariocandela/beelzebub/actions/workflows/codeql.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/codeql.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3)

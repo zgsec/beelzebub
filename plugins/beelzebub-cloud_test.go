@@ -129,7 +129,7 @@ func TestGetHoneypotsConfigurationsWithResults(t *testing.T) {
 			},
 		},
 	}, &result)
-	assert.Equal(t, "9f5e6c3dcb7bca21cddb229acd0e695b02298b346787ad6873075efad060e7c2", configurationsHash)
+	assert.Equal(t, "68d1713b05d3d23797630b81ed078bcb1dd9f8b2f729c8bdebfe66bdfa31ac65", configurationsHash)
 	assert.Nil(t, err)
 }
 
