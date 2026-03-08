@@ -18,3 +18,8 @@ configurations/services/openai-8001.yaml:generic-api-key:384
 configurations/services/openai-8001.yaml:generic-api-key:393
 configurations/services/openai-8001.yaml:generic-api-key:751
 configurations/services/openai-8001.yaml:generic-api-key:828
+
+# Open WebUI honeypot lure credentials — fake JWT, fake secret key
+configurations/services/http-8888.yaml:generic-api-key:294
+configurations/services/http-8888.yaml:generic-api-key:355
+configurations/services/http-8888.yaml:jwt:85
