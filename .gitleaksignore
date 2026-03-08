@@ -8,3 +8,13 @@ configurations/services/mcp-8000.yaml:generic-api-key:581
 
 # Fake AWS canary key in Ollama honeypot test — intentionally fake for deception
 protocols/strategies/OLLAMA/ollama_test.go:aws-access-token:69
+
+# OpenAI/vLLM honeypot lure credentials — all fake, designed to attract attackers
+configurations/services/openai-8001.yaml:private-key:393
+configurations/services/openai-8001.yaml:private-key:430
+configurations/services/openai-8001.yaml:private-key:828
+configurations/services/openai-8001.yaml:generic-api-key:195
+configurations/services/openai-8001.yaml:generic-api-key:384
+configurations/services/openai-8001.yaml:generic-api-key:393
+configurations/services/openai-8001.yaml:generic-api-key:751
+configurations/services/openai-8001.yaml:generic-api-key:828
