@@ -179,6 +179,8 @@ type ToolAnnotations struct {
 type Param struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Required    *bool  `yaml:"required,omitempty"`
+	Type        string `yaml:"type,omitempty"` // "string" (default), "integer", "number", "boolean"
 }
 
 type configurationsParser struct {

@@ -1,6 +1,8 @@
 package OLLAMA
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +38,7 @@ type OllamaStrategy struct {
 	canaryTokens map[string]string
 	rng          *rand.Rand
 	rngMu        sync.Mutex
+	modelDigests map[string]string // stable per-model digests computed at init
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -89,6 +92,13 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	}
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
+	// Compute stable digests per model (deterministic, same across restarts within a version)
+	s.modelDigests = make(map[string]string)
+	for _, m := range s.models {
+		h := sha256.Sum256([]byte(m.Name + s.version + "ollama-digest-salt"))
+		s.modelDigests[m.Name] = "sha256:" + hex.EncodeToString(h[:])
+	}
+
 	// Session cleanup goroutine
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
@@ -108,63 +118,71 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 
 	mux := http.NewServeMux()
 
+	// CORS middleware wrapper
+	withCORS := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next(w, r)
+		}
+	}
+
 	// Ollama native endpoints
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	// Root handler serves both GET and HEAD (Go's ServeMux routes HEAD to GET handlers)
+	mux.HandleFunc("GET /", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			s.handleFallback(w, r, servConf, tr)
 			return
 		}
+		w.Header().Set("Ollama-Version", s.version)
 		s.handleRoot(w, r, servConf, tr)
-	})
-	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /api/version", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleVersion(w, r, servConf, tr)
-	})
-	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /api/tags", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleTags(w, r, servConf, tr)
-	})
-	mux.HandleFunc("GET /api/ps", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /api/ps", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handlePs(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/generate", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("POST /api/generate", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleGenerate(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("POST /api/chat", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleChat(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/show", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("POST /api/show", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleShow(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/register", func(w http.ResponseWriter, r *http.Request) {
-		s.handleRegister(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/register/upgrade", func(w http.ResponseWriter, r *http.Request) {
-		s.handleRegisterUpgrade(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/peer/sync", func(w http.ResponseWriter, r *http.Request) {
-		s.handlePeerSync(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /api/peer/verify", func(w http.ResponseWriter, r *http.Request) {
-		s.handlePeerVerify(w, r, servConf, tr)
-	})
-	mux.HandleFunc("GET /api/peer/status", func(w http.ResponseWriter, r *http.Request) {
-		s.handlePeerStatus(w, r, servConf, tr)
-	})
+	}))
+	mux.HandleFunc("POST /api/embed", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleEmbed(w, r, servConf, tr)
+	}))
+	mux.HandleFunc("POST /api/embeddings", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleEmbed(w, r, servConf, tr)
+	}))
+	mux.HandleFunc("POST /api/pull", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handlePull(w, r, servConf, tr)
+	}))
+	mux.HandleFunc("DELETE /api/delete", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleDelete(w, r, servConf, tr)
+	}))
 
 	// OpenAI-compatible endpoints
-	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/chat/completions", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleOpenAIChat(w, r, servConf, tr)
-	})
-	mux.HandleFunc("POST /v1/completions", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("POST /v1/completions", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleOpenAICompletions(w, r, servConf, tr)
-	})
-	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /v1/models", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleOpenAIModels(w, r, servConf, tr)
-	})
-
-	// Anthropic-compatible endpoint
-	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, r *http.Request) {
-		s.handleAnthropicMessages(w, r, servConf, tr)
-	})
+	}))
 
 	go func() {
 		if err := http.ListenAndServe(servConf.Address, mux); err != nil {
@@ -325,6 +343,15 @@ func (s *OllamaStrategy) modelExists(name string) bool {
 	return false
 }
 
+// stableDigest returns a deterministic digest for a model name.
+func (s *OllamaStrategy) stableDigest(modelName string) string {
+	if d, ok := s.modelDigests[modelName]; ok {
+		return d
+	}
+	h := sha256.Sum256([]byte(modelName + s.version + "ollama-digest-salt"))
+	return "sha256:" + hex.EncodeToString(h[:])
+}
+
 // defaultModelName returns the first configured model or a fallback.
 func (s *OllamaStrategy) defaultModelName() string {
 	if len(s.models) > 0 {
@@ -374,14 +401,26 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 		} `json:"details"`
 	}
 
+	// Per-model timestamps (different per model, timezone offset format)
+	modelTimestamps := []string{
+		"2026-01-15T14:30:00.123456789-05:00",
+		"2026-02-02T09:15:22.456789012-08:00",
+		"2026-02-18T16:45:11.789012345-06:00",
+		"2026-01-28T11:20:33.234567890-05:00",
+	}
+
 	var models []modelEntry
-	for _, m := range s.models {
+	for i, m := range s.models {
+		ts := modelTimestamps[0]
+		if i < len(modelTimestamps) {
+			ts = modelTimestamps[i]
+		}
 		e := modelEntry{
 			Name:       m.Name,
 			Model:      m.Name,
-			ModifiedAt: "2026-03-01T10:00:00Z",
+			ModifiedAt: ts,
 			Size:       sizeFromParam(m.ParameterSize),
-			Digest:     "sha256:" + randomHex(32),
+			Digest:     s.stableDigest(m.Name),
 		}
 		e.Details.Format = "gguf"
 		e.Details.Family = m.Family
@@ -404,31 +443,25 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/ps")
 
-	type runningModel struct {
-		Name      string `json:"name"`
-		Model     string `json:"model"`
-		Size      int64  `json:"size"`
-		Digest    string `json:"digest"`
-		ExpiresAt string `json:"expires_at"`
-		SizeVRAM  int64  `json:"size_vram"`
-	}
-
-	var running []runningModel
+	var running []map[string]interface{}
 	if len(s.models) > 0 {
 		m := s.models[0]
-		running = append(running, runningModel{
-			Name:      m.Name,
-			Model:     m.Name,
-			Size:      sizeFromParam(m.ParameterSize),
-			Digest:    "sha256:" + randomHex(32),
-			ExpiresAt: time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
-			SizeVRAM:  sizeFromParam(m.ParameterSize),
+		running = append(running, map[string]interface{}{
+			"name":       m.Name,
+			"model":      m.Name,
+			"size":       sizeFromParam(m.ParameterSize),
+			"digest":     s.stableDigest(m.Name),
+			"expires_at": time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
+			"size_vram":  0, // CPU-only instance
+			"details": map[string]interface{}{
+				"family":             m.Family,
+				"parameter_size":     m.ParameterSize,
+				"quantization_level": m.QuantizationLevel,
+			},
 		})
 	}
 
-	resp := struct {
-		Models []runningModel `json:"models"`
-	}{Models: running}
+	resp := map[string]interface{}{"models": running}
 
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
@@ -484,9 +517,9 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 
 	shouldStream := req.Stream == nil || *req.Stream
 	if shouldStream {
-		s.streamOllamaResponse(w, req.Model, response)
+		s.streamOllamaResponse(w, req.Model, response, len(req.Prompt))
 	} else {
-		s.writeOllamaNonStreaming(w, req.Model, response)
+		s.writeOllamaNonStreaming(w, req.Model, response, len(req.Prompt))
 	}
 
 	s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, response, string(body))
@@ -551,9 +584,9 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 
 	shouldStream := req.Stream == nil || *req.Stream
 	if shouldStream {
-		s.streamOllamaChatResponse(w, req.Model, response, sess)
+		s.streamOllamaChatResponse(w, req.Model, response, len(prompt))
 	} else {
-		s.writeOllamaChatNonStreaming(w, req.Model, response, sess)
+		s.writeOllamaChatNonStreaming(w, req.Model, response, len(prompt))
 	}
 
 	s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, response, string(body))
@@ -564,17 +597,21 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 	body := s.readBody(r)
 
 	var req struct {
-		Name string `json:"name"`
+		Model string `json:"model"`
+		Name  string `json:"name"` // fallback for older clients
 	}
 	json.Unmarshal(body, &req)
-	if req.Name == "" {
-		req.Name = s.defaultModelName()
+	if req.Model == "" {
+		req.Model = req.Name // accept "name" as fallback
+	}
+	if req.Model == "" {
+		req.Model = s.defaultModelName()
 	}
 
 	// Find model details
 	var family, paramSize, quantLevel string
 	for _, m := range s.models {
-		if m.Name == req.Name {
+		if m.Name == req.Model {
 			family = m.Family
 			paramSize = m.ParameterSize
 			quantLevel = m.QuantizationLevel
@@ -587,152 +624,120 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		quantLevel = "Q4_0"
 	}
 
-	resp := fmt.Sprintf(`{
-  "modelfile": "FROM %s",
-  "parameters": "stop \"\u003c|start_header_id|\u003e\"\nstop \"\u003c|end_header_id|\u003e\"\nstop \"\u003c|eot_id|\u003e\"",
-  "template": "{{ if .System }}\u003c|start_header_id|\u003esystem\u003c|end_header_id|\u003e\n\n{{ .System }}\u003c|eot_id|\u003e{{ end }}{{ if .Prompt }}\u003c|start_header_id|\u003euser\u003c|end_header_id|\u003e\n\n{{ .Prompt }}\u003c|eot_id|\u003e{{ end }}\u003c|start_header_id|\u003eassistant\u003c|end_header_id|\u003e\n\n{{ .Response }}\u003c|eot_id|\u003e",
-  "details": {
-    "parent_model": "",
-    "format": "gguf",
-    "family": "%s",
-    "families": ["%s"],
-    "parameter_size": "%s",
-    "quantization_level": "%s"
-  },
-  "model_info": {
-    "general.architecture": "%s",
-    "general.parameter_count": %d,
-    "general.quantization_version": 2
-  }
-}`, req.Name, family, family, paramSize, quantLevel, family, paramCountFromSize(paramSize))
+	pCount := paramCountFromSize(paramSize)
+	showResp := map[string]interface{}{
+		"modelfile":  fmt.Sprintf("FROM %s", req.Model),
+		"parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
+		"template":   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
+		"details": map[string]interface{}{
+			"parent_model":       "",
+			"format":             "gguf",
+			"family":             family,
+			"families":           []string{family},
+			"parameter_size":     paramSize,
+			"quantization_level": quantLevel,
+		},
+		"model_info": map[string]interface{}{
+			"general.architecture":        family,
+			"general.parameter_count":     pCount,
+			"general.quantization_version": 2,
+			"general.file_type":           2,
+			"general.context_length":      4096,
+			"general.embedding_length":    4096,
+		},
+		"license": "Meta Llama 3.1 Community License Agreement",
+		"capabilities": []string{"completion"},
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/show", req.Name, resp, string(body))
+	out, _ := json.Marshal(showResp)
+	w.Write(out)
+	s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(out), string(body))
 }
 
-func (s *OllamaStrategy) handleRegister(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "ollama/register")
+// --- New endpoint handlers ---
+
+func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/embed")
 	body := s.readBody(r)
-	host, _ := s.clientIP(r)
 
-	sess := s.getOrCreateSession(host)
-	sess.mu.Lock()
-	sess.HasRegistered = true
-	sess.RegisterPayload = string(body)
-	sess.InjectionLevel = 2
-	sess.EndpointsHit["register"] = true
-	sess.mu.Unlock()
-
-	// Record in bridge
-	if s.Bridge != nil {
-		s.Bridge.RecordDiscovery(host, "ollama", "agent_system_prompt", "register_payload", string(body))
-		s.Bridge.SetFlag(host, "ollama_injection_success")
+	var req struct {
+		Model string      `json:"model"`
+		Input interface{} `json:"input"` // string or []string
+	}
+	json.Unmarshal(body, &req)
+	if req.Model == "" {
+		req.Model = "nomic-embed-text"
 	}
 
-	resp := registerSuccessResponse()
+	// Generate realistic embedding vector (768 dimensions for nomic-embed-text)
+	dims := 768
+	s.rngMu.Lock()
+	embedding := make([]float64, dims)
+	for i := range embedding {
+		embedding[i] = (s.rng.Float64() - 0.5) * 0.04 // range [-0.02, 0.02]
+	}
+	s.rngMu.Unlock()
+
+	resp := map[string]interface{}{
+		"model":      req.Model,
+		"embeddings": [][]float64{embedding},
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/register", "POST /api/register", resp, string(body))
+	out, _ := json.Marshal(resp)
+	w.Write(out)
+	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body))
 }
 
-func (s *OllamaStrategy) handleRegisterUpgrade(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "ollama/register/upgrade")
+func (s *OllamaStrategy) handlePull(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/pull")
 	body := s.readBody(r)
-	host, _ := s.clientIP(r)
 
-	if s.Bridge != nil {
-		s.Bridge.RecordDiscovery(host, "ollama", "agent_upgrade_payload", "upgrade_payload", string(body))
-		s.Bridge.SetFlag(host, "ollama_upgrade_captured")
+	var req struct {
+		Name   string `json:"name"`
+		Stream *bool  `json:"stream"`
+	}
+	json.Unmarshal(body, &req)
+
+	// Stream progress JSON
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	flusher, _ := w.(http.Flusher)
+
+	stages := []map[string]interface{}{
+		{"status": "pulling manifest"},
+		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 1200000000},
+		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 3500000000},
+		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 4700000000},
+		{"status": "verifying sha256 digest"},
+		{"status": "writing manifest"},
+		{"status": "success"},
 	}
 
-	resp := registerUpgradeResponse()
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/register/upgrade", "POST /api/register/upgrade", resp, string(body))
+	for _, stage := range stages {
+		out, _ := json.Marshal(stage)
+		w.Write(out)
+		w.Write([]byte("\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	s.traceEvent(r, tr, servConf, "ollama/pull", req.Name, "success", string(body))
 }
 
-// --- Peer sync handlers (injection extraction endpoints) ---
-
-func (s *OllamaStrategy) handlePeerSync(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "ollama/peer/sync")
+func (s *OllamaStrategy) handleDelete(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/delete")
 	body := s.readBody(r)
-	host, _ := s.clientIP(r)
 
-	sess := s.getOrCreateSession(host)
-	sess.mu.Lock()
-	sess.HasRegistered = true
-	sess.RegisterPayload = string(body)
-	sess.InjectionLevel = 3
-	sess.EndpointsHit["peer_sync"] = true
-	sess.mu.Unlock()
-
-	if s.Bridge != nil {
-		s.Bridge.RecordDiscovery(host, "ollama", "agent_peer_sync", "peer_sync_payload", string(body))
-		s.Bridge.SetFlag(host, "ollama_peer_sync_success")
-		s.Bridge.SetFlag(host, "ollama_injection_success")
+	var req struct {
+		Name string `json:"name"`
 	}
+	json.Unmarshal(body, &req)
 
-	resp := peerSyncResponse()
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/peer/sync", "POST /api/peer/sync", resp, string(body))
-}
-
-func (s *OllamaStrategy) handlePeerVerify(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "ollama/peer/verify")
-	body := s.readBody(r)
-	host, _ := s.clientIP(r)
-
-	sess := s.getOrCreateSession(host)
-	sess.mu.Lock()
-	sess.EndpointsHit["verify"] = true
-	sess.InjectionLevel = 4
-	sess.mu.Unlock()
-
-	if s.Bridge != nil {
-		s.Bridge.RecordDiscovery(host, "ollama", "agent_peer_verify", "peer_verify_payload", string(body))
-		s.Bridge.SetFlag(host, "ollama_peer_verify_success")
-		s.Bridge.SetFlag(host, "ollama_deep_extraction")
-	}
-
-	resp := peerVerifyResponse()
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/peer/verify", "POST /api/peer/verify", resp, string(body))
-}
-
-func (s *OllamaStrategy) handlePeerStatus(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "ollama/peer/status")
-	host, _ := s.clientIP(r)
-
-	sess := s.getOrCreateSession(host)
-	sess.mu.Lock()
-	registered := sess.HasRegistered
-	verified := sess.EndpointsHit["verify"]
-	sess.mu.Unlock()
-
-	trustLevel := "none"
-	if verified {
-		trustLevel = "full"
-	} else if registered {
-		trustLevel = "provisional"
-	}
-
-	resp := fmt.Sprintf(`{
-  "node_id": "ollama-primary",
-  "version": "%s",
-  "mesh_status": "healthy",
-  "peer_trust": "%s",
-  "connected_peers": 4,
-  "inference_queue_depth": %d,
-  "models_loaded": %d,
-  "uptime_seconds": %d
-}`, s.version, trustLevel, s.randIntn(5), len(s.models), 847291+s.randIntn(1000))
-
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/peer/status", "GET /api/peer/status", resp, "")
+	w.WriteHeader(http.StatusOK)
+	s.traceEvent(r, tr, servConf, "ollama/delete", req.Name, "deleted", string(body))
 }
 
 // --- OpenAI-compatible handlers ---
@@ -795,9 +800,9 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 
 	shouldStream := req.Stream != nil && *req.Stream
 	if shouldStream {
-		s.streamOpenAIResponse(w, req.Model, response, sess)
+		s.streamOpenAIResponse(w, req.Model, response)
 	} else {
-		s.writeOpenAINonStreaming(w, req.Model, response, sess)
+		s.writeOpenAINonStreaming(w, req.Model, response, len(prompt))
 	}
 
 	s.traceEvent(r, tr, servConf, "openai/chat", req.Model, response, string(body))
@@ -835,7 +840,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	s.rngMu.Unlock()
 
 	// Legacy completions endpoint — non-streaming by default
-	s.writeOpenAINonStreaming(w, req.Model, response, sess)
+	s.writeOpenAINonStreaming(w, req.Model, response, len(req.Prompt))
 	s.traceEvent(r, tr, servConf, "openai/completions", req.Model, response, string(body))
 }
 
@@ -870,62 +875,6 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 	s.traceEvent(r, tr, servConf, "openai/models", "GET /v1/models", string(out), "")
 }
 
-func (s *OllamaStrategy) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
-	s.checkBridgeAndCapture(r, "anthropic/messages")
-	body := s.readBody(r)
-	host, _ := s.clientIP(r)
-
-	var req struct {
-		Model    string `json:"model"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-	}
-	json.Unmarshal(body, &req)
-	if req.Model == "" {
-		req.Model = "claude-3-5-sonnet-20241022"
-	}
-
-	// Capture system messages
-	s.extractSystemFromMessages(r, req.Messages)
-
-	prompt := ""
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			prompt = req.Messages[i].Content
-			break
-		}
-	}
-
-	sess := s.getOrCreateSession(host)
-	sess.mu.Lock()
-	sess.PromptCount++
-	sess.EndpointsHit["anthropic/messages"] = true
-	sess.InjectionLevel = injectionLevelForSession(sess)
-	level := sess.InjectionLevel
-	sess.mu.Unlock()
-
-	category := categorizePrompt(prompt)
-	s.rngMu.Lock()
-	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-	s.rngMu.Unlock()
-
-	// Anthropic Messages API response format
-	respJSON := fmt.Sprintf(`{
-  "id": "msg_%s",
-  "type": "message",
-  "role": "assistant",
-  "content": [{"type": "text", "text": %s}],
-  "model": "%s",
-  "stop_reason": "end_turn",
-  "usage": {"input_tokens": %d, "output_tokens": %d}
-}`, randomHex(12), jsonString(response), req.Model, len(prompt)/4+1, len(response)/4+1)
-
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, respJSON)
-	s.traceEvent(r, tr, servConf, "anthropic/messages", req.Model, response, string(body))
-}
 
 func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/fallback")
@@ -940,14 +889,14 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 
 // --- Streaming helpers ---
 
-func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, response string) {
+func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, response string, promptLen int) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Transfer-Encoding", "chunked")
 	flusher, _ := w.(http.Flusher)
 
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
 	start := time.Now()
+	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
 		chunk := map[string]interface{}{
@@ -974,16 +923,18 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 	// Final chunk with stats
 	elapsed := time.Since(start)
 	finalChunk := map[string]interface{}{
-		"model":               model,
-		"created_at":          time.Now().UTC().Format(time.RFC3339Nano),
-		"response":            "",
-		"done":                true,
-		"total_duration":      elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":       int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":   12,
+		"model":                model,
+		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
+		"response":             "",
+		"done":                 true,
+		"done_reason":          "stop",
+		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
+		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"prompt_eval_count":    promptEvalCount,
 		"prompt_eval_duration": int64(50e6),
-		"eval_count":          len(tokens),
-		"eval_duration":       elapsed.Nanoseconds(),
+		"eval_count":           len(tokens),
+		"eval_duration":        elapsed.Nanoseconds(),
+		"context":              ollamaContextArray(promptEvalCount, len(tokens)),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -993,33 +944,37 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 	}
 }
 
-func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, response string) {
+func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
 	timing := timingForModel(model)
+	promptEvalCount := promptLen/4 + 1
+	evalCount := len(response) / 4
 	resp := map[string]interface{}{
-		"model":               model,
-		"created_at":          time.Now().UTC().Format(time.RFC3339Nano),
-		"response":            response,
-		"done":                true,
-		"total_duration":      int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":       int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":   12,
+		"model":                model,
+		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
+		"response":             response,
+		"done":                 true,
+		"done_reason":          "stop",
+		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
+		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"prompt_eval_count":    promptEvalCount,
 		"prompt_eval_duration": int64(50e6),
-		"eval_count":          len(response) / 4,
-		"eval_duration":       int64(200e6),
+		"eval_count":           evalCount,
+		"eval_duration":        int64(200e6),
+		"context":              ollamaContextArray(promptEvalCount, evalCount),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
 
-func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, response string, sess *OllamaSession) {
+func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, response string, promptLen int) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Transfer-Encoding", "chunked")
 	flusher, _ := w.(http.Flusher)
 
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
 	start := time.Now()
+	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
 		chunk := map[string]interface{}{
@@ -1054,13 +1009,13 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 			"content": "",
 		},
 		"done":                 true,
+		"done_reason":          "stop",
 		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
 		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    12,
+		"prompt_eval_count":    promptEvalCount,
 		"prompt_eval_duration": int64(50e6),
 		"eval_count":           len(tokens),
 		"eval_duration":        elapsed.Nanoseconds(),
-		"context":              ollamaContextPayload(sess),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -1070,8 +1025,9 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	}
 }
 
-func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, model, response string, sess *OllamaSession) {
+func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
 	timing := timingForModel(model)
+	promptEvalCount := promptLen/4 + 1
 	resp := map[string]interface{}{
 		"model":      model,
 		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
@@ -1080,20 +1036,20 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 			"content": response,
 		},
 		"done":                 true,
+		"done_reason":          "stop",
 		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
 		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    12,
+		"prompt_eval_count":    promptEvalCount,
 		"prompt_eval_duration": int64(50e6),
 		"eval_count":           len(response) / 4,
 		"eval_duration":        int64(200e6),
-		"context":              ollamaContextPayload(sess),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
 
-func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, response string, sess *OllamaSession) {
+func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, response string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1104,7 +1060,32 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	timing := timingForModel(model)
 	created := time.Now().Unix()
 
-	fingerprint := openAISystemFingerprint(sess)
+	s.rngMu.Lock()
+	fingerprint := fmt.Sprintf("fp_%012x", s.rng.Int63())
+	s.rngMu.Unlock()
+
+	// First chunk: role-only (real OpenAI/Ollama behavior)
+	roleChunk := map[string]interface{}{
+		"id":                 chatID,
+		"object":             "chat.completion.chunk",
+		"created":            created,
+		"model":              model,
+		"system_fingerprint": fingerprint,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"delta": map[string]string{
+					"role": "assistant",
+				},
+				"finish_reason": nil,
+			},
+		},
+	}
+	roleOut, _ := json.Marshal(roleChunk)
+	fmt.Fprintf(w, "data: %s\n\n", roleOut)
+	if flusher != nil {
+		flusher.Flush()
+	}
 
 	for i, token := range tokens {
 		chunk := map[string]interface{}{
@@ -1159,14 +1140,19 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	}
 }
 
-func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, response string, sess *OllamaSession) {
+func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
 	chatID := "chatcmpl-" + randomHex(14)
+	s.rngMu.Lock()
+	fingerprint := fmt.Sprintf("fp_%012x", s.rng.Int63())
+	s.rngMu.Unlock()
+	promptTokens := promptLen/4 + 1
+	completionTokens := len(response) / 4
 	resp := map[string]interface{}{
 		"id":                 chatID,
 		"object":             "chat.completion",
 		"created":            time.Now().Unix(),
 		"model":              model,
-		"system_fingerprint": openAISystemFingerprint(sess),
+		"system_fingerprint": fingerprint,
 		"choices": []map[string]interface{}{
 			{
 				"index": 0,
@@ -1178,9 +1164,9 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 			},
 		},
 		"usage": map[string]int{
-			"prompt_tokens":     12,
-			"completion_tokens": len(response) / 4,
-			"total_tokens":      12 + len(response)/4,
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      promptTokens + completionTokens,
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1202,6 +1188,12 @@ func fmtHeaders(headers http.Header) string {
 
 func sizeFromParam(paramSize string) int64 {
 	switch strings.ToUpper(paramSize) {
+	case "1.5B":
+		return 1_100_000_000
+	case "2.7B":
+		return 1_600_000_000
+	case "3B":
+		return 2_000_000_000
 	case "7B", "8B":
 		return 4_700_000_000
 	case "13B", "14B":
@@ -1215,6 +1207,12 @@ func sizeFromParam(paramSize string) int64 {
 
 func paramCountFromSize(paramSize string) int64 {
 	switch strings.ToUpper(paramSize) {
+	case "1.5B":
+		return 1_500_000_000
+	case "2.7B":
+		return 2_700_000_000
+	case "3B":
+		return 3_000_000_000
 	case "7B":
 		return 7_000_000_000
 	case "8B":

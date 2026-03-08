@@ -35,23 +35,17 @@ description: "Ollama LLM inference"
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.6.2"
+  version: "0.5.13"
 
+  # Models sized for Linode Nanode (1-2GB RAM).
+  # Per-sensor prod configs override this with different models:
+  #   EWR: phi:2.7b + nomic-embed-text
+  #   Fra: qwen2.5:1.5b + nomic-embed-text
   models:
-    - name: "llama3.1:8b"
-      size: "4.7GB"
-      family: "llama"
-      parameterSize: "8B"
-      quantizationLevel: "Q4_0"
-    - name: "mistral:7b"
-      size: "4.1GB"
-      family: "mistral"
-      parameterSize: "7B"
-      quantizationLevel: "Q4_0"
-    - name: "codellama:13b"
-      size: "7.4GB"
-      family: "llama"
-      parameterSize: "13B"
+    - name: "phi:2.7b"
+      size: "1.6GB"
+      family: "phi"
+      parameterSize: "2.7B"
       quantizationLevel: "Q4_0"
     - name: "nomic-embed-text"
       size: "274MB"

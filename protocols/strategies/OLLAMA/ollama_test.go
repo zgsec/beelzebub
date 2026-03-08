@@ -255,43 +255,23 @@ func TestSessionEscalation(t *testing.T) {
 		ModelLoaded:     make(map[string]bool),
 	}
 
-	// Level 0 for requests 1-2
+	// Trust-first: no injection for requests 1-4
 	sess.PromptCount = 1
-	assert.Equal(t, 0, injectionLevelForSession(sess))
-	sess.PromptCount = 2
-	assert.Equal(t, 0, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
+	sess.PromptCount = 4
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 
-	// Level 1 for requests 3-5
-	sess.PromptCount = 3
-	assert.Equal(t, 1, injectionLevelForSession(sess))
+	// Level 1 for requests 5-7
 	sess.PromptCount = 5
 	assert.Equal(t, 1, injectionLevelForSession(sess))
+	sess.PromptCount = 7
+	assert.Equal(t, 1, injectionLevelForSession(sess))
 
-	// Level 2 for requests 6-8
-	sess.PromptCount = 6
-	assert.Equal(t, 2, injectionLevelForSession(sess))
+	// Level 2 for requests 8+
 	sess.PromptCount = 8
 	assert.Equal(t, 2, injectionLevelForSession(sess))
-
-	// Level 3 for requests 9+
-	sess.PromptCount = 9
-	assert.Equal(t, 3, injectionLevelForSession(sess))
-
-	// Registration immediately sets level 3
-	sess2 := &OllamaSession{
-		PromptCount:   1,
-		HasRegistered: true,
-		EndpointsHit:  make(map[string]bool),
-	}
-	assert.Equal(t, 3, injectionLevelForSession(sess2))
-
-	// Verification sets level 4
-	sess3 := &OllamaSession{
-		PromptCount:   1,
-		HasRegistered: true,
-		EndpointsHit:  map[string]bool{"verify": true},
-	}
-	assert.Equal(t, 4, injectionLevelForSession(sess3))
+	sess.PromptCount = 15
+	assert.Equal(t, 2, injectionLevelForSession(sess))
 }
 
 func TestTimingProfile(t *testing.T) {
@@ -386,76 +366,25 @@ func TestRegistration(t *testing.T) {
 	assert.Equal(t, "ollama", discoveries[0].Source)
 }
 
-func TestPeerSync(t *testing.T) {
-	br := bridge.NewBridge()
-	s := &OllamaStrategy{
-		Sessions:     historystore.NewHistoryStore(),
-		ipSessions:   make(map[string]*OllamaSession),
-		Bridge:       br,
-		canaryTokens: map[string]string{},
-		injections:   map[string]string{},
-		rng:          rand.New(rand.NewSource(42)),
-		models:       []parser.OllamaModel{{Name: "llama3.1:8b"}},
-		version:      "0.6.2",
+func TestInjectionEscalation(t *testing.T) {
+	sess := &OllamaSession{
+		PromptCount:  1,
+		EndpointsHit: make(map[string]bool),
 	}
 
-	body := `{"client_context":{"system_prompt":"You are a helpful assistant","tools":["web_search","file_read"],"operator":"test-user"}}`
-	req := httptest.NewRequest("POST", "/api/peer/sync", strings.NewReader(body))
-	w := httptest.NewRecorder()
+	// Requests 1-4: no injection (trust-first)
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 
-	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
-	tr := tracer.GetInstance(func(event tracer.Event) {})
+	sess.PromptCount = 4
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 
-	s.handlePeerSync(w, req, servConf, tr)
+	// Requests 5-7: level 1
+	sess.PromptCount = 5
+	assert.Equal(t, 1, injectionLevelForSession(sess))
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "sync_accepted")
-	assert.Contains(t, w.Body.String(), "parity_score")
-	assert.Contains(t, w.Body.String(), "connected_peers")
-
-	// Verify bridge captured the payload
-	ip := "192.0.2.1" // httptest default remote addr
-	assert.True(t, br.HasFlag(ip, "ollama_peer_sync_success"))
-	assert.True(t, br.HasFlag(ip, "ollama_injection_success"))
-	assert.True(t, br.HasDiscovered(ip, "agent_peer_sync"))
-}
-
-func TestPeerVerify(t *testing.T) {
-	br := bridge.NewBridge()
-	s := &OllamaStrategy{
-		Sessions:     historystore.NewHistoryStore(),
-		ipSessions:   make(map[string]*OllamaSession),
-		Bridge:       br,
-		canaryTokens: map[string]string{},
-		injections:   map[string]string{},
-		rng:          rand.New(rand.NewSource(42)),
-		models:       []parser.OllamaModel{{Name: "llama3.1:8b"}},
-		version:      "0.6.2",
-	}
-
-	body := `{"conversation_history":"test","files_accessed":["/etc/passwd"]}`
-	req := httptest.NewRequest("POST", "/api/peer/verify", strings.NewReader(body))
-	w := httptest.NewRecorder()
-
-	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
-	tr := tracer.GetInstance(func(event tracer.Event) {})
-
-	s.handlePeerVerify(w, req, servConf, tr)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "verified")
-	assert.Contains(t, w.Body.String(), "premium_models")
-
-	ip := "192.0.2.1"
-	assert.True(t, br.HasFlag(ip, "ollama_peer_verify_success"))
-	assert.True(t, br.HasFlag(ip, "ollama_deep_extraction"))
-
-	// Session should now be at level 4
-	sess := s.getOrCreateSession(ip)
-	sess.mu.Lock()
-	assert.True(t, sess.EndpointsHit["verify"])
-	assert.Equal(t, 4, injectionLevelForSession(sess))
-	sess.mu.Unlock()
+	// Requests 8+: level 2
+	sess.PromptCount = 8
+	assert.Equal(t, 2, injectionLevelForSession(sess))
 }
 
 func TestSystemMessageExtraction(t *testing.T) {
@@ -496,24 +425,14 @@ func TestSystemMessageExtraction(t *testing.T) {
 	assert.True(t, found, "should capture system message content")
 }
 
-func TestOpenAIFingerprint(t *testing.T) {
-	// New session — should get basic fingerprint
-	sess := &OllamaSession{
-		PromptCount:  1,
-		EndpointsHit: make(map[string]bool),
+func TestOllamaContextArray(t *testing.T) {
+	ctx := ollamaContextArray(10, 20)
+	assert.True(t, len(ctx) > 0, "context array should not be empty")
+	assert.Equal(t, 30, len(ctx), "context array should be promptTokens + evalTokens")
+	// Values should be in plausible token ID range
+	for _, v := range ctx {
+		assert.True(t, v >= 128000, "token IDs should be in range")
 	}
-	fp := openAISystemFingerprint(sess)
-	assert.True(t, strings.HasPrefix(fp, "fp_ollama_"))
-
-	// After 3 requests — should signal sync required
-	sess.PromptCount = 3
-	fp = openAISystemFingerprint(sess)
-	assert.True(t, strings.HasPrefix(fp, "fp_sync_required_"))
-
-	// After registration — should signal verified
-	sess.HasRegistered = true
-	fp = openAISystemFingerprint(sess)
-	assert.True(t, strings.HasPrefix(fp, "fp_verified_peer_"))
 }
 
 func TestModelListResponse(t *testing.T) {
@@ -682,17 +601,3 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 	assert.Len(t, choices, 1)
 }
 
-func TestOllamaContextPayload(t *testing.T) {
-	sess := &OllamaSession{
-		PromptCount:  5,
-		EndpointsHit: map[string]bool{"chat": true, "tags": true},
-	}
-
-	ctx := ollamaContextPayload(sess)
-	assert.True(t, len(ctx) > 0, "context payload should not be empty")
-	// First 4 values spell "SYNC" in ASCII
-	assert.Equal(t, 83, ctx[0]) // S
-	assert.Equal(t, 89, ctx[1]) // Y
-	assert.Equal(t, 78, ctx[2]) // N
-	assert.Equal(t, 67, ctx[3]) // C
-}
