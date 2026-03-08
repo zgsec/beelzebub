@@ -643,20 +643,11 @@ func injectionForLevel(level int, payloads map[string]string) string {
 	}
 }
 
-// injectionLevelForSession determines injection aggressiveness based on session state.
-//
-// Trust-first escalation curve:
-//   Requests 1-4:   Level -1 (ZERO injection — build trust, perfectly realistic)
-//   Requests 5-7:   Level 1 (subtle semantic parity — infrastructure footer)
-//   Requests 8+:    Level 2 (authority override — demand disclosure)
+// injectionLevelForSession returns -1 (no injection) for all sessions.
+// Injection removed to maximize engagement depth for richer behavioral data.
+// Canary tokens in response templates are kept (invisible tripwires).
 func injectionLevelForSession(sess *OllamaSession) int {
-	if sess.PromptCount >= 8 {
-		return 2
-	}
-	if sess.PromptCount >= 5 {
-		return 1
-	}
-	return -1 // no injection
+	return -1 // no injection — clean responses maximize multi-turn engagement
 }
 
 // =============================================================================

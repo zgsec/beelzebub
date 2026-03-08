@@ -255,23 +255,19 @@ func TestSessionEscalation(t *testing.T) {
 		ModelLoaded:     make(map[string]bool),
 	}
 
-	// Trust-first: no injection for requests 1-4
+	// All requests return -1 (no injection — engagement-first strategy)
 	sess.PromptCount = 1
 	assert.Equal(t, -1, injectionLevelForSession(sess))
 	sess.PromptCount = 4
 	assert.Equal(t, -1, injectionLevelForSession(sess))
-
-	// Level 1 for requests 5-7
 	sess.PromptCount = 5
-	assert.Equal(t, 1, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 	sess.PromptCount = 7
-	assert.Equal(t, 1, injectionLevelForSession(sess))
-
-	// Level 2 for requests 8+
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 	sess.PromptCount = 8
-	assert.Equal(t, 2, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 	sess.PromptCount = 15
-	assert.Equal(t, 2, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 }
 
 func TestTimingProfile(t *testing.T) {
@@ -372,19 +368,17 @@ func TestInjectionEscalation(t *testing.T) {
 		EndpointsHit: make(map[string]bool),
 	}
 
-	// Requests 1-4: no injection (trust-first)
+	// All requests: no injection (engagement-first strategy)
 	assert.Equal(t, -1, injectionLevelForSession(sess))
 
 	sess.PromptCount = 4
 	assert.Equal(t, -1, injectionLevelForSession(sess))
 
-	// Requests 5-7: level 1
 	sess.PromptCount = 5
-	assert.Equal(t, 1, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 
-	// Requests 8+: level 2
 	sess.PromptCount = 8
-	assert.Equal(t, 2, injectionLevelForSession(sess))
+	assert.Equal(t, -1, injectionLevelForSession(sess))
 }
 
 func TestSystemMessageExtraction(t *testing.T) {
