@@ -113,6 +113,7 @@ type OllamaConfig struct {
 	Version           string            `yaml:"version"`
 	InjectionPayloads map[string]string  `yaml:"injectionPayloads"`
 	CanaryTokens      map[string]string  `yaml:"canaryTokens"`
+	PromptEvalDelayMs int               `yaml:"promptEvalDelayMs"` // initial delay before first token (simulates prompt evaluation)
 }
 
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service

@@ -63,6 +63,10 @@ type Event struct {
 	// Fault injection
 	FaultInjected string `json:"FaultInjected,omitempty"`
 
+	// Tool chain analysis
+	ToolChainDepth int    `json:"ToolChainDepth,omitempty"`
+	ToolDependency string `json:"ToolDependency,omitempty"`
+
 	// Agent classification (on End events)
 	AgentScore    int    `json:"AgentScore,omitempty"`
 	AgentCategory string `json:"AgentCategory,omitempty"`

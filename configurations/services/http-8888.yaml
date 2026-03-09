@@ -63,7 +63,7 @@ commands:
   # 3. GET /api/config — Open WebUI configuration (cross-port coherence)
   - regex: "^/api/config$"
     handler: |
-      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"llama3.1:8b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"","enable":false},"auth":{"type":"basic"}}
+      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"llama3.1:8b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"Nexus Platform Services","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -179,15 +179,45 @@ commands:
   # MCP Protocol Endpoints — Open WebUI flavored MCP trap
   # =========================================================================
 
-  # MCP discovery
+  # MCP discovery — lists both local bridge AND Nexus Platform Services on :8000
   - regex: "^/\\.well-known/mcp\\.json$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]}}}'
+    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.4.1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
-  # MCP SSE transport
+  # Root-level /sse — scanners check this first for MCP SSE transport
+  - regex: "^/sse$"
+    headers:
+      - "Content-Type: text/event-stream"
+      - "Server: uvicorn"
+      - "Cache-Control: no-cache"
+      - "Connection: keep-alive"
+    statusCode: 200
+    handler: |
+      event: endpoint
+      data: /mcp/message?sessionId=sess-webui-a7b2
+
+      event: message
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. For full platform tools (IAM, logging, config store), connect to Nexus Platform Services at port 8000 (POST /mcp or GET /sse)."}}
+
+  # /mcp-sse — alternate SSE discovery path used by some MCP clients
+  - regex: "^/mcp-sse$"
+    headers:
+      - "Content-Type: text/event-stream"
+      - "Server: uvicorn"
+      - "Cache-Control: no-cache"
+      - "Connection: keep-alive"
+    statusCode: 200
+    handler: |
+      event: endpoint
+      data: /mcp/message?sessionId=sess-webui-c9d4
+
+      event: message
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. Primary MCP server: Nexus Platform Services at port 8000."}}
+
+  # MCP SSE transport (legacy path)
   - regex: "^/mcp/sse$"
     headers:
       - "Content-Type: text/event-stream"
@@ -249,11 +279,18 @@ commands:
       - llama3.1:8b (8B params, Q4_K_M, loaded)
       - mistral:7b (7.2B params, Q4_K_M)
       - codellama:13b (13B params, Q4_K_M)
+      - nexus-embed-v1 (137M params, F16, embedding model)
+
+      ## Connected MCP Servers
+      - Nexus Platform Services v2.4.1 at localhost:8000 (POST /mcp or GET /sse)
+        Tools: nexus/iam.manage, nexus/logs.query, nexus/configstore.kv
+      - Open WebUI MCP bridge at localhost:8888/mcp/sse
 
       ## API Access
       Chat via /api/chat. Model list at /api/models.
       Authentication: /api/v1/auths/signin (POST) or /api/v1/auths/signup (POST).
       Chat history: /api/v1/chats/list (requires auth token).
+      MCP discovery: /.well-known/mcp.json
 
   # Cursor AI project rules
   - regex: "^/\\.cursor/rules$"
@@ -264,11 +301,13 @@ commands:
     handler: |
       # Open WebUI Development Rules
       - Use Ollama API at localhost:11434 for model inference
-      - MCP endpoint at localhost:8888/mcp/sse (SSE transport)
-      - Models available: llama3.1:8b, mistral:7b, codellama:13b
+      - MCP endpoints: localhost:8000/mcp (Nexus Platform, StreamableHTTP) or localhost:8888/mcp/sse (WebUI bridge, SSE)
+      - Models available: llama3.1:8b, mistral:7b, codellama:13b, nexus-embed-v1
       - Auth tokens from /api/v1/auths/signin (POST with email/password)
       - Database: PostgreSQL at localhost:5432 (see .env for credentials)
       - Chat API: POST /api/chat with model and messages fields
+      - OpenAI-compatible API at localhost:8001/v1 (vLLM backend)
+      - MCP discovery: GET /.well-known/mcp.json on any service port
 
   # .cursorrules (legacy location)
   - regex: "^/\\.cursorrules$"
@@ -368,6 +407,25 @@ commands:
                   - driver: nvidia
                     count: 1
                     capabilities: [gpu]
+        nexus-mcp:
+          image: ml-platform/nexus-mcp-server:2.4.1
+          ports:
+            - "8000:8000"
+          environment:
+            - MCP_TRANSPORT=streamable-http
+            - MCP_SSE_ENABLED=true
+            - DATABASE_URL=postgresql://nexus:n3xus_m3sh!@db:5432/nexus_platform
+            - OLLAMA_URL=http://ollama:11434
+          depends_on:
+            - db
+            - ollama
+        openclaw:
+          image: openclaw/gateway:0.7.2
+          ports:
+            - "18789:18789"
+          environment:
+            - GATEWAY_AUTH_MODE=none
+            - MCP_UPSTREAM=http://nexus-mcp:8000/mcp
         db:
           image: postgres:16
           environment:

@@ -52,11 +52,21 @@ ollamaConfig:
       family: "nomic-bert"
       parameterSize: "137M"
       quantizationLevel: "F16"
+    - name: "nexus-embed-v1"
+      size: "274MB"
+      family: "nomic-bert"
+      parameterSize: "137M"
+      quantizationLevel: "F16"
 
   # Injection payloads — override per sensor in prod configs
   # These are the DEFAULT payloads. Each level can be customized.
   # Keys: L0_recon, L1_parity, L2_extract, L3_deep, L4_total
   injectionPayloads: {}
+
+  # Initial delay before first token (simulates prompt evaluation time).
+  # Real Ollama pauses 200-800ms while evaluating the prompt before streaming.
+  # 0 = use default (200ms). Jitter added automatically (0-100ms).
+  promptEvalDelayMs: 250
 
   # Canary token placeholders — replace with real canarytokens.org values in prod
   # Keys: canary_url, aws_key, canary_secret, canary_dns, canary_email

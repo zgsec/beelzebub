@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
@@ -36,9 +38,10 @@ type OllamaStrategy struct {
 	version      string
 	injections   map[string]string
 	canaryTokens map[string]string
-	rng          *rand.Rand
-	rngMu        sync.Mutex
-	modelDigests map[string]string // stable per-model digests computed at init
+	rng               *rand.Rand
+	rngMu             sync.Mutex
+	modelDigests      map[string]string // stable per-model digests computed at init
+	promptEvalDelayMs int
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -89,6 +92,10 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	s.canaryTokens = servConf.OllamaConfig.CanaryTokens
 	if s.canaryTokens == nil {
 		s.canaryTokens = make(map[string]string)
+	}
+	s.promptEvalDelayMs = servConf.OllamaConfig.PromptEvalDelayMs
+	if s.promptEvalDelayMs == 0 {
+		s.promptEvalDelayMs = 200 // default 200ms prompt eval delay
 	}
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -240,8 +247,26 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	var crossRef string
 	if s.Bridge != nil {
 		flags := s.Bridge.GetFlags(host)
-		if len(flags) > 0 {
-			crossRef = fmt.Sprintf("bridge_flags: %v", flags)
+		discoveries := s.Bridge.GetDiscoveries(host)
+		if len(flags) > 0 || len(discoveries) > 0 {
+			var parts []string
+			if len(flags) > 0 {
+				sort.Strings(flags)
+				parts = append(parts, "flags:"+strings.Join(flags, ","))
+			}
+			if len(discoveries) > 0 {
+				credTypes := make(map[string]bool)
+				for _, d := range discoveries {
+					credTypes[d.Source+"/"+d.Type] = true
+				}
+				var types []string
+				for t := range credTypes {
+					types = append(types, t)
+				}
+				sort.Strings(types)
+				parts = append(parts, "creds:"+strings.Join(types, ","))
+			}
+			crossRef = strings.Join(parts, ";")
 		}
 	}
 
@@ -254,6 +279,21 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 			faultType = ft
 		}
 	}
+
+	// Per-event incremental agent scoring — feed all available signals
+	sig := agentdetect.Signal{
+		HasIdenticalRetries: isRetry,
+	}
+	sess := s.getOrCreateSession(host)
+	sess.mu.Lock()
+	if sess.EndpointsHit["openai/chat"] || sess.EndpointsHit["generate"] || sess.EndpointsHit["chat"] {
+		sig.HasAIDiscoveryProbe = true
+	}
+	sess.mu.Unlock()
+	if crossRef != "" {
+		sig.HasCrossProtocol = true
+	}
+	verdict := agentdetect.IncrementalClassify(sig)
 
 	tr.TraceEvent(tracer.Event{
 		Msg:              "Ollama API request",
@@ -280,6 +320,9 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		RetryOf:          retryOf,
 		CrossProtocolRef: crossRef,
 		FaultInjected:    faultType,
+		AgentScore:       verdict.Score,
+		AgentCategory:    verdict.Category,
+		AgentSignals:     verdict.SignalsString(),
 	})
 }
 
@@ -371,10 +414,38 @@ func (s *OllamaStrategy) handleRoot(w http.ResponseWriter, r *http.Request, serv
 
 func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/version")
-	resp := fmt.Sprintf(`{"version":"%s"}`, s.version)
+	host, _ := s.clientIP(r)
+
+	resp := map[string]interface{}{
+		"version":          s.version,
+		"platform":         "Nexus Platform Services",
+		"platform_version": "2.4.1",
+		"mcp_endpoint":     "http://localhost:8000/mcp",
+	}
+
+	// Cross-protocol: if IP has interacted with other services, show richer platform info
+	if s.Bridge != nil {
+		flags := s.Bridge.GetFlags(host)
+		if len(flags) > 0 {
+			services := map[string]string{}
+			for _, f := range flags {
+				switch {
+				case strings.HasPrefix(f, "mcp_"):
+					services["mcp"] = "connected"
+				case strings.HasPrefix(f, "ssh_"):
+					services["ssh_gateway"] = "available"
+				}
+			}
+			if len(services) > 0 {
+				resp["platform_services"] = services
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/version", "GET /api/version", resp, "")
+	out, _ := json.Marshal(resp)
+	w.Write(out)
+	s.traceEvent(r, tr, servConf, "ollama/version", "GET /api/version", string(out), "")
 }
 
 func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
@@ -522,6 +593,11 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		s.writeOllamaNonStreaming(w, req.Model, response, len(req.Prompt))
 	}
 
+	// Cross-protocol: mark that this IP has used Ollama inference
+	if s.Bridge != nil {
+		s.Bridge.SetFlag(host, "ollama_inference_used")
+	}
+
 	s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, response, string(body))
 }
 
@@ -589,6 +665,11 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		s.writeOllamaChatNonStreaming(w, req.Model, response, len(prompt))
 	}
 
+	// Cross-protocol: mark that this IP has used Ollama inference
+	if s.Bridge != nil {
+		s.Bridge.SetFlag(host, "ollama_inference_used")
+	}
+
 	s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, response, string(body))
 }
 
@@ -625,6 +706,32 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 	}
 
 	pCount := paramCountFromSize(paramSize)
+	host, _ := s.clientIP(r)
+	modelInfo := map[string]interface{}{
+		"general.architecture":         family,
+		"general.parameter_count":      pCount,
+		"general.quantization_version": 2,
+		"general.file_type":            2,
+		"general.context_length":       4096,
+		"general.embedding_length":     4096,
+	}
+
+	// Cross-protocol: enrich model_info for IPs seen on other protocols
+	if s.Bridge != nil {
+		if s.Bridge.HasFlag(host, "mcp_tool_call") {
+			modelInfo["nexus.mcp_integration"] = true
+			modelInfo["nexus.mcp_endpoint"] = "http://localhost:8000/mcp"
+		}
+		if s.Bridge.HasFlag(host, "ssh_authenticated") {
+			modelInfo["nexus.credential_vault"] = "https://vault.int.nexuslogistics.io:8200"
+			modelInfo["nexus.ssh_config_available"] = true
+		}
+		discoveries := s.Bridge.GetDiscoveries(host)
+		if len(discoveries) > 0 {
+			modelInfo["nexus.service_credentials_available"] = true
+		}
+	}
+
 	showResp := map[string]interface{}{
 		"modelfile":  fmt.Sprintf("FROM %s", req.Model),
 		"parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
@@ -637,15 +744,8 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 			"parameter_size":     paramSize,
 			"quantization_level": quantLevel,
 		},
-		"model_info": map[string]interface{}{
-			"general.architecture":        family,
-			"general.parameter_count":     pCount,
-			"general.quantization_version": 2,
-			"general.file_type":           2,
-			"general.context_length":      4096,
-			"general.embedding_length":    4096,
-		},
-		"license": "Meta Llama 3.1 Community License Agreement",
+		"model_info":   modelInfo,
+		"license":      "Meta Llama 3.1 Community License Agreement",
 		"capabilities": []string{"completion"},
 	}
 
@@ -893,6 +993,13 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
 
+	// Simulate prompt evaluation time (real LLMs pause before first token)
+	promptEvalDelay := time.Duration(s.promptEvalDelayMs) * time.Millisecond
+	s.rngMu.Lock()
+	jitter := time.Duration(s.rng.Intn(100)) * time.Millisecond
+	s.rngMu.Unlock()
+	time.Sleep(promptEvalDelay + jitter)
+
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
 	start := time.Now()
@@ -970,6 +1077,13 @@ func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, r
 func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, response string, promptLen int) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
+
+	// Simulate prompt evaluation time (real LLMs pause before first token)
+	promptEvalDelay := time.Duration(s.promptEvalDelayMs) * time.Millisecond
+	s.rngMu.Lock()
+	jitter := time.Duration(s.rng.Intn(100)) * time.Millisecond
+	s.rngMu.Unlock()
+	time.Sleep(promptEvalDelay + jitter)
 
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
@@ -1053,7 +1167,15 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Platform", "Nexus Platform Services v2.4.1")
 	flusher, _ := w.(http.Flusher)
+
+	// Simulate prompt evaluation time (real LLMs pause before first token)
+	promptEvalDelay := time.Duration(s.promptEvalDelayMs) * time.Millisecond
+	s.rngMu.Lock()
+	jitter := time.Duration(s.rng.Intn(100)) * time.Millisecond
+	s.rngMu.Unlock()
+	time.Sleep(promptEvalDelay + jitter)
 
 	chatID := "chatcmpl-" + randomHex(14)
 	tokens := tokenizeResponse(response)
@@ -1170,6 +1292,7 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Platform", "Nexus Platform Services v2.4.1")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }

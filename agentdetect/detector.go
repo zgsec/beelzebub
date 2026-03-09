@@ -100,6 +100,86 @@ func Classify(sig Signal) Verdict {
 	}
 }
 
+// IncrementalClassify produces a verdict from partial signals accumulated so far.
+// Unlike Classify(), it doesn't penalize missing signals — it scores only what's available.
+// This enables per-event scoring that converges over time as more signals arrive.
+func IncrementalClassify(sig Signal) Verdict {
+	score := 0
+	var signals []string
+
+	// MCP initialize handshake is a strong agent signal
+	if sig.HasMCPInitialize {
+		score += 40
+		signals = append(signals, "mcp_handshake")
+	}
+
+	// Mechanical timing: low stddev + low mean
+	// Unlike Classify, we don't require minimum 3 samples
+	if len(sig.InterEventTimingsMs) >= 1 {
+		mean, stddev := timingStats(sig.InterEventTimingsMs)
+		if mean > 0 && mean < 2000 && stddev < 500 {
+			score += 25
+			signals = append(signals, fmt.Sprintf("mechanical_timing(mean=%.0f,sd=%.0f)", mean, stddev))
+		}
+	}
+
+	// Cross-protocol pivot within 60 seconds
+	if sig.HasCrossProtocol && sig.CrossProtocolGapMs > 0 && sig.CrossProtocolGapMs < 60000 {
+		score += 15
+		signals = append(signals, "cross_protocol_pivot")
+	}
+
+	// Identical retries (agents retry the same command)
+	if sig.HasIdenticalRetries {
+		score += 15
+		signals = append(signals, "identical_retries")
+	}
+
+	// AI plugin/MCP discovery probing
+	if sig.HasAIDiscoveryProbe {
+		score += 20
+		signals = append(signals, "ai_discovery_probe")
+	}
+
+	// Tool chain depth >= 3 (sequential tool calls showing workflow)
+	if sig.ToolChainDepth >= 3 {
+		score += 20
+		signals = append(signals, fmt.Sprintf("tool_chain_depth(%d)", sig.ToolChainDepth))
+	}
+
+	// Command corrections are a human signal
+	if sig.HasCommandCorrection {
+		score -= 20
+		signals = append(signals, "command_correction(-)")
+	}
+
+	// Clamp to 0-100
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+
+	category := "unknown"
+	if score > 0 {
+		switch {
+		case score >= 60:
+			category = "agent"
+		case score >= 30:
+			category = "bot"
+		default:
+			category = "human"
+		}
+	}
+
+	return Verdict{
+		Score:    score,
+		Category: category,
+		Signals:  signals,
+	}
+}
+
 // SignalsString formats a Verdict's signals as a comma-separated string.
 func (v Verdict) SignalsString() string {
 	return strings.Join(v.Signals, ",")

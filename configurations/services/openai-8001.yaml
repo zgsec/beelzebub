@@ -27,6 +27,7 @@ commands:
   - regex: "^/health$"
     headers:
       - "Server: uvicorn"
+      - "X-Platform: Nexus Platform Services v2.4.1"
     statusCode: 200
     handler: ""
 
@@ -39,11 +40,21 @@ commands:
     handler: |
       {"detail":"Not Found"}
 
+  # MCP discovery — points scanners to the real MCP honeypot on :8000
+  - regex: "^/\\.well-known/mcp\\.json$"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Platform: Nexus Platform Services v2.4.1"
+    statusCode: 200
+    handler: '{"mcpServers":{"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.4.1 — DevOps coordination, IAM, logging, config store","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+
   # 3. GET /v1/models — Model listing (with permission array like real vLLM)
   - regex: "^/v1/models$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
+      - "X-Platform: Nexus Platform Services v2.4.1"
     statusCode: 200
     handler: |
       {"object":"list","data":[{"id":"meta-llama/Llama-3.1-70B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-70B-Instruct","permission":[{}]},{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-8B-Instruct","permission":[{}]},{"id":"BAAI/bge-large-en-v1.5","object":"model","created":1738368000,"owned_by":"vllm","root":"BAAI/bge-large-en-v1.5","permission":[{}]}]}
@@ -1134,6 +1145,7 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
+      - "X-Platform: Nexus Platform Services v2.4.1"
     statusCode: 404
     handler: |
       {"detail":"Not Found"}

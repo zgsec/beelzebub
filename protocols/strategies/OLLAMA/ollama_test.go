@@ -523,6 +523,8 @@ func TestHandleVersionResponse(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"version":"0.6.2"`)
+	assert.Contains(t, w.Body.String(), `"platform":"Nexus Platform Services"`)
+	assert.Contains(t, w.Body.String(), `"mcp_endpoint":"http://localhost:8000/mcp"`)
 }
 
 func TestHandleTagsResponse(t *testing.T) {
