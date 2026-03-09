@@ -23,3 +23,9 @@ configurations/services/openai-8001.yaml:generic-api-key:828
 configurations/services/http-8888.yaml:generic-api-key:294
 configurations/services/http-8888.yaml:generic-api-key:355
 configurations/services/http-8888.yaml:jwt:85
+
+# OpenClaw Gateway honeypot lure credentials — fake MCP tokens, fake JWT secret
+configurations/services/openclaw-18789.yaml:generic-api-key:297
+configurations/services/openclaw-18789.yaml:generic-api-key:607
+configurations/services/openclaw-18789.yaml:generic-api-key:619
+configurations/services/openclaw-18789.yaml:generic-api-key:675
