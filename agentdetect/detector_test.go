@@ -87,3 +87,62 @@ func TestUnknownWithNoTimings(t *testing.T) {
 	v := Classify(sig)
 	assert.Equal(t, "unknown", v.Category)
 }
+
+// IncrementalClassify tests — verify timing threshold requires 3+ samples
+
+func TestIncrementalClassify_SingleTimingSample_NoMechanicalTiming(t *testing.T) {
+	// Production case: SSH bot sends one command, delta=6ms.
+	// With 1 sample, stddev is always 0 — no variance observable.
+	// mechanical_timing must NOT fire.
+	sig := Signal{
+		InterEventTimingsMs: []int64{6},
+	}
+	v := IncrementalClassify(sig)
+	assert.Equal(t, 0, v.Score)
+	assert.Equal(t, "unknown", v.Category)
+	assert.NotContains(t, v.SignalsString(), "mechanical_timing")
+}
+
+func TestIncrementalClassify_TwoTimingSamples_NoMechanicalTiming(t *testing.T) {
+	// Two samples: Bessel's correction with n-1=1 is fragile.
+	// Can't distinguish "consistently fast" from "coincidentally fast".
+	sig := Signal{
+		InterEventTimingsMs: []int64{100, 110},
+	}
+	v := IncrementalClassify(sig)
+	assert.NotContains(t, v.SignalsString(), "mechanical_timing")
+}
+
+func TestIncrementalClassify_ThreeSamples_MechanicalTimingFires(t *testing.T) {
+	// Three samples: statistical minimum for meaningful dispersion.
+	// Tight clustering should trigger the signal.
+	sig := Signal{
+		InterEventTimingsMs: []int64{100, 110, 105},
+	}
+	v := IncrementalClassify(sig)
+	assert.Contains(t, v.SignalsString(), "mechanical_timing")
+	assert.Equal(t, 25, v.Score)
+	assert.Equal(t, "human", v.Category) // 25 < 30, but score > 0
+}
+
+func TestIncrementalClassify_ThreeSamplesHighVariance_NoMechanicalTiming(t *testing.T) {
+	// Three samples with high variance — human-like pattern.
+	sig := Signal{
+		InterEventTimingsMs: []int64{100, 1500, 200},
+	}
+	v := IncrementalClassify(sig)
+	assert.NotContains(t, v.SignalsString(), "mechanical_timing")
+}
+
+func TestIncrementalClassify_MCPFirstCall_AgentWithoutTiming(t *testing.T) {
+	// MCP first tool call: no timing yet, but mcp_handshake + ai_probe = 60.
+	// Exporter takes max score, so this persists as session classification.
+	sig := Signal{
+		HasMCPInitialize:    true,
+		HasAIDiscoveryProbe: true,
+	}
+	v := IncrementalClassify(sig)
+	assert.Equal(t, 60, v.Score)
+	assert.Equal(t, "agent", v.Category)
+	assert.NotContains(t, v.SignalsString(), "mechanical_timing")
+}

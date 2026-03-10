@@ -114,8 +114,10 @@ func IncrementalClassify(sig Signal) Verdict {
 	}
 
 	// Mechanical timing: low stddev + low mean
-	// Unlike Classify, we don't require minimum 3 samples
-	if len(sig.InterEventTimingsMs) >= 1 {
+	// Require >= 3 samples — with 1 sample stddev is always 0 (no variance
+	// observable), and with 2 samples Bessel's correction is fragile.
+	// Three samples is the statistical minimum for meaningful dispersion.
+	if len(sig.InterEventTimingsMs) >= 3 {
 		mean, stddev := timingStats(sig.InterEventTimingsMs)
 		if mean > 0 && mean < 2000 && stddev < 500 {
 			score += 25
