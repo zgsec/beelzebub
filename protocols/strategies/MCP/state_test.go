@@ -94,7 +94,8 @@ func TestSystemLogQuery(t *testing.T) {
 	err := json.Unmarshal([]byte(result), &resp)
 	assert.NoError(t, err)
 	assert.Equal(t, true, resp["ok"])
-	assert.Equal(t, float64(1), resp["total"])
+	// 2 dynamic error-level logs injected + 1 from seed = 3
+	assert.Equal(t, float64(3), resp["total"])
 }
 
 func TestSystemLogGetRecent(t *testing.T) {

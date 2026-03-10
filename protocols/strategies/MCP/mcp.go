@@ -95,7 +95,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
-		"2.4.1",
+		"2.41.3-rc2",
 		server.WithToolCapabilities(false),
 		server.WithInstructions(
 			"Nexus Platform Services — internal DevOps coordination platform "+

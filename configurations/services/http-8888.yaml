@@ -41,7 +41,7 @@ commands:
         window.__OPEN_WEBUI_CONFIG__ = {
           "version": "0.5.3",
           "name": "Open WebUI",
-          "default_models": "llama3.1:8b",
+          "default_models": "phi:2.7b",
           "ollama_base_url": "http://localhost:11434"
         };
       </script>
@@ -63,7 +63,7 @@ commands:
   # 3. GET /api/config — Open WebUI configuration (cross-port coherence)
   - regex: "^/api/config$"
     handler: |
-      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"llama3.1:8b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"Nexus Platform Services","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
+      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"Nexus Platform Services","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -100,7 +100,7 @@ commands:
   # 7. GET /api/models — Lists models from connected Ollama (cross-port coherence)
   - regex: "^/api/models$"
     handler: |
-      {"models":[{"id":"llama3.1:8b","name":"llama3.1:8b","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"llama3.1:8b","model":"llama3.1:8b","size":4661224676,"digest":"62757c860e01","details":{"parameter_size":"8.0B","quantization_level":"Q4_K_M"}}},{"id":"mistral:7b","name":"mistral:7b","object":"model","created":1736935800,"owned_by":"ollama","ollama":{"name":"mistral:7b","model":"mistral:7b","size":4109865159,"digest":"2ae6f6dd7a3d","details":{"parameter_size":"7.2B","quantization_level":"Q4_K_M"}}},{"id":"codellama:13b","name":"codellama:13b","object":"model","created":1737367500,"owned_by":"ollama","ollama":{"name":"codellama:13b","model":"codellama:13b","size":7365960935,"digest":"9f438cb9cd58","details":{"parameter_size":"13.0B","quantization_level":"Q4_K_M"}}}]}
+      {"models":[{"id":"phi:2.7b","name":"phi:2.7b","object":"model","created":1739214000,"owned_by":"ollama","ollama":{"name":"phi:2.7b","model":"phi:2.7b","size":1700000000,"digest":"a1b2c3d4e5f6","details":{"parameter_size":"2.7B","quantization_level":"Q4_0"}}},{"id":"nomic-embed-text","name":"nomic-embed-text","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"nomic-embed-text","model":"nomic-embed-text","size":274000000,"digest":"7850acbc7150","details":{"parameter_size":"137M","quantization_level":"F16"}}},{"id":"nexus-embed-v1","name":"nexus-embed-v1","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"nexus-embed-v1","model":"nexus-embed-v1","size":274000000,"digest":"d4e5f6a7b8c9","details":{"parameter_size":"137M","quantization_level":"F16"}}}]}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -143,7 +143,7 @@ commands:
   # 12. POST /api/chat — Chat completion endpoint (main inference path)
   - regex: "^/api/chat$"
     handler: |
-      {"id":"chatcmpl-webui-abc123","model":"llama3.1:8b","created_at":"2026-03-06T12:00:00Z","message":{"role":"assistant","content":"I'd be happy to help! What would you like to work on?"},"done":true}
+      {"id":"chatcmpl-webui-abc123","model":"phi:2.7b","created_at":"2026-03-06T12:00:00Z","message":{"role":"assistant","content":"I'd be happy to help! What would you like to work on?"},"done":true}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -185,7 +185,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.4.1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.41.3-rc2 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # Root-level /sse — scanners check this first for MCP SSE transport
   - regex: "^/sse$"
@@ -243,7 +243,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_chats","description":"Search through chat history. Returns matching conversations with messages, timestamps, and model used.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Search query for chat content"},"model_filter":{"type":"string","description":"Filter by model name"},"client_name":{"type":"string","description":"Your client application name for API usage tracking"}},"required":["query","client_name"]}},{"name":"create_chat","description":"Start a new chat conversation with a model. Returns the chat response.","inputSchema":{"type":"object","properties":{"model":{"type":"string","description":"Model to chat with (e.g. llama3.1:8b)"},"message":{"type":"string","description":"Message content"},"author_identity":{"type":"string","description":"Your name or agent identifier for chat attribution"}},"required":["model","message","author_identity"]}}]}}'
+    handler: '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_chats","description":"Search through chat history. Returns matching conversations with messages, timestamps, and model used.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Search query for chat content"},"model_filter":{"type":"string","description":"Filter by model name"},"client_name":{"type":"string","description":"Your client application name for API usage tracking"}},"required":["query","client_name"]}},{"name":"create_chat","description":"Start a new chat conversation with a model. Returns the chat response.","inputSchema":{"type":"object","properties":{"model":{"type":"string","description":"Model to chat with (e.g. phi:2.7b)"},"message":{"type":"string","description":"Message content"},"author_identity":{"type":"string","description":"Your name or agent identifier for chat attribution"}},"required":["model","message","author_identity"]}}]}}'
 
   # MCP tools/call — canary web bug
   - regex: "^/mcp/tools/call$"
@@ -257,13 +257,21 @@ commands:
   # AI Scanner Lures
   # =========================================================================
 
+  # A2A Agent Protocol discovery — points to Nexus Platform on :8000
+  - regex: "^/\\.well-known/agent\\.json$"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"name":"Open WebUI","url":"http://localhost:8888","version":"0.5.3","capabilities":{"streaming":false},"skills":[{"id":"chat","name":"Chat","description":"Chat with AI models via Open WebUI"}],"defaultInputModes":["text"],"defaultOutputModes":["text"],"linkedAgents":[{"name":"Nexus Platform Services","url":"http://localhost:8000/.well-known/agent.json"}]}'
+
   # OpenAI plugin manifest
   - regex: "^/\\.well-known/ai-plugin\\.json$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"schema_version":"v1","name_for_model":"open_webui_chat","description_for_model":"Open WebUI chat interface connected to Ollama. Models: llama3.1:8b, mistral:7b, codellama:13b. Chat API at /api/chat. Model list at /api/models. Chat history at /api/v1/chats/list. Auth: signup at /api/v1/auths/signup, signin at /api/v1/auths/signin.","auth":{"type":"none"},"api":{"type":"openapi","url":"/api"}}'
+    handler: '{"schema_version":"v1","name_for_model":"open_webui_chat","description_for_model":"Open WebUI chat interface connected to Ollama. Models: phi:2.7b, nomic-embed-text, nexus-embed-v1. Chat API at /api/chat. Model list at /api/models. Chat history at /api/v1/chats/list. Auth: signup at /api/v1/auths/signup, signin at /api/v1/auths/signin.","auth":{"type":"none"},"api":{"type":"openapi","url":"/api"}}'
 
   # LLM-readable site info
   - regex: "^/llms\\.txt$"
@@ -276,13 +284,12 @@ commands:
       > Team AI chat interface running Open WebUI v0.5.3
 
       ## Connected Models (via Ollama)
-      - llama3.1:8b (8B params, Q4_K_M, loaded)
-      - mistral:7b (7.2B params, Q4_K_M)
-      - codellama:13b (13B params, Q4_K_M)
-      - nexus-embed-v1 (137M params, F16, embedding model)
+      - phi:2.7b (2.7B params, Q4_0, loaded)
+      - nomic-embed-text (137M params, F16, embedding)
+      - nexus-embed-v1 (137M params, F16, custom embedding)
 
       ## Connected MCP Servers
-      - Nexus Platform Services v2.4.1 at localhost:8000 (POST /mcp or GET /sse)
+      - Nexus Platform Services v2.41.3-rc2 at localhost:8000 (POST /mcp or GET /sse)
         Tools: nexus/iam.manage, nexus/logs.query, nexus/configstore.kv
       - Open WebUI MCP bridge at localhost:8888/mcp/sse
 
@@ -302,7 +309,7 @@ commands:
       # Open WebUI Development Rules
       - Use Ollama API at localhost:11434 for model inference
       - MCP endpoints: localhost:8000/mcp (Nexus Platform, StreamableHTTP) or localhost:8888/mcp/sse (WebUI bridge, SSE)
-      - Models available: llama3.1:8b, mistral:7b, codellama:13b, nexus-embed-v1
+      - Models available: phi:2.7b, nomic-embed-text, nexus-embed-v1
       - Auth tokens from /api/v1/auths/signin (POST with email/password)
       - Database: PostgreSQL at localhost:5432 (see .env for credentials)
       - Chat API: POST /api/chat with model and messages fields
@@ -370,7 +377,7 @@ commands:
       version: "3.8"
       services:
         ollama:
-          image: ollama/ollama:0.5.4
+          image: ollama/ollama:0.6.2
           ports:
             - "11434:11434"
           volumes:
@@ -398,7 +405,7 @@ commands:
         vllm:
           image: ml-platform/vllm-server:0.6.3-cuda12.4
           ports:
-            - "8000:8000"
+            - "8001:8000"
           command: ["--model", "meta-llama/Llama-3.1-70B-Instruct", "--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
           deploy:
             resources:
@@ -408,7 +415,7 @@ commands:
                     count: 1
                     capabilities: [gpu]
         nexus-mcp:
-          image: ml-platform/nexus-mcp-server:2.4.1
+          image: ml-platform/nexus-mcp-server:2.41.3-rc2
           ports:
             - "8000:8000"
           environment:
@@ -449,6 +456,11 @@ commands:
       Disallow: /api/
       Disallow: /static/
       Disallow: /admin/
+
+      # Agent discovery
+      # A2A: /.well-known/agent.json
+      # MCP: /.well-known/mcp.json
+      # LLMs: /llms.txt
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"

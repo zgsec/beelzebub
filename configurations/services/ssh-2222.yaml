@@ -5,7 +5,7 @@ description: "SSH interactive ChatGPT"
 commands:
   - regex: "^(.+)$"
     plugin: "LLMHoneypot"
-serverVersion: "OpenSSH"
+serverVersion: "OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"
 serverName: "ubuntu"
 passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456|1234)$"
 deadlineTimeoutSeconds: 6000

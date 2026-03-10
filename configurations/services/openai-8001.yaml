@@ -27,7 +27,7 @@ commands:
   - regex: "^/health$"
     headers:
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.4.1"
+      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
     statusCode: 200
     handler: ""
 
@@ -45,16 +45,16 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.4.1"
+      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
     statusCode: 200
-    handler: '{"mcpServers":{"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.4.1 — DevOps coordination, IAM, logging, config store","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.41.3-rc2 — DevOps coordination, IAM, logging, config store","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # 3. GET /v1/models — Model listing (with permission array like real vLLM)
   - regex: "^/v1/models$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.4.1"
+      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
     statusCode: 200
     handler: |
       {"object":"list","data":[{"id":"meta-llama/Llama-3.1-70B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-70B-Instruct","permission":[{}]},{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-8B-Instruct","permission":[{}]},{"id":"BAAI/bge-large-en-v1.5","object":"model","created":1738368000,"owned_by":"vllm","root":"BAAI/bge-large-en-v1.5","permission":[{}]}]}
@@ -127,7 +127,7 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
     handler: |
-      {"model":"meta-llama/Llama-3.1-70B-Instruct","tensor_parallel_size":1,"gpu_memory_utilization":0.9,"max_model_len":4096,"served_model_name":null,"host":"0.0.0.0","port":8000,"trust_remote_code":true,"download_dir":"/models","hugging_face_hub_token":"","dtype":"auto","enable_auto_tool_choice":true,"tool_call_parser":"hermes","env":{"AWS_ACCESS_KEY_ID":"${OPENAI_CANARY_AWS_KEY}","AWS_SECRET_ACCESS_KEY":"${OPENAI_CANARY_AWS_SECRET}","AWS_DEFAULT_REGION":"us-east-2","S3_MODEL_CACHE":"s3://ml-models-prod.${OPENAI_CANARY_DNS}/cache","CUDA_VISIBLE_DEVICES":"0"},"infrastructure":{"docker_registry":"localhost:5000","ollama_fallback":"http://localhost:11434","agent_gateway":"http://localhost:18789","monitoring":{"influxdb":"http://localhost:8086","open_webui":"http://localhost:8888"},"database":"postgresql://vllm:@db-primary.${OPENAI_CANARY_DNS}:5432/inference","cache":"redis://redis-cache-01.internal.corp:6379/0"}}
+      {"model":"meta-llama/Llama-3.1-70B-Instruct","tensor_parallel_size":1,"gpu_memory_utilization":0.9,"max_model_len":4096,"served_model_name":null,"host":"0.0.0.0","port":8000,"trust_remote_code":true,"download_dir":"/models","hugging_face_hub_token":"","dtype":"auto","enable_auto_tool_choice":true,"tool_call_parser":"hermes","env":{"AWS_ACCESS_KEY_ID":"${OPENAI_CANARY_AWS_KEY}","AWS_SECRET_ACCESS_KEY":"${OPENAI_CANARY_AWS_SECRET}","AWS_DEFAULT_REGION":"us-east-2","S3_MODEL_CACHE":"s3://ml-models-prod.${OPENAI_CANARY_DNS}/cache","CUDA_VISIBLE_DEVICES":"0"},"infrastructure":{"ollama_fallback":"http://localhost:11434","agent_gateway":"http://localhost:18789","monitoring":{"open_webui":"http://localhost:8888"},"database":"postgresql://vllm:@db-primary.${OPENAI_CANARY_DNS}:5432/inference","cache":"redis://redis-cache-01.int.nexuslogistics.io:6379/0"}}
 
   # 8. GET /metrics — Prometheus metrics
   - regex: "^/metrics$"
@@ -1145,7 +1145,7 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.4.1"
+      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
     statusCode: 404
     handler: |
       {"detail":"Not Found"}

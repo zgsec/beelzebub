@@ -55,8 +55,13 @@ type OllamaSession struct {
 	FirstSeen       time.Time
 	EndpointsHit    map[string]bool
 	ModelLoaded     map[string]bool
-	Timings         []int64   // accumulated inter-event timing deltas
-	LastSeen        time.Time // last request time for timing computation
+	Timings           []int64   // accumulated inter-event timing deltas
+	LastSeen          time.Time // last request time for timing computation
+	LLMjackIntent     string    // classified intent of first real prompt
+	PromptLengths     []int     // track prompt sizes per request
+	TotalPromptTokens int       // rough estimate: len(prompt) / 4
+	HasSystemPrompt   bool      // did they send a system prompt?
+	ModelSwitches     int       // number of distinct models requested at time of change
 }
 
 func (s *OllamaStrategy) getOrCreateSession(ip string) *OllamaSession {
@@ -243,6 +248,15 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	s.Sessions.Unlock()
 
 	cmdStr := fmt.Sprintf("%s|%s", handler, command)
+	// Embed LLMjacking session metadata for downstream analysis
+	{
+		msess := s.getOrCreateSession(host)
+		msess.mu.Lock()
+		if msess.LLMjackIntent != "" {
+			command = fmt.Sprintf("%s intent=%s tokens=%d reqs=%d", command, msess.LLMjackIntent, msess.TotalPromptTokens, msess.PromptCount)
+		}
+		msess.mu.Unlock()
+	}
 	eventID := uuid.New().String()
 	isRetry, retryOf := s.Sessions.DetectRetry(sessionKey, cmdStr, eventID)
 
@@ -386,6 +400,11 @@ func (s *OllamaStrategy) extractSystemFromMessages(r *http.Request, messages []s
 		if msg.Role == "system" && len(msg.Content) > 0 {
 			s.Bridge.RecordDiscovery(host, "ollama", "agent_system_prompt", "chat_system_message", msg.Content)
 			s.Bridge.SetFlag(host, "ollama_system_prompt_captured")
+			// Mark session for metadata tracking
+			msess := s.getOrCreateSession(host)
+			msess.mu.Lock()
+			msess.HasSystemPrompt = true
+			msess.mu.Unlock()
 		}
 	}
 }
@@ -433,7 +452,7 @@ func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, s
 	resp := map[string]interface{}{
 		"version":          s.version,
 		"platform":         "Nexus Platform Services",
-		"platform_version": "2.4.1",
+		"platform_version": "2.41.3-rc2",
 		"mcp_endpoint":     "http://localhost:8000/mcp",
 	}
 
@@ -577,10 +596,29 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	sess.PromptCount++
 	sess.ModelsRequested[req.Model] = true
 	sess.EndpointsHit["generate"] = true
+	promptLen := len(req.Prompt)
+	sess.PromptLengths = append(sess.PromptLengths, promptLen)
+	sess.TotalPromptTokens += promptLen / 4
+	if sess.LLMjackIntent == "" && promptLen > 10 {
+		sess.LLMjackIntent = string(categorizePrompt(req.Prompt))
+	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
 	level := sess.InjectionLevel
 	count := sess.PromptCount
+	totalTokens := sess.TotalPromptTokens
+	modelCount := len(sess.ModelsRequested)
 	sess.mu.Unlock()
+
+	// Bridge flags for sustained LLMjacking
+	if s.Bridge != nil && count >= 3 {
+		avgLen := totalTokens * 4 / count
+		if avgLen > 100 {
+			s.Bridge.SetFlag(host, "llmjacking_sustained")
+		}
+		if modelCount > 1 {
+			s.Bridge.SetFlag(host, "llmjacking_model_switch")
+		}
+	}
 
 	// Check fault injection
 	if s.Fault != nil {
@@ -595,10 +633,18 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 
 	category := categorizePrompt(req.Prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, req.Prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+	response := buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
 
-	_ = count // used indirectly through injectionLevel
+	// Empty response = degradation tier 3 simulated error (real Ollama error format)
+	if response == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		errResp := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, req.Model)
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[degradation:cuda_oom]", string(body))
+		return
+	}
 
 	shouldStream := req.Stream == nil || *req.Stream
 	if shouldStream {
@@ -653,9 +699,29 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	sess.PromptCount++
 	sess.ModelsRequested[req.Model] = true
 	sess.EndpointsHit["chat"] = true
+	promptLen := len(prompt)
+	sess.PromptLengths = append(sess.PromptLengths, promptLen)
+	sess.TotalPromptTokens += promptLen / 4
+	if sess.LLMjackIntent == "" && promptLen > 10 {
+		sess.LLMjackIntent = string(categorizePrompt(prompt))
+	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
 	level := sess.InjectionLevel
+	count := sess.PromptCount
+	totalTokens := sess.TotalPromptTokens
+	modelCount := len(sess.ModelsRequested)
 	sess.mu.Unlock()
+
+	// Bridge flags for sustained LLMjacking
+	if s.Bridge != nil && count >= 3 {
+		avgLen := totalTokens * 4 / count
+		if avgLen > 100 {
+			s.Bridge.SetFlag(host, "llmjacking_sustained")
+		}
+		if modelCount > 1 {
+			s.Bridge.SetFlag(host, "llmjacking_model_switch")
+		}
+	}
 
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
@@ -669,8 +735,18 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 
 	category := categorizePrompt(prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+	response := buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
+
+	// Empty response = degradation tier 3 simulated error
+	if response == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		errResp := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, req.Model)
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[degradation:cuda_oom]", string(body))
+		return
+	}
 
 	shouldStream := req.Stream == nil || *req.Stream
 	if shouldStream {
@@ -893,9 +969,29 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	sess.PromptCount++
 	sess.ModelsRequested[req.Model] = true
 	sess.EndpointsHit["openai/chat"] = true
+	promptLen := len(prompt)
+	sess.PromptLengths = append(sess.PromptLengths, promptLen)
+	sess.TotalPromptTokens += promptLen / 4
+	if sess.LLMjackIntent == "" && promptLen > 10 {
+		sess.LLMjackIntent = string(categorizePrompt(prompt))
+	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
 	level := sess.InjectionLevel
+	count := sess.PromptCount
+	totalTokens := sess.TotalPromptTokens
+	modelCount := len(sess.ModelsRequested)
 	sess.mu.Unlock()
+
+	// Bridge flags for sustained LLMjacking
+	if s.Bridge != nil && count >= 3 {
+		avgLen := totalTokens * 4 / count
+		if avgLen > 100 {
+			s.Bridge.SetFlag(host, "llmjacking_sustained")
+		}
+		if modelCount > 1 {
+			s.Bridge.SetFlag(host, "llmjacking_model_switch")
+		}
+	}
 
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
@@ -909,8 +1005,18 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 
 	category := categorizePrompt(prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+	response := buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
+
+	// Empty response = degradation tier 3 simulated error (OpenAI error format)
+	if response == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, "[degradation:overloaded]", string(body))
+		return
+	}
 
 	shouldStream := req.Stream != nil && *req.Stream
 	if shouldStream {
@@ -943,15 +1049,46 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	sess := s.getOrCreateSession(host)
 	sess.mu.Lock()
 	sess.PromptCount++
+	sess.ModelsRequested[req.Model] = true
 	sess.EndpointsHit["openai/completions"] = true
+	promptLen := len(req.Prompt)
+	sess.PromptLengths = append(sess.PromptLengths, promptLen)
+	sess.TotalPromptTokens += promptLen / 4
+	if sess.LLMjackIntent == "" && promptLen > 10 {
+		sess.LLMjackIntent = string(categorizePrompt(req.Prompt))
+	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
 	level := sess.InjectionLevel
+	count := sess.PromptCount
+	totalTokens := sess.TotalPromptTokens
+	modelCount := len(sess.ModelsRequested)
 	sess.mu.Unlock()
+
+	// Bridge flags for sustained LLMjacking
+	if s.Bridge != nil && count >= 3 {
+		avgLen := totalTokens * 4 / count
+		if avgLen > 100 {
+			s.Bridge.SetFlag(host, "llmjacking_sustained")
+		}
+		if modelCount > 1 {
+			s.Bridge.SetFlag(host, "llmjacking_model_switch")
+		}
+	}
 
 	category := categorizePrompt(req.Prompt)
 	s.rngMu.Lock()
-	response := buildInjectedResponse(category, req.Prompt, level, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+	response := buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
 	s.rngMu.Unlock()
+
+	// Empty response = degradation tier 3 simulated error (OpenAI error format)
+	if response == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "openai/completions", req.Model, "[degradation:overloaded]", string(body))
+		return
+	}
 
 	// Legacy completions endpoint — non-streaming by default
 	s.writeOpenAINonStreaming(w, req.Model, response, len(req.Prompt))
@@ -1181,7 +1318,7 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Platform", "Nexus Platform Services v2.4.1")
+	w.Header().Set("X-Platform", "Nexus Platform Services v2.41.3-rc2")
 	flusher, _ := w.(http.Flusher)
 
 	// Simulate prompt evaluation time (real LLMs pause before first token)
@@ -1306,7 +1443,7 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Platform", "Nexus Platform Services v2.4.1")
+	w.Header().Set("X-Platform", "Nexus Platform Services v2.41.3-rc2")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }

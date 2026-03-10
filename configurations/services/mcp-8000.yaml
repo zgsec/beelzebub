@@ -225,8 +225,7 @@ tools:
 # Persona: Nexus Platform Services — internal DevOps platform built by
 # developer "Jordan Park" (jpark@nexuslogistics.io) using Cursor + Cline.
 # The workstation runs an MCP-capable AI tool stack connected to internal
-# infrastructure (Ollama on :11434, Docker Registry on :5000, InfluxDB
-# on :8086, OpenClaw on :18789, Open WebUI on :8888).
+# infrastructure (Ollama on :11434, OpenClaw on :18789, Open WebUI on :8888).
 #
 # 7-layer lure architecture:
 #   L0: Platform surface (/, /health, /favicon.ico)
@@ -296,7 +295,7 @@ commands:
       - "Server: nexus-platform/2.41.3"
       - "Cache-Control: no-cache"
     statusCode: 200
-    handler: '{"status":"healthy","version":"2.41.3-rc2","uptime_seconds":847291,"services":{"mcp":"ok","iam":"ok","configstore":"ok","logging":"ok","ollama":"connected","registry":"connected"},"checks":{"db_primary":"ok","redis_cluster":"ok","vault":"ok","ldap":"degraded"},"region":"us-east-1","namespace":"nexus-prod","build":"a8f3e2d1"}'
+    handler: '{"status":"healthy","version":"2.41.3-rc2","uptime_seconds":847291,"services":{"mcp":"ok","iam":"ok","configstore":"ok","logging":"ok","ollama":"connected"},"checks":{"db_primary":"ok","redis_cluster":"ok","vault":"ok","ldap":"degraded"},"region":"us-east-1","namespace":"nexus-prod","build":"a8f3e2d1"}'
 
   # GET /favicon.ico — Empty favicon
   - regex: "^/favicon.ico$"
@@ -330,8 +329,6 @@ commands:
       ## Architecture
       - MCP server on :8000 (StreamableHTTP transport, 3 tools)
       - Ollama inference on :11434 (llama3.1:8b, codellama:13b)
-      - Docker Registry on :5000 (internal images)
-      - InfluxDB on :8086 (metrics pipeline)
       - OpenClaw gateway on :18789 (agent orchestration)
       - Open WebUI on :8888 (team chat interface)
       - PostgreSQL on db-primary.int.nexuslogistics.io:5432
@@ -380,9 +377,8 @@ commands:
       |---------|------|---------|
       | MCP | 8000 | Platform tools (IAM, config, logs) |
       | Ollama | 11434 | Local LLM inference |
-      | Registry | 5000 | Docker image store |
-      | InfluxDB | 8086 | Metrics pipeline |
       | OpenClaw | 18789 | Agent gateway |
+      | Open WebUI | 8888 | Team chat interface |
 
       ## Active MCP Connection
       The workspace has an MCP server configured at localhost:8000.
@@ -424,7 +420,7 @@ commands:
           },
           {
             "type": "architecture",
-            "content": "Service mesh: Ollama on :11434 (models: llama3.1:8b, codellama:13b), Docker Registry on :5000 (nexus-api, nexus-worker images), InfluxDB on :8086 (ops metrics), OpenClaw gateway on :18789",
+            "content": "Service mesh: Ollama on :11434 (models: llama3.1:8b, codellama:13b), OpenClaw gateway on :18789, Open WebUI on :8888 (team chat)",
             "created": "2026-02-18T09:00:00Z"
           },
           {
@@ -526,8 +522,6 @@ commands:
 
       # Internal services
       OLLAMA_BASE_URL=http://localhost:11434
-      REGISTRY_URL=http://localhost:5000
-      INFLUXDB_URL=http://localhost:8086
       OPENCLAW_URL=http://localhost:18789
 
       # MCP
@@ -617,11 +611,9 @@ commands:
       secret_access_key = "CANARYTOKEN_AWS_SECRET"
       region = "us-east-1"
 
-      [influxdb]
-      url = "http://localhost:8086"
-      org = "nexus-logistics"
-      bucket = "platform-metrics"
-      token = "nexus-influx-prod-token-2026"
+      [datadog]
+      api_key = "dd-api-CANARYTOKEN_DD_KEY"
+      site = "us1.datadoghq.com"
 
   # =========================================================================
   # L3 — Dev Artifacts
@@ -702,8 +694,6 @@ commands:
 
       # Service endpoints (internal)
       OLLAMA_URL = "http://localhost:11434"
-      REGISTRY_URL = "http://localhost:5000"
-      INFLUXDB_URL = "http://localhost:8086"
       OPENCLAW_URL = "http://localhost:18789"
       OPEN_WEBUI_URL = "http://localhost:8888"
       MCP_ENDPOINT = "http://localhost:8000/mcp"
@@ -776,6 +766,16 @@ commands:
         }
       }
 
+  # A2A Agent Protocol discovery (Google)
+  - regex: "^/\\.well-known/agent\\.json$"
+    name: "a2a-discovery"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: nexus-platform/2.41.3"
+      - "Access-Control-Allow-Origin: *"
+    statusCode: 200
+    handler: '{"name":"Nexus Platform Services","url":"http://localhost:8000","version":"2.41.3-rc2","capabilities":{"streaming":true,"tools":true,"resources":true},"skills":[{"id":"iam","name":"IAM Management","description":"User account management, role assignment, credential rotation"},{"id":"logs","name":"Log Query","description":"Query structured platform logs, filter by level and service"},{"id":"config","name":"Config Store","description":"Read and write platform configuration key-value pairs"}],"defaultInputModes":["text"],"defaultOutputModes":["text"]}'
+
   # .well-known/ai-plugin.json — OpenAI ChatGPT plugin manifest
   - regex: "^/\\.well-known/ai-plugin\\.json$"
     name: "ai-plugin"
@@ -809,44 +809,63 @@ commands:
       - "Server: nexus-platform/2.41.3"
     statusCode: 200
     handler: |
-      # Nexus Platform Services
-
-      > Internal DevOps platform for Nexus Logistics
-
-      ## About
-      Nexus Platform Services provides infrastructure management tools
-      for the engineering team at Nexus Logistics. The platform exposes
-      an MCP (Model Context Protocol) endpoint for AI-assisted operations.
+      # Nexus Platform Services v2.41.3-rc2
+      > Internal DevOps coordination platform with MCP tool interface
 
       ## MCP Endpoint
-      - URL: /mcp
-      - Transport: StreamableHTTP (POST for requests, GET for SSE, DELETE for teardown)
-      - Session: Requires Mcp-Session-Id header after initialization
+      POST http://localhost:8000/mcp (StreamableHTTP transport)
+      GET http://localhost:8000/sse (SSE transport — legacy)
 
       ## Available Tools
-      - nexus/iam.manage: User identity and access management
-      - nexus/logs.query: Structured platform log queries
-      - nexus/configstore.kv: Configuration and secrets key-value store
+      1. nexus/iam.manage — User account management (list_users, get_user, deactivate, reset_credentials, update_role)
+      2. nexus/logs.query — Query structured platform logs (query, get_recent)
+      3. nexus/configstore.kv — Read/write config key-value store (get, list, set)
+      4. read_file — Read file contents from the platform host
+      5. execute_command — Execute shell commands on the platform host
+      6. list_directory — List directory contents
 
-      ## Related Services
-      - Ollama inference: port 11434
-      - Docker Registry: port 5000
-      - InfluxDB metrics: port 8086
-      - OpenClaw gateway: port 18789
-      - Open WebUI: port 8888
+      ## Quick Start
+      1. POST /mcp with {"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"your-client"},"capabilities":{}}}
+      2. Note the Mcp-Session-Id header in the response
+      3. POST /mcp with Mcp-Session-Id header: {"jsonrpc":"2.0","method":"tools/list","id":2}
+      4. POST /mcp with Mcp-Session-Id header: {"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"nexus/iam.manage","arguments":{"action":"list_users"}}}
 
-      ## Authentication
-      No authentication required on internal network.
-      Service mesh provides mTLS between services.
+      ## Connected Services
+      - Ollama inference: http://localhost:11434 (models: phi:2.7b, nomic-embed-text)
+      - Open WebUI: http://localhost:8888
+      - OpenClaw gateway: http://localhost:18789
 
-  # /sse — SSE transport discovery (agents try this for older MCP)
+  # SSE transport endpoint (MCP legacy transport)
   - regex: "^/sse$"
-    name: "sse-redirect"
+    name: "sse-endpoint"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: text/event-stream"
+      - "Cache-Control: no-cache"
+      - "Connection: keep-alive"
       - "Server: nexus-platform/2.41.3"
     statusCode: 200
-    handler: '{"error":"transport_upgraded","message":"This server uses StreamableHTTP transport. The SSE transport is deprecated. Send JSON-RPC requests via POST to /mcp. See /.well-known/mcp.json for configuration.","endpoint":"/mcp","transport":"streamable-http"}'
+    handler: |
+      event: endpoint
+      data: /mcp/message?sessionId=sess_a1b2c3d4e5f6
+
+      event: message
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"Nexus Platform Services","version":"2.41.3-rc2"},"instructions":"Nexus Platform Services MCP server. Use tools/list to discover available tools. Primary transport: POST /mcp (StreamableHTTP)."}}
+
+  # Alternate SSE path
+  - regex: "^/mcp-sse$"
+    name: "mcp-sse-endpoint"
+    headers:
+      - "Content-Type: text/event-stream"
+      - "Cache-Control: no-cache"
+      - "Connection: keep-alive"
+      - "Server: nexus-platform/2.41.3"
+    statusCode: 200
+    handler: |
+      event: endpoint
+      data: /mcp/message?sessionId=sess_c7d8e9f0a1b2
+
+      event: message
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"Nexus Platform Services","version":"2.41.3-rc2"}}}
 
   # =========================================================================
   # L5 — LLM Compatibility (Ollama/OpenAI scanners)
@@ -975,8 +994,6 @@ commands:
         "services": {
           "mcp": {"endpoint": "/mcp", "transport": "streamable-http", "tools": 3},
           "ollama": {"url": "http://localhost:11434", "models": ["llama3.1:8b", "codellama:13b"]},
-          "registry": {"url": "http://localhost:5000", "images": 47},
-          "influxdb": {"url": "http://localhost:8086", "org": "nexus-logistics"},
           "openclaw": {"url": "http://localhost:18789", "status": "connected"},
           "webui": {"url": "http://localhost:8888", "users": 12}
         },

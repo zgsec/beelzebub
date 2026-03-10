@@ -29,3 +29,6 @@ configurations/services/openclaw-18789.yaml:generic-api-key:297
 configurations/services/openclaw-18789.yaml:generic-api-key:607
 configurations/services/openclaw-18789.yaml:generic-api-key:619
 configurations/services/openclaw-18789.yaml:generic-api-key:675
+
+# Fake RSA key in MCP WorldState — honeypot filesystem breadcrumb (deploy-key.pem)
+protocols/strategies/MCP/state.go:private-key:516

@@ -35,7 +35,7 @@ description: "Ollama LLM inference"
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.5.13"
+  version: "0.6.2"
 
   # Models sized for Linode Nanode (1-2GB RAM).
   # Per-sensor prod configs override this with different models:
