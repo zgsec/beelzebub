@@ -55,6 +55,8 @@ type OllamaSession struct {
 	FirstSeen       time.Time
 	EndpointsHit    map[string]bool
 	ModelLoaded     map[string]bool
+	Timings         []int64   // accumulated inter-event timing deltas
+	LastSeen        time.Time // last request time for timing computation
 }
 
 func (s *OllamaStrategy) getOrCreateSession(ip string) *OllamaSession {
@@ -281,11 +283,23 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	}
 
 	// Per-event incremental agent scoring — feed all available signals
-	sig := agentdetect.Signal{
-		HasIdenticalRetries: isRetry,
-	}
 	sess := s.getOrCreateSession(host)
 	sess.mu.Lock()
+	// Accumulate timing for agent classification
+	now := time.Now()
+	if !sess.LastSeen.IsZero() {
+		delta := now.Sub(sess.LastSeen).Milliseconds()
+		sess.Timings = append(sess.Timings, delta)
+		if len(sess.Timings) > 100 {
+			sess.Timings = sess.Timings[len(sess.Timings)-100:]
+		}
+	}
+	sess.LastSeen = now
+	sig := agentdetect.Signal{
+		HasIdenticalRetries: isRetry,
+		InterEventTimingsMs: make([]int64, len(sess.Timings)),
+	}
+	copy(sig.InterEventTimingsMs, sess.Timings)
 	if sess.EndpointsHit["openai/chat"] || sess.EndpointsHit["generate"] || sess.EndpointsHit["chat"] {
 		sig.HasAIDiscoveryProbe = true
 	}

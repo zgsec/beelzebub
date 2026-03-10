@@ -6,7 +6,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/parser"
@@ -16,6 +19,57 @@ import (
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
+
+// httpSessionState tracks per-IP state for agent detection on the HTTP handler.
+type httpSessionState struct {
+	mu       sync.Mutex
+	seq      int
+	timings  []int64
+	lastSeen time.Time
+	paths    []string // request paths for AI discovery detection
+}
+
+var (
+	httpSessions     sync.Map // IP → *httpSessionState
+	httpCleanupOnce  sync.Once
+)
+
+// startHTTPSessionCleanup launches a goroutine that prunes stale sessions every 5 minutes.
+func startHTTPSessionCleanup() {
+	httpCleanupOnce.Do(func() {
+		go func() {
+			for {
+				time.Sleep(5 * time.Minute)
+				cutoff := time.Now().Add(-30 * time.Minute)
+				httpSessions.Range(func(key, value any) bool {
+					state := value.(*httpSessionState)
+					state.mu.Lock()
+					stale := state.lastSeen.Before(cutoff)
+					state.mu.Unlock()
+					if stale {
+						httpSessions.Delete(key)
+					}
+					return true
+				})
+			}
+		}()
+	})
+}
+
+// containsAIPath checks if any accumulated paths match known AI/MCP discovery patterns.
+func containsAIPath(paths []string) bool {
+	aiPatterns := []string{"/mcp", "/sse", "/.well-known/mcp", "/.well-known/ai-plugin",
+		"/llms.txt", "/.cursor", "/api/tags", "/api/generate", "/v1/models", "/v1/chat"}
+	for _, p := range paths {
+		lp := strings.ToLower(p)
+		for _, ai := range aiPatterns {
+			if strings.Contains(lp, ai) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 type HTTPStrategy struct {
 	Bridge *bridge.ProtocolBridge
@@ -29,6 +83,7 @@ type httpResponse struct {
 }
 
 func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	startHTTPSessionCleanup()
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -138,6 +193,38 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
+	sessionKey := "HTTP" + host
+
+	// Get or create per-IP session state for agent detection
+	raw, _ := httpSessions.LoadOrStore(host, &httpSessionState{})
+	state := raw.(*httpSessionState)
+	state.mu.Lock()
+	state.seq++
+	seq := state.seq
+	now := time.Now()
+	if !state.lastSeen.IsZero() {
+		delta := now.Sub(state.lastSeen).Milliseconds()
+		state.timings = append(state.timings, delta)
+		if len(state.timings) > 100 {
+			state.timings = state.timings[len(state.timings)-100:]
+		}
+	}
+	state.lastSeen = now
+	state.paths = append(state.paths, request.RequestURI)
+	if len(state.paths) > 200 {
+		state.paths = state.paths[len(state.paths)-200:]
+	}
+	hasAIProbe := containsAIPath(state.paths)
+	timings := make([]int64, len(state.timings))
+	copy(timings, state.timings)
+	state.mu.Unlock()
+
+	// Agent classification
+	sig := agentdetect.Signal{
+		InterEventTimingsMs: timings,
+		HasAIDiscoveryProbe: hasAIProbe,
+	}
+	verdict := agentdetect.IncrementalClassify(sig)
 
 	event := tracer.Event{
 		Msg:             "HTTP New request",
@@ -157,6 +244,11 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		ID:              uuid.New().String(),
 		Description:     HoneypotDescription,
 		Handler:         command.Name,
+		SessionKey:      sessionKey,
+		Sequence:        seq,
+		AgentScore:      verdict.Score,
+		AgentCategory:   verdict.Category,
+		AgentSignals:    verdict.SignalsString(),
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

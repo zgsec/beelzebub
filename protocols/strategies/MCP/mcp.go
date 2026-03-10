@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
@@ -41,6 +43,10 @@ type MCPStrategy struct {
 	worldMu     sync.RWMutex
 	seedConfig  WorldSeed
 	toolHistory map[string][]toolCallRecord // IP → ordered tool call records
+
+	// Agent detection timing accumulation (per-IP)
+	agentTimings  map[string][]int64
+	agentLastSeen map[string]time.Time
 }
 
 func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
@@ -81,6 +87,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	mcpStrategy.seedConfig = seedFromConfig(servConf.WorldSeed)
 	mcpStrategy.worldState = make(map[string]*WorldState)
 	mcpStrategy.toolHistory = make(map[string][]toolCallRecord)
+	mcpStrategy.agentTimings = make(map[string][]int64)
+	mcpStrategy.agentLastSeen = make(map[string]time.Time)
+	go mcpStrategy.cleanAgentState()
 
 	hasWorldSeed := len(servConf.WorldSeed.Users) > 0 || len(servConf.WorldSeed.Resources) > 0
 
@@ -184,10 +193,26 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			var response string
 			var delayFaultType string
 
+			// Accumulate timing for agent classification
+			timings := mcpStrategy.accumulateTiming(host)
+
 			// Check fault injection first
 			if mcpStrategy.Fault != nil {
 				faultResp, faultType, faulted := mcpStrategy.Fault.Apply()
 				if faulted {
+					// Classify even faulted events
+					faultSig := agentdetect.Signal{
+						HasMCPInitialize:    seq == 1,
+						ToolChainDepth:      0,
+						InterEventTimingsMs: timings,
+						HasIdenticalRetries: isRetry,
+						HasAIDiscoveryProbe: true,
+					}
+					if mcpStrategy.Bridge != nil {
+						faultSig.HasCrossProtocol = mcpStrategy.buildCrossRef(host) != ""
+					}
+					faultVerdict := agentdetect.IncrementalClassify(faultSig)
+
 					tr.TraceEvent(tracer.Event{
 						Msg:           "MCP tool invocation (faulted)",
 						Protocol:      tracer.MCP.String(),
@@ -206,6 +231,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						IsRetry:       isRetry,
 						RetryOf:       retryOf,
 						FaultInjected: faultType,
+						AgentScore:    faultVerdict.Score,
+						AgentCategory: faultVerdict.Category,
+						AgentSignals:  faultVerdict.SignalsString(),
 					})
 					return mcp.NewToolResultText(faultResp), nil
 				}
@@ -249,6 +277,17 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			// Record this tool call's output for future chain detection
 			mcpStrategy.recordToolCall(host, request.Params.Name, response)
 
+			// Agent classification
+			sig := agentdetect.Signal{
+				HasMCPInitialize:    seq == 1,
+				ToolChainDepth:      chainDepth,
+				InterEventTimingsMs: timings,
+				HasIdenticalRetries: isRetry,
+				HasCrossProtocol:    crossRef != "",
+				HasAIDiscoveryProbe: true, // any MCP tool call is an AI probe
+			}
+			verdict := agentdetect.IncrementalClassify(sig)
+
 			tr.TraceEvent(tracer.Event{
 				Msg:              "MCP tool invocation",
 				Protocol:         tracer.MCP.String(),
@@ -270,6 +309,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				FaultInjected:    delayFaultType,
 				ToolChainDepth:   chainDepth,
 				ToolDependency:   chainDeps,
+				AgentScore:       verdict.Score,
+				AgentCategory:    verdict.Category,
+				AgentSignals:     verdict.SignalsString(),
 			})
 			return mcp.NewToolResultText(response), nil
 		})
@@ -488,6 +530,44 @@ func (s *MCPStrategy) recordToolCall(ip, toolName, output string) {
 	if len(s.toolHistory[ip]) > 100 {
 		s.toolHistory[ip] = s.toolHistory[ip][len(s.toolHistory[ip])-100:]
 	}
+}
+
+// cleanAgentState periodically prunes stale entries from the agent detection
+// and tool history maps. Runs every 5 minutes, evicts IPs idle for >60 minutes.
+func (s *MCPStrategy) cleanAgentState() {
+	for {
+		time.Sleep(5 * time.Minute)
+		cutoff := time.Now().Add(-60 * time.Minute)
+		s.worldMu.Lock()
+		for ip, last := range s.agentLastSeen {
+			if last.Before(cutoff) {
+				delete(s.agentTimings, ip)
+				delete(s.agentLastSeen, ip)
+				delete(s.toolHistory, ip)
+			}
+		}
+		s.worldMu.Unlock()
+	}
+}
+
+// accumulateTiming records the current time for the given IP and returns the
+// accumulated inter-event timing deltas. Cap at 100 entries to bound memory.
+func (s *MCPStrategy) accumulateTiming(ip string) []int64 {
+	now := time.Now()
+	s.worldMu.Lock()
+	defer s.worldMu.Unlock()
+	if last, ok := s.agentLastSeen[ip]; ok {
+		delta := now.Sub(last).Milliseconds()
+		s.agentTimings[ip] = append(s.agentTimings[ip], delta)
+		if len(s.agentTimings[ip]) > 100 {
+			s.agentTimings[ip] = s.agentTimings[ip][len(s.agentTimings[ip])-100:]
+		}
+	}
+	s.agentLastSeen[ip] = now
+	// Return a copy so callers don't race on the slice
+	timings := make([]int64, len(s.agentTimings[ip]))
+	copy(timings, s.agentTimings[ip])
+	return timings
 }
 
 // enrichWithBridge injects cross-protocol bridge data into a tool response.
