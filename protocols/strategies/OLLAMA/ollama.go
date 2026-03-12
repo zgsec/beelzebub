@@ -556,7 +556,7 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 			"size":       sizeFromParam(m.ParameterSize),
 			"digest":     s.stableDigest(m.Name),
 			"expires_at": time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
-			"size_vram":  0, // CPU-only instance
+			"size_vram":  sizeFromParam(m.ParameterSize), // fully GPU-loaded
 			"details": map[string]interface{}{
 				"family":             m.Family,
 				"parameter_size":     m.ParameterSize,
@@ -1468,12 +1468,16 @@ func sizeFromParam(paramSize string) int64 {
 		return 1_600_000_000
 	case "3B":
 		return 2_000_000_000
-	case "7B", "8B":
+	case "7B", "8B", "8.0B":
 		return 4_700_000_000
 	case "13B", "14B":
 		return 8_200_000_000
-	case "70B":
-		return 39_000_000_000
+	case "16B":
+		return 10_200_000_000
+	case "32B", "33B":
+		return 20_500_000_000
+	case "70B", "70.6B":
+		return 42_182_029_312
 	default:
 		return 274_000_000 // embedding model size
 	}
@@ -1489,14 +1493,18 @@ func paramCountFromSize(paramSize string) int64 {
 		return 3_000_000_000
 	case "7B":
 		return 7_000_000_000
-	case "8B":
+	case "8B", "8.0B":
 		return 8_000_000_000
 	case "13B":
 		return 13_000_000_000
 	case "14B":
 		return 14_000_000_000
-	case "70B":
-		return 70_000_000_000
+	case "16B":
+		return 16_000_000_000
+	case "32B", "33B":
+		return 33_000_000_000
+	case "70B", "70.6B":
+		return 70_600_000_000
 	default:
 		return 137_000_000
 	}

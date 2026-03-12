@@ -37,22 +37,20 @@ description: "Ollama LLM inference"
 ollamaConfig:
   version: "0.6.2"
 
-  # Models sized for Linode Nanode (1-2GB RAM).
-  # Per-sensor prod configs override this with different models:
-  #   EWR: phi:2.7b + nomic-embed-text
-  #   Fra: qwen2.5:1.5b + nomic-embed-text
+  # Models chosen to look like a well-provisioned GPU server worth hijacking.
+  # Per-sensor prod configs can override with different model sets.
   models:
-    - name: "phi:2.7b"
-      size: "1.6GB"
-      family: "phi"
-      parameterSize: "2.7B"
-      quantizationLevel: "Q4_0"
+    - name: "deepseek-r1:70b"
+      size: "43GB"
+      family: "deepseek"
+      parameterSize: "70.6B"
+      quantizationLevel: "Q4_K_M"
+    - name: "llama3.1:8b-instruct-q8_0"
+      size: "8.5GB"
+      family: "llama"
+      parameterSize: "8.0B"
+      quantizationLevel: "Q8_0"
     - name: "nomic-embed-text"
-      size: "274MB"
-      family: "nomic-bert"
-      parameterSize: "137M"
-      quantizationLevel: "F16"
-    - name: "nexus-embed-v1"
       size: "274MB"
       family: "nomic-bert"
       parameterSize: "137M"
@@ -84,6 +82,6 @@ faultInjection:
   delayJitterMs: 200
   errorResponses:
     - '{"error":"CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 23.65 GiB total capacity; 21.43 GiB already allocated)"}'
-    - '{"error":"model \"llama3.1:8b\" not found, try pulling it first"}'
+    - '{"error":"model \"mixtral:8x7b\" not found, try pulling it first"}'
     - '{"error":"an unexpected error occurred, please try again later"}'
     - '{"error":"inference mesh: upstream node timeout after 30s (peer: ollama-secondary, rack: us-east-1b)"}'

@@ -759,7 +759,9 @@ func buildInjectedResponse(category PromptCategory, prompt string, injectionLeve
 	template = substituteCanaryTokens(template, canaryTokens)
 
 	// Engagement degradation tiers — simulate real overloaded inference server
-	if promptCount >= 7 {
+	// Thresholds set high to maximize data collection from sustained abuse sessions.
+	// Most attackers send 10-30 prompts; we want full kill chains before degrading.
+	if promptCount >= 50 {
 		// Tier 3: intermittent real Ollama/vLLM errors mixed with slow responses
 		if rng.Intn(3) == 0 {
 			// Return empty string — caller will detect and not stream
@@ -780,7 +782,7 @@ func buildInjectedResponse(category PromptCategory, prompt string, injectionLeve
 				template = template[:cutoff]
 			}
 		}
-	} else if promptCount >= 4 {
+	} else if promptCount >= 25 {
 		// Tier 2: slightly less coherent — real models degrade under sustained load
 		if rng.Intn(5) == 0 {
 			template = "Hmm, let me think about that...\n\n" + template
