@@ -24,163 +24,80 @@ type Verdict struct {
 	Signals  []string
 }
 
-// Weights controls how much each signal contributes to the novelty score.
-// All weights are capped individually, then summed and clamped to 0-100.
-// Operators should tune these based on their deployment's traffic profile.
-type Weights struct {
-	CommandMax      int // max points from command novelty (ratio-scaled)
-	CredPerNew      int // points per new credential pair
-	CredMax         int // cap on credential points
-	PathPerNew      int // points per new path
-	PathMax         int // cap on path points
-	ToolSequence    int // flat bonus for new tool sequence
-	DurationAnomaly int // flat bonus for anomalous duration
-	CrossProtocol   int // flat bonus for cross-protocol novelty
-	UserAgent       int // flat bonus for new user agent
-}
-
-// Config controls scoring behavior. Pass to NewScorer().
-type Config struct {
-	Weights          Weights
-	NovelThreshold   int // score >= this → "novel" (default 70)
-	VariantThreshold int // score >= this → "variant" (default 30)
-}
-
-// DefaultConfig returns weights balanced across SSH, HTTP, and MCP traffic.
-// These are starting points — operators should tune based on their deployment.
-func DefaultConfig() Config {
-	return Config{
-		Weights: Weights{
-			CommandMax:      40,
-			CredPerNew:      5,
-			CredMax:         20,
-			PathPerNew:      10,
-			PathMax:         20,
-			ToolSequence:    15,
-			DurationAnomaly: 10,
-			CrossProtocol:   10,
-			UserAgent:       5,
-		},
-		NovelThreshold:   70,
-		VariantThreshold: 30,
-	}
-}
-
-// Scorer computes novelty verdicts using configurable weights and thresholds.
-type Scorer struct {
-	cfg Config
-}
-
-// NewScorer creates a Scorer with the given config.
-func NewScorer(cfg Config) *Scorer {
-	return &Scorer{cfg: cfg}
-}
-
 // Score computes a full session novelty score from accumulated signals.
-func (s *Scorer) Score(sig Signal) Verdict {
-	w := s.cfg.Weights
+//
+// Weights: commands 40, credentials 20, paths 20, tool sequence 15,
+// duration 10, cross-protocol 10, user agent 5. Category thresholds:
+// novel >= 70, variant >= 30, known < 30.
+func Score(sig Signal) Verdict {
 	score := 0
 	var signals []string
 
-	// Command novelty: ratio-scaled up to CommandMax
-	if sig.CommandsTotal > 0 && w.CommandMax > 0 {
-		cmdScore := (sig.CommandsNew * w.CommandMax) / sig.CommandsTotal
-		if cmdScore > w.CommandMax {
-			cmdScore = w.CommandMax
+	if sig.CommandsTotal > 0 {
+		cs := (sig.CommandsNew * 40) / sig.CommandsTotal
+		if cs > 40 {
+			cs = 40
 		}
-		if cmdScore > 0 {
-			score += cmdScore
+		if cs > 0 {
+			score += cs
 			signals = append(signals, fmt.Sprintf("commands_new(%d/%d)", sig.CommandsNew, sig.CommandsTotal))
 		}
 	}
 
-	// Credential novelty: per-new with cap
-	if sig.CredsNew > 0 && w.CredPerNew > 0 {
-		credScore := sig.CredsNew * w.CredPerNew
-		if credScore > w.CredMax {
-			credScore = w.CredMax
+	if sig.CredsNew > 0 {
+		cs := sig.CredsNew * 5
+		if cs > 20 {
+			cs = 20
 		}
-		score += credScore
+		score += cs
 		signals = append(signals, fmt.Sprintf("creds_new(%d)", sig.CredsNew))
 	}
 
-	// Path novelty: per-new with cap
-	if sig.PathsNew > 0 && w.PathPerNew > 0 {
-		pathScore := sig.PathsNew * w.PathPerNew
-		if pathScore > w.PathMax {
-			pathScore = w.PathMax
+	if sig.PathsNew > 0 {
+		ps := sig.PathsNew * 10
+		if ps > 20 {
+			ps = 20
 		}
-		score += pathScore
+		score += ps
 		signals = append(signals, fmt.Sprintf("paths_new(%d)", sig.PathsNew))
 	}
 
-	// Tool sequence novelty
-	if sig.ToolSequenceNew && w.ToolSequence > 0 {
-		score += w.ToolSequence
+	if sig.ToolSequenceNew {
+		score += 15
 		signals = append(signals, "tool_sequence_new")
 	}
-
-	// Duration anomaly
-	if sig.DurationAnomalous && w.DurationAnomaly > 0 {
-		score += w.DurationAnomaly
+	if sig.DurationAnomalous {
+		score += 10
 		signals = append(signals, "duration_anomalous")
 	}
-
-	// Cross-protocol novelty
-	if sig.CrossProtocolNew && w.CrossProtocol > 0 {
-		score += w.CrossProtocol
+	if sig.CrossProtocolNew {
+		score += 10
 		signals = append(signals, "cross_protocol_new")
 	}
-
-	// User agent novelty
-	if sig.UserAgentNew && w.UserAgent > 0 {
-		score += w.UserAgent
+	if sig.UserAgentNew {
+		score += 5
 		signals = append(signals, "user_agent_new")
 	}
 
-	// Clamp 0-100
-	if score < 0 {
-		score = 0
-	}
 	if score > 100 {
 		score = 100
 	}
 
 	category := "known"
-	switch {
-	case score >= s.cfg.NovelThreshold:
+	if score >= 70 {
 		category = "novel"
-	case score >= s.cfg.VariantThreshold:
+	} else if score >= 30 {
 		category = "variant"
 	}
 
-	return Verdict{
-		Score:    score,
-		Category: category,
-		Signals:  signals,
-	}
+	return Verdict{Score: score, Category: category, Signals: signals}
 }
 
-// IncrementalScore computes a partial score from signals available so far.
-// Same algorithm as Score — callers pass partial signals and understand
-// the score may increase as more events arrive.
-func (s *Scorer) IncrementalScore(sig Signal) Verdict {
-	return s.Score(sig)
-}
-
-// --- Package-level convenience functions using DefaultConfig ---
-
-// Score computes a novelty score using default weights.
-func Score(sig Signal) Verdict {
-	return defaultScorer.Score(sig)
-}
-
-// IncrementalScore computes a partial novelty score using default weights.
+// IncrementalScore is an alias for Score — callers pass partial signals
+// and understand the score may increase as more events arrive.
 func IncrementalScore(sig Signal) Verdict {
-	return defaultScorer.IncrementalScore(sig)
+	return Score(sig)
 }
-
-var defaultScorer = NewScorer(DefaultConfig())
 
 // SignalsString formats a Verdict's signals as a comma-separated string.
 func (v Verdict) SignalsString() string {
