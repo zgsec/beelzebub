@@ -2,6 +2,7 @@ package shellemulator
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"path"
 	"regexp"
@@ -512,15 +513,10 @@ func randomTimeBetween(start, end time.Time, seed string) time.Time {
 	if end.Before(start) {
 		return start
 	}
-	h := 0
-	for _, c := range seed {
-		h = h*31 + int(c)
-	}
-	if h < 0 {
-		h = -h
-	}
+	h := fnv.New64a()
+	h.Write([]byte(seed))
 	delta := end.Sub(start)
-	offset := time.Duration(h) % delta
+	offset := time.Duration(h.Sum64() % uint64(delta))
 	return start.Add(offset)
 }
 
