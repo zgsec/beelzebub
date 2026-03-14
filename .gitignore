@@ -8,6 +8,7 @@ integration_test/certs/tls.crt
 integration_test/certs/tls.key
 beelzebub-test
 beelzebub-*
+/beelzebub
 collector
 *.tar.gz
 logs/
