@@ -116,6 +116,14 @@ type OllamaConfig struct {
 	PromptEvalDelayMs int               `yaml:"promptEvalDelayMs"` // initial delay before first token (simulates prompt evaluation)
 }
 
+// NoveltyDetection configures real-time novelty scoring for a service.
+type NoveltyDetection struct {
+	Enabled          bool `yaml:"enabled"`
+	WindowDays       int  `yaml:"windowDays"`
+	NovelThreshold   int  `yaml:"novelThreshold"`
+	VariantThreshold int  `yaml:"variantThreshold"`
+}
+
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
 	ApiVersion             string          `yaml:"apiVersion"`
@@ -136,6 +144,7 @@ type BeelzebubServiceConfiguration struct {
 	WorldSeed              WorldSeedConfig `yaml:"worldSeed"`
 	FaultInjection         FaultInjection  `yaml:"faultInjection"`
 	OllamaConfig           OllamaConfig    `yaml:"ollamaConfig"`
+	NoveltyDetection       NoveltyDetection `yaml:"noveltyDetection"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {

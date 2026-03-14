@@ -12,6 +12,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
+	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/tracer"
@@ -32,6 +33,11 @@ type SSHStrategy struct {
 	agentTimings  map[string][]int64
 	agentLastSeen map[string]time.Time
 	agentPrevCmd  map[string]string // previous command per IP for correction detection
+
+	// Novelty detection (optional, nil when disabled)
+	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyWindowDays int
+	noveltySignals    sync.Map // IP → *noveltydetect.Signal
 }
 
 func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -43,6 +49,14 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		sshStrategy.agentLastSeen = make(map[string]time.Time)
 		sshStrategy.agentPrevCmd = make(map[string]string)
 		go sshStrategy.cleanAgentState()
+	}
+	// Novelty detection: create store if enabled in config
+	if servConf.NoveltyDetection.Enabled && sshStrategy.noveltyStore == nil {
+		sshStrategy.noveltyStore = noveltydetect.NewStore()
+		sshStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
+		if sshStrategy.noveltyWindowDays <= 0 {
+			sshStrategy.noveltyWindowDays = 7
+		}
 	}
 	go sshStrategy.Sessions.HistoryCleaner()
 	go func() {
@@ -96,24 +110,38 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							// Agent classification for raw commands
 							rawVerdict := sshStrategy.classifySSH(host, sess.RawCommand())
 
+							// Novelty detection for raw commands
+							var rawNoveltyVerdict noveltydetect.Verdict
+							if sshStrategy.noveltyStore != nil {
+								sig := sshStrategy.getNoveltySignal(host)
+								if sshStrategy.noveltyStore.RecordCommand(sess.RawCommand()) {
+									sig.CommandsNew++
+								}
+								sig.CommandsTotal++
+								rawNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+							}
+
 							tr.TraceEvent(tracer.Event{
-								Msg:           "SSH Raw Command",
-								Protocol:      tracer.SSH.String(),
-								RemoteAddr:    sess.RemoteAddr().String(),
-								SourceIp:      host,
-								SourcePort:    port,
-								Status:        tracer.Start.String(),
-								ID:            uuidSession.String(),
-								Environ:       strings.Join(sess.Environ(), ","),
-								User:          sess.User(),
-								Description:   servConf.Description,
-								Command:       sess.RawCommand(),
-								CommandOutput: commandOutput,
-								Handler:       command.Name,
-								SessionKey:    sessionKey,
-								AgentScore:    rawVerdict.Score,
-								AgentCategory: rawVerdict.Category,
-								AgentSignals:  rawVerdict.SignalsString(),
+								Msg:             "SSH Raw Command",
+								Protocol:        tracer.SSH.String(),
+								RemoteAddr:      sess.RemoteAddr().String(),
+								SourceIp:        host,
+								SourcePort:      port,
+								Status:          tracer.Start.String(),
+								ID:              uuidSession.String(),
+								Environ:         strings.Join(sess.Environ(), ","),
+								User:            sess.User(),
+								Description:     servConf.Description,
+								Command:         sess.RawCommand(),
+								CommandOutput:   commandOutput,
+								Handler:         command.Name,
+								SessionKey:      sessionKey,
+								AgentScore:      rawVerdict.Score,
+								AgentCategory:   rawVerdict.Category,
+								AgentSignals:    rawVerdict.SignalsString(),
+								NoveltyScore:    rawNoveltyVerdict.Score,
+								NoveltyCategory: rawNoveltyVerdict.Category,
+								NoveltySignals:  rawNoveltyVerdict.SignalsString(),
 							})
 							return
 						}
@@ -186,52 +214,91 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							// Agent classification for interactive commands
 							cmdVerdict := sshStrategy.classifySSH(host, commandInput)
 
+							// Novelty detection for interactive commands
+							var cmdNoveltyVerdict noveltydetect.Verdict
+							if sshStrategy.noveltyStore != nil {
+								sig := sshStrategy.getNoveltySignal(host)
+								if sshStrategy.noveltyStore.RecordCommand(commandInput) {
+									sig.CommandsNew++
+								}
+								sig.CommandsTotal++
+								cmdNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+							}
+
 							tr.TraceEvent(tracer.Event{
-								Msg:           "SSH Terminal Session Interaction",
-								RemoteAddr:    sess.RemoteAddr().String(),
-								SourceIp:      host,
-								SourcePort:    port,
-								Status:        tracer.Interaction.String(),
-								Command:       commandInput,
-								CommandOutput: commandOutput,
-								ID:            uuidSession.String(),
-								Protocol:      tracer.SSH.String(),
-								Description:   servConf.Description,
-								Handler:       command.Name,
-								SessionKey:    sessionKey,
-								AgentScore:    cmdVerdict.Score,
-								AgentCategory: cmdVerdict.Category,
-								AgentSignals:  cmdVerdict.SignalsString(),
+								Msg:             "SSH Terminal Session Interaction",
+								RemoteAddr:      sess.RemoteAddr().String(),
+								SourceIp:        host,
+								SourcePort:      port,
+								Status:          tracer.Interaction.String(),
+								Command:         commandInput,
+								CommandOutput:   commandOutput,
+								ID:              uuidSession.String(),
+								Protocol:        tracer.SSH.String(),
+								Description:     servConf.Description,
+								Handler:         command.Name,
+								SessionKey:      sessionKey,
+								AgentScore:      cmdVerdict.Score,
+								AgentCategory:   cmdVerdict.Category,
+								AgentSignals:    cmdVerdict.SignalsString(),
+								NoveltyScore:    cmdNoveltyVerdict.Score,
+								NoveltyCategory: cmdNoveltyVerdict.Category,
+								NoveltySignals:  cmdNoveltyVerdict.SignalsString(),
 							})
 							break // Inner range over commands.
 						}
 					}
 				}
 
+				// Novelty detection: final score on session end
+				var endNoveltyVerdict noveltydetect.Verdict
+				if sshStrategy.noveltyStore != nil {
+					if raw, ok := sshStrategy.noveltySignals.LoadAndDelete(host); ok {
+						sig := raw.(*noveltydetect.Signal)
+						endNoveltyVerdict = noveltydetect.Score(*sig)
+					}
+				}
+
 				tr.TraceEvent(tracer.Event{
-					Msg:        "End SSH Session",
-					Status:     tracer.End.String(),
-					ID:         uuidSession.String(),
-					Protocol:   tracer.SSH.String(),
-					SessionKey: sessionKey,
-					SourceIp:   host,
+					Msg:             "End SSH Session",
+					Status:          tracer.End.String(),
+					ID:              uuidSession.String(),
+					Protocol:        tracer.SSH.String(),
+					SessionKey:      sessionKey,
+					SourceIp:        host,
+					NoveltyScore:    endNoveltyVerdict.Score,
+					NoveltyCategory: endNoveltyVerdict.Category,
+					NoveltySignals:  endNoveltyVerdict.SignalsString(),
 				})
 			},
 			PasswordHandler: func(ctx ssh.Context, password string) bool {
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 
+				// Novelty detection for credential pairs
+				var authNoveltyVerdict noveltydetect.Verdict
+				if sshStrategy.noveltyStore != nil {
+					sig := sshStrategy.getNoveltySignal(host)
+					if sshStrategy.noveltyStore.RecordCredPair(ctx.User(), password) {
+						sig.CredsNew++
+					}
+					authNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+				}
+
 				tr.TraceEvent(tracer.Event{
-					Msg:         "New SSH Login Attempt",
-					Protocol:    tracer.SSH.String(),
-					Status:      tracer.Stateless.String(),
-					User:        ctx.User(),
-					Password:    password,
-					Client:      ctx.ClientVersion(),
-					RemoteAddr:  ctx.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					ID:          uuid.New().String(),
-					Description: servConf.Description,
+					Msg:             "New SSH Login Attempt",
+					Protocol:        tracer.SSH.String(),
+					Status:          tracer.Stateless.String(),
+					User:            ctx.User(),
+					Password:        password,
+					Client:          ctx.ClientVersion(),
+					RemoteAddr:      ctx.RemoteAddr().String(),
+					SourceIp:        host,
+					SourcePort:      port,
+					ID:              uuid.New().String(),
+					Description:     servConf.Description,
+					NoveltyScore:    authNoveltyVerdict.Score,
+					NoveltyCategory: authNoveltyVerdict.Category,
+					NoveltySignals:  authNoveltyVerdict.SignalsString(),
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 				if err != nil {
@@ -268,7 +335,31 @@ func (s *SSHStrategy) cleanAgentState() {
 			}
 		}
 		s.agentMu.Unlock()
+
+		// Clean novelty store if enabled
+		if s.noveltyStore != nil {
+			maxAge := time.Duration(s.noveltyWindowDays) * 24 * time.Hour
+			s.noveltyStore.Clean(maxAge)
+		}
+
+		// Clean stale novelty signal accumulators
+		s.noveltySignals.Range(func(key, _ any) bool {
+			// Reuse agent lastSeen cutoff — if the IP is stale, drop its signal
+			s.agentMu.Lock()
+			_, alive := s.agentLastSeen[key.(string)]
+			s.agentMu.Unlock()
+			if !alive {
+				s.noveltySignals.Delete(key)
+			}
+			return true
+		})
 	}
+}
+
+// getNoveltySignal returns the per-IP novelty signal accumulator, creating one if needed.
+func (s *SSHStrategy) getNoveltySignal(ip string) *noveltydetect.Signal {
+	raw, _ := s.noveltySignals.LoadOrStore(ip, &noveltydetect.Signal{})
+	return raw.(*noveltydetect.Signal)
 }
 
 // classifySSH accumulates timing and builds an agent detection verdict for an SSH command.

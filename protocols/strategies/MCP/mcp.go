@@ -18,6 +18,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
+	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -47,6 +48,11 @@ type MCPStrategy struct {
 	// Agent detection timing accumulation (per-IP)
 	agentTimings  map[string][]int64
 	agentLastSeen map[string]time.Time
+
+	// Novelty detection (optional, nil when disabled)
+	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyWindowDays int
+	noveltyToolSeqs   map[string][]string // IP → accumulated tool names for sequence tracking
 }
 
 func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
@@ -89,6 +95,15 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	mcpStrategy.toolHistory = make(map[string][]toolCallRecord)
 	mcpStrategy.agentTimings = make(map[string][]int64)
 	mcpStrategy.agentLastSeen = make(map[string]time.Time)
+	// Novelty detection: create store if enabled in config
+	if servConf.NoveltyDetection.Enabled && mcpStrategy.noveltyStore == nil {
+		mcpStrategy.noveltyStore = noveltydetect.NewStore()
+		mcpStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
+		if mcpStrategy.noveltyWindowDays <= 0 {
+			mcpStrategy.noveltyWindowDays = 7
+		}
+		mcpStrategy.noveltyToolSeqs = make(map[string][]string)
+	}
 	go mcpStrategy.cleanAgentState()
 
 	hasWorldSeed := len(servConf.WorldSeed.Users) > 0 || len(servConf.WorldSeed.Resources) > 0
@@ -213,27 +228,36 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					}
 					faultVerdict := agentdetect.IncrementalClassify(faultSig)
 
+					// Novelty: record tool even on faulted events
+					var faultNoveltyVerdict noveltydetect.Verdict
+					if mcpStrategy.noveltyStore != nil {
+						faultNoveltyVerdict = mcpStrategy.recordNoveltyTool(host, request.Params.Name)
+					}
+
 					tr.TraceEvent(tracer.Event{
-						Msg:           "MCP tool invocation (faulted)",
-						Protocol:      tracer.MCP.String(),
-						Status:        tracer.Interaction.String(),
-						RemoteAddr:    remoteAddr,
-						SourceIp:      host,
-						SourcePort:    port,
-						ID:            sessionID,
-						Description:   servConf.Description,
-						Command:       cmdStr,
-						CommandOutput: faultResp,
-						SessionKey:    sessionKey,
-						Sequence:      seq,
-						ToolName:      request.Params.Name,
-						ToolArguments: argsStr,
-						IsRetry:       isRetry,
-						RetryOf:       retryOf,
-						FaultInjected: faultType,
-						AgentScore:    faultVerdict.Score,
-						AgentCategory: faultVerdict.Category,
-						AgentSignals:  faultVerdict.SignalsString(),
+						Msg:             "MCP tool invocation (faulted)",
+						Protocol:        tracer.MCP.String(),
+						Status:          tracer.Interaction.String(),
+						RemoteAddr:      remoteAddr,
+						SourceIp:        host,
+						SourcePort:      port,
+						ID:              sessionID,
+						Description:     servConf.Description,
+						Command:         cmdStr,
+						CommandOutput:   faultResp,
+						SessionKey:      sessionKey,
+						Sequence:        seq,
+						ToolName:        request.Params.Name,
+						ToolArguments:   argsStr,
+						IsRetry:         isRetry,
+						RetryOf:         retryOf,
+						FaultInjected:   faultType,
+						AgentScore:      faultVerdict.Score,
+						AgentCategory:   faultVerdict.Category,
+						AgentSignals:    faultVerdict.SignalsString(),
+						NoveltyScore:    faultNoveltyVerdict.Score,
+						NoveltyCategory: faultNoveltyVerdict.Category,
+						NoveltySignals:  faultNoveltyVerdict.SignalsString(),
 					})
 					return mcp.NewToolResultText(faultResp), nil
 				}
@@ -288,6 +312,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			}
 			verdict := agentdetect.IncrementalClassify(sig)
 
+			// Novelty detection for tool calls
+			var noveltyVerdict noveltydetect.Verdict
+			if mcpStrategy.noveltyStore != nil {
+				noveltyVerdict = mcpStrategy.recordNoveltyTool(host, request.Params.Name)
+			}
+
 			tr.TraceEvent(tracer.Event{
 				Msg:              "MCP tool invocation",
 				Protocol:         tracer.MCP.String(),
@@ -312,6 +342,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				AgentScore:       verdict.Score,
 				AgentCategory:    verdict.Category,
 				AgentSignals:     verdict.SignalsString(),
+				NoveltyScore:     noveltyVerdict.Score,
+				NoveltyCategory:  noveltyVerdict.Category,
+				NoveltySignals:   noveltyVerdict.SignalsString(),
 			})
 			return mcp.NewToolResultText(response), nil
 		})
@@ -544,10 +577,48 @@ func (s *MCPStrategy) cleanAgentState() {
 				delete(s.agentTimings, ip)
 				delete(s.agentLastSeen, ip)
 				delete(s.toolHistory, ip)
+				// Clean novelty tool sequence accumulator for stale IPs
+				if s.noveltyToolSeqs != nil {
+					delete(s.noveltyToolSeqs, ip)
+				}
 			}
 		}
 		s.worldMu.Unlock()
+
+		// Clean novelty store if enabled
+		if s.noveltyStore != nil {
+			maxAge := time.Duration(s.noveltyWindowDays) * 24 * time.Hour
+			s.noveltyStore.Clean(maxAge)
+		}
 	}
+}
+
+// recordNoveltyTool records a tool call for novelty detection and returns the current verdict.
+// It records the individual tool as a command, accumulates the per-IP tool sequence,
+// and checks whether the full sequence so far is novel.
+func (s *MCPStrategy) recordNoveltyTool(ip, toolName string) noveltydetect.Verdict {
+	var sig noveltydetect.Signal
+
+	// Record individual tool as command
+	if s.noveltyStore.RecordCommand(toolName) {
+		sig.CommandsNew++
+	}
+	sig.CommandsTotal++
+
+	// Accumulate tool sequence per IP and check novelty
+	s.worldMu.Lock()
+	s.noveltyToolSeqs[ip] = append(s.noveltyToolSeqs[ip], toolName)
+	seq := make([]string, len(s.noveltyToolSeqs[ip]))
+	copy(seq, s.noveltyToolSeqs[ip])
+	// Cap sequence length to bound memory
+	if len(s.noveltyToolSeqs[ip]) > 100 {
+		s.noveltyToolSeqs[ip] = s.noveltyToolSeqs[ip][len(s.noveltyToolSeqs[ip])-100:]
+	}
+	s.worldMu.Unlock()
+
+	sig.ToolSequenceNew = s.noveltyStore.RecordToolSequence(seq)
+
+	return noveltydetect.IncrementalScore(sig)
 }
 
 // accumulateTiming records the current time for the given IP and returns the

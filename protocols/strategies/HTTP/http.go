@@ -12,6 +12,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
+	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/tracer"
@@ -56,6 +57,24 @@ func startHTTPSessionCleanup() {
 	})
 }
 
+var httpNoveltyCleanupOnce sync.Once
+
+// startHTTPNoveltyCleanup launches a goroutine that periodically cleans the novelty store.
+func startHTTPNoveltyCleanup(ns *noveltydetect.FingerprintStore, windowDays int) {
+	if ns == nil {
+		return
+	}
+	httpNoveltyCleanupOnce.Do(func() {
+		go func() {
+			maxAge := time.Duration(windowDays) * 24 * time.Hour
+			for {
+				time.Sleep(5 * time.Minute)
+				ns.Clean(maxAge)
+			}
+		}()
+	})
+}
+
 // containsAIPath checks if any accumulated paths match known AI/MCP discovery patterns.
 func containsAIPath(paths []string) bool {
 	aiPatterns := []string{"/mcp", "/sse", "/.well-known/mcp", "/.well-known/ai-plugin",
@@ -74,6 +93,10 @@ func containsAIPath(paths []string) bool {
 type HTTPStrategy struct {
 	Bridge *bridge.ProtocolBridge
 	Fault  *faults.Injector
+
+	// Novelty detection (optional, nil when disabled)
+	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyWindowDays int
 }
 
 type httpResponse struct {
@@ -83,7 +106,16 @@ type httpResponse struct {
 }
 
 func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	// Novelty detection: create store if enabled in config
+	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
+		httpStrategy.noveltyStore = noveltydetect.NewStore()
+		httpStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
+		if httpStrategy.noveltyWindowDays <= 0 {
+			httpStrategy.noveltyWindowDays = 7
+		}
+	}
 	startHTTPSessionCleanup()
+	startHTTPNoveltyCleanup(httpStrategy.noveltyStore, httpStrategy.noveltyWindowDays)
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -94,7 +126,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 			var err error
 			matched = command.Regex.MatchString(request.RequestURI)
 			if matched {
-				resp, err = buildHTTPResponse(servConf, tr, command, request)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -108,7 +140,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err = buildHTTPResponse(servConf, tr, command, request)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -143,7 +175,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 	return nil
 }
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request) (httpResponse, error) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore) (httpResponse, error) {
 	resp := httpResponse{
 		Body:       command.Handler,
 		Headers:    command.Headers,
@@ -156,7 +188,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	if err == nil {
 		body = string(bodyBytes)
 	}
-	traceRequest(request, tr, command, servConf.Description, body)
+	traceRequest(request, tr, command, servConf.Description, body, ns)
 
 	if command.Plugin == plugins.LLMPluginName {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
@@ -191,7 +223,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	sessionKey := "HTTP" + host
 
@@ -226,6 +258,19 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 	}
 	verdict := agentdetect.IncrementalClassify(sig)
 
+	// Novelty detection: record path and user agent per request
+	var noveltyVerdict noveltydetect.Verdict
+	if ns != nil {
+		var novSig noveltydetect.Signal
+		if ns.RecordPath(request.RequestURI) {
+			novSig.PathsNew++
+		}
+		if ua := request.UserAgent(); ua != "" {
+			novSig.UserAgentNew = ns.RecordUserAgent(ua)
+		}
+		noveltyVerdict = noveltydetect.IncrementalScore(novSig)
+	}
+
 	event := tracer.Event{
 		Msg:             "HTTP New request",
 		RequestURI:      request.RequestURI,
@@ -249,6 +294,9 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		AgentScore:      verdict.Score,
 		AgentCategory:   verdict.Category,
 		AgentSignals:    verdict.SignalsString(),
+		NoveltyScore:    noveltyVerdict.Score,
+		NoveltyCategory: noveltyVerdict.Category,
+		NoveltySignals:  noveltyVerdict.SignalsString(),
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

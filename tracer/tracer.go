@@ -71,6 +71,11 @@ type Event struct {
 	AgentScore    int    `json:"AgentScore,omitempty"`
 	AgentCategory string `json:"AgentCategory,omitempty"`
 	AgentSignals  string `json:"AgentSignals,omitempty"`
+
+	// Novelty detection
+	NoveltyScore    int    `json:"NoveltyScore,omitempty"`
+	NoveltyCategory string `json:"NoveltyCategory,omitempty"`
+	NoveltySignals  string `json:"NoveltySignals,omitempty"`
 }
 
 type (
