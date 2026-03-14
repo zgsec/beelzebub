@@ -56,6 +56,12 @@ var jitterRanges = map[string][2]int{
 	"network":  {5, 30},
 }
 
+// Compiled regexes for redirect parsing.
+var (
+	redirectAppendRe    = regexp.MustCompile(`^(.+?)\s*>>\s*(.+)$`)
+	redirectOverwriteRe = regexp.MustCompile(`^(.+?)\s*>\s*(.+)$`)
+)
+
 // NewEmulator creates an emulator from config, merging with defaults.
 func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 	p := MergeConfig(DefaultPersona(), cfg)
@@ -237,17 +243,14 @@ func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 // handleRedirect parses "cmd > file" and "cmd >> file" patterns.
 func (e *Emulator) handleRedirect(cmd string, sess *Session) (string, bool) {
 	// Match >> (append) first, then > (overwrite)
-	appendRe := regexp.MustCompile(`^(.+?)\s*>>\s*(.+)$`)
-	overwriteRe := regexp.MustCompile(`^(.+?)\s*>\s*(.+)$`)
-
 	var cmdPart, filePart string
 	var appendMode bool
 
-	if m := appendRe.FindStringSubmatch(cmd); m != nil {
+	if m := redirectAppendRe.FindStringSubmatch(cmd); m != nil {
 		cmdPart = strings.TrimSpace(m[1])
 		filePart = strings.TrimSpace(m[2])
 		appendMode = true
-	} else if m := overwriteRe.FindStringSubmatch(cmd); m != nil {
+	} else if m := redirectOverwriteRe.FindStringSubmatch(cmd); m != nil {
 		cmdPart = strings.TrimSpace(m[1])
 		filePart = strings.TrimSpace(m[2])
 		appendMode = false
