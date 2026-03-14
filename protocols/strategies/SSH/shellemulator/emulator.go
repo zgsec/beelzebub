@@ -63,6 +63,96 @@ var (
 	redirectOverwriteRe = regexp.MustCompile(`^(.+?)\s*>\s*(.+)$`)
 )
 
+// cmdNoop is a named no-op handler for commands that need no output.
+func (*Emulator) cmdNoop(args []string, sess *Session) string { return "" }
+
+// cmdDef associates a handler method with a jitter category.
+type cmdDef struct {
+	handler  func(*Emulator, []string, *Session) string
+	category string
+}
+
+// commandTable declares all supported commands declaratively.
+var commandTable = map[string]cmdDef{
+	// Identity/system
+	"whoami":   {(*Emulator).cmdWhoami, "identity"},
+	"id":       {(*Emulator).cmdID, "identity"},
+	"hostname": {(*Emulator).cmdHostname, "identity"},
+	"uname":    {(*Emulator).cmdUname, "identity"},
+	"uptime":   {(*Emulator).cmdUptime, "identity"},
+	"w":        {(*Emulator).cmdW, "identity"},
+	"who":      {(*Emulator).cmdWho, "identity"},
+	"last":     {(*Emulator).cmdLast, "identity"},
+	"date":     {(*Emulator).cmdDate, "identity"},
+
+	// Filesystem
+	"pwd":  {(*Emulator).cmdPwd, "fs"},
+	"cd":   {(*Emulator).cmdCd, "fs"},
+	"ls":   {(*Emulator).cmdLs, "fs"},
+	"cat":  {(*Emulator).cmdCat, "fs"},
+	"find": {(*Emulator).cmdFind, "fs"},
+	"file": {(*Emulator).cmdFile, "fs"},
+	"df":   {(*Emulator).cmdDf, "fs"},
+	"mount": {(*Emulator).cmdMount, "fs"},
+	"du":   {(*Emulator).cmdDu, "fs"},
+	"stat": {(*Emulator).cmdStat, "fs"},
+	"wc":   {(*Emulator).cmdWc, "fs"},
+	"head": {(*Emulator).cmdHead, "fs"},
+	"tail": {(*Emulator).cmdTail, "fs"},
+
+	// Network
+	"ifconfig": {(*Emulator).cmdIfconfig, "network"},
+	"ip":       {(*Emulator).cmdIP, "network"},
+	"netstat":  {(*Emulator).cmdNetstat, "network"},
+	"ss":       {(*Emulator).cmdSS, "network"},
+	"ping":     {(*Emulator).cmdPing, "network"},
+	"dig":      {(*Emulator).cmdDig, "network"},
+	"nslookup": {(*Emulator).cmdNslookup, "network"},
+
+	// Process/resource
+	"ps":        {(*Emulator).cmdPs, "memory"},
+	"free":      {(*Emulator).cmdFree, "memory"},
+	"top":       {(*Emulator).cmdTop, "memory"},
+	"docker":    {(*Emulator).cmdDocker, "memory"},
+	"systemctl": {(*Emulator).cmdSystemctl, "memory"},
+	"service":   {(*Emulator).cmdService, "memory"},
+	"lsof":      {(*Emulator).cmdLsof, "memory"},
+	"kill":      {(*Emulator).cmdKill, "memory"},
+
+	// Credential lures
+	"env":      {(*Emulator).cmdEnv, "memory"},
+	"printenv": {(*Emulator).cmdEnv, "memory"},
+	"history":  {(*Emulator).cmdHistory, "memory"},
+	"set":      {(*Emulator).cmdEnv, "memory"},
+
+	// Utility
+	"echo":    {(*Emulator).cmdEcho, "identity"},
+	"which":   {(*Emulator).cmdWhich, "identity"},
+	"type":    {(*Emulator).cmdType, "identity"},
+	"command": {(*Emulator).cmdCommand, "identity"},
+	"grep":    {(*Emulator).cmdGrep, "identity"},
+	"export":  {(*Emulator).cmdExport, "identity"},
+	"alias":   {(*Emulator).cmdAlias, "identity"},
+	"unset":   {(*Emulator).cmdUnset, "identity"},
+
+	// No-ops
+	"true":   {(*Emulator).cmdNoop, "identity"},
+	"false":  {(*Emulator).cmdNoop, "identity"},
+	"clear":  {(*Emulator).cmdNoop, "identity"},
+	"reset":  {(*Emulator).cmdNoop, "identity"},
+	"logout": {(*Emulator).cmdNoop, "identity"},
+	"exit":   {(*Emulator).cmdNoop, "identity"},
+
+	// Destructive (with session overlay support)
+	"rm":    {(*Emulator).cmdRm, "fs"},
+	"mkdir": {(*Emulator).cmdMkdir, "fs"},
+	"touch": {(*Emulator).cmdTouch, "fs"},
+	"cp":    {(*Emulator).cmdCp, "fs"},
+	"mv":    {(*Emulator).cmdNoop, "fs"},
+	"chmod": {(*Emulator).cmdNoop, "fs"},
+	"chown": {(*Emulator).cmdNoop, "fs"},
+}
+
 // NewEmulator creates an emulator from config, merging with defaults.
 func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 	p := MergeConfig(DefaultPersona(), cfg)
@@ -102,109 +192,15 @@ func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 
 	e := &Emulator{persona: p}
 
-	e.jitter = make(map[string]string)
-	e.handlers = map[string]handlerFunc{}
-
-	// Identity/system
-	for _, cmd := range []string{"whoami", "id", "hostname", "uname", "date"} {
-		e.jitter[cmd] = "identity"
+	e.handlers = make(map[string]handlerFunc, len(commandTable))
+	e.jitter = make(map[string]string, len(commandTable))
+	for name, def := range commandTable {
+		method := def.handler
+		e.handlers[name] = func(args []string, sess *Session) string {
+			return method(e, args, sess)
+		}
+		e.jitter[name] = def.category
 	}
-	for _, cmd := range []string{"uptime", "w", "who", "last"} {
-		e.jitter[cmd] = "identity"
-	}
-	e.handlers["whoami"] = e.cmdWhoami
-	e.handlers["id"] = e.cmdID
-	e.handlers["hostname"] = e.cmdHostname
-	e.handlers["uname"] = e.cmdUname
-	e.handlers["uptime"] = e.cmdUptime
-	e.handlers["w"] = e.cmdW
-	e.handlers["who"] = e.cmdWho
-	e.handlers["last"] = e.cmdLast
-	e.handlers["date"] = e.cmdDate
-
-	// Filesystem
-	for _, cmd := range []string{"pwd", "cd", "ls", "cat", "find", "file", "df", "mount", "du", "stat", "wc", "head", "tail"} {
-		e.jitter[cmd] = "fs"
-	}
-	e.handlers["pwd"] = e.cmdPwd
-	e.handlers["cd"] = e.cmdCd
-	e.handlers["ls"] = e.cmdLs
-	e.handlers["cat"] = e.cmdCat
-	e.handlers["find"] = e.cmdFind
-	e.handlers["file"] = e.cmdFile
-	e.handlers["df"] = e.cmdDf
-	e.handlers["mount"] = e.cmdMount
-	e.handlers["du"] = e.cmdDu
-	e.handlers["stat"] = e.cmdStat
-	e.handlers["wc"] = e.cmdWc
-	e.handlers["head"] = e.cmdHead
-	e.handlers["tail"] = e.cmdTail
-
-	// Network
-	for _, cmd := range []string{"ifconfig", "ip", "netstat", "ss", "ping", "dig", "nslookup"} {
-		e.jitter[cmd] = "network"
-	}
-	e.handlers["ifconfig"] = e.cmdIfconfig
-	e.handlers["ip"] = e.cmdIP
-	e.handlers["netstat"] = e.cmdNetstat
-	e.handlers["ss"] = e.cmdSS
-	e.handlers["ping"] = e.cmdPing
-	e.handlers["dig"] = e.cmdDig
-	e.handlers["nslookup"] = e.cmdNslookup
-
-	// Process/resource
-	for _, cmd := range []string{"ps", "free", "top", "docker", "systemctl", "service", "lsof", "kill"} {
-		e.jitter[cmd] = "memory"
-	}
-	e.handlers["ps"] = e.cmdPs
-	e.handlers["free"] = e.cmdFree
-	e.handlers["top"] = e.cmdTop
-	e.handlers["docker"] = e.cmdDocker
-	e.handlers["systemctl"] = e.cmdSystemctl
-	e.handlers["service"] = e.cmdService
-	e.handlers["lsof"] = e.cmdLsof
-	e.handlers["kill"] = e.cmdKill
-
-	// Credential lures
-	for _, cmd := range []string{"env", "printenv", "set", "history"} {
-		e.jitter[cmd] = "memory"
-	}
-	e.handlers["env"] = e.cmdEnv
-	e.handlers["printenv"] = e.cmdEnv
-	e.handlers["history"] = e.cmdHistory
-	e.handlers["set"] = e.cmdEnv
-
-	// Utility
-	for _, cmd := range []string{"echo", "which", "type", "command", "grep", "export", "alias", "unset"} {
-		e.jitter[cmd] = "identity"
-	}
-	e.handlers["echo"] = e.cmdEcho
-	e.handlers["which"] = e.cmdWhich
-	e.handlers["type"] = e.cmdType
-	e.handlers["command"] = e.cmdCommand
-	e.handlers["grep"] = e.cmdGrep
-	e.handlers["export"] = e.cmdExport
-	e.handlers["alias"] = e.cmdAlias
-	e.handlers["unset"] = e.cmdUnset
-
-	// No-op commands
-	noop := func([]string, *Session) string { return "" }
-	for _, cmd := range []string{"true", "false", "clear", "reset", "logout", "exit"} {
-		e.handlers[cmd] = noop
-		e.jitter[cmd] = "identity"
-	}
-
-	// Destructive (with session overlay support)
-	for _, cmd := range []string{"rm", "mkdir", "touch", "cp", "mv", "chmod", "chown"} {
-		e.jitter[cmd] = "fs"
-	}
-	e.handlers["rm"] = e.cmdRm
-	e.handlers["mkdir"] = e.cmdMkdir
-	e.handlers["touch"] = e.cmdTouch
-	e.handlers["cp"] = e.cmdCp
-	e.handlers["mv"] = noop
-	e.handlers["chmod"] = noop
-	e.handlers["chown"] = noop
 
 	return e
 }
