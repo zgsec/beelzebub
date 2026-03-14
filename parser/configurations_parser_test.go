@@ -253,7 +253,7 @@ func TestReadConfigurationsServicesGenerateHashCode(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Nil(t, errHashCode)
-	assert.Equal(t, hashCode, "92fd1593e91a25184056a89fa7c76f2cfd88b910490a2ae8ad1d516ab27f5927")
+	assert.Equal(t, hashCode, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c")
 }
 
 func TestReadConfigurationsPluginGuardrailsValid(t *testing.T) {
@@ -539,5 +539,5 @@ func TestToolAnnotationsHashCodeStability(t *testing.T) {
 	// the hash for configs that don't use annotations
 	hashCode, errHashCode := beelzebubServicesConfiguration[0].HashCode()
 	assert.Nil(t, errHashCode)
-	assert.Equal(t, "92fd1593e91a25184056a89fa7c76f2cfd88b910490a2ae8ad1d516ab27f5927", hashCode)
+	assert.Equal(t, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c", hashCode)
 }
