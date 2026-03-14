@@ -665,3 +665,69 @@ func TestCatOverlayOverridesLure(t *testing.T) {
 	out, _ := e.Execute("cat /etc/passwd", s)
 	assert.Equal(t, "overridden", out)
 }
+
+// === Semicolon and && Chaining Tests ===
+
+func TestSemicolonChaining(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("whoami; hostname", s)
+	require.True(t, ok)
+	assert.Contains(t, out, "root")
+	assert.Contains(t, out, "prod-web-01")
+}
+
+func TestSemicolonThreeCommands(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("whoami; pwd; hostname", s)
+	require.True(t, ok)
+	lines := strings.Split(out, "\n")
+	assert.Equal(t, 3, len(lines))
+	assert.Equal(t, "root", lines[0])
+	assert.Equal(t, "/root", lines[1])
+	assert.Equal(t, "prod-web-01", lines[2])
+}
+
+func TestSemicolonTrailing(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("whoami;", s)
+	require.True(t, ok)
+	assert.Equal(t, "root", out)
+}
+
+func TestAndChaining(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("whoami && hostname", s)
+	require.True(t, ok)
+	assert.Contains(t, out, "root")
+	assert.Contains(t, out, "prod-web-01")
+}
+
+func TestSemicolonUnhandledFallsThrough(t *testing.T) {
+	e, s := defaultEmulator()
+	_, ok := e.Execute("whoami; fakecmd", s)
+	assert.False(t, ok, "unhandled sub-command should cause whole chain to fall through")
+}
+
+func TestSemicolonWithRedirect(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute(`echo "hello" > /tmp/f; cat /tmp/f`, s)
+	require.True(t, ok)
+	assert.Equal(t, "hello", out)
+}
+
+func TestSemicolonWithCd(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("cd /tmp; pwd", s)
+	require.True(t, ok)
+	assert.Equal(t, "/tmp", out)
+}
+
+func TestSemicolonWithPipe(t *testing.T) {
+	e, s := defaultEmulator()
+	out, ok := e.Execute("ps aux | head -3; whoami", s)
+	require.True(t, ok)
+	assert.Contains(t, out, "root")
+	// ps aux | head -3 produces 3 lines, plus whoami adds 1 more
+	lines := strings.Split(out, "\n")
+	assert.Equal(t, 4, len(lines))
+}

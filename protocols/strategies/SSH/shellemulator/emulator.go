@@ -237,6 +237,32 @@ func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 	sess.CmdCount++
 	sess.initOverlays()
 
+	// Normalize && to ; (all our commands "succeed")
+	normalized := strings.ReplaceAll(cmd, "&&", ";")
+	if strings.Contains(normalized, ";") {
+		parts := strings.Split(normalized, ";")
+		var outputs []string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			output, handled := e.executeSingle(part, sess)
+			if !handled {
+				return "", false // any unhandled part → whole command to LLM
+			}
+			if output != "" {
+				outputs = append(outputs, output)
+			}
+		}
+		return strings.Join(outputs, "\n"), true
+	}
+
+	return e.executeSingle(cmd, sess)
+}
+
+// executeSingle handles a single command (no chaining).
+func (e *Emulator) executeSingle(cmd string, sess *Session) (string, bool) {
 	// Handle output redirects: echo "x" > file / echo "x" >> file
 	if output, redirected := e.handleRedirect(cmd, sess); redirected {
 		return output, true
@@ -479,11 +505,6 @@ func (e *Emulator) BuildPromptContext() string {
 
 // parseCommand splits a command string into base command and arguments.
 func parseCommand(cmd string) (string, []string) {
-	// Handle semicolons — only process first command
-	if idx := strings.Index(cmd, ";"); idx >= 0 {
-		cmd = cmd[:idx]
-	}
-
 	fields := strings.Fields(cmd)
 	if len(fields) == 0 {
 		return "", nil
