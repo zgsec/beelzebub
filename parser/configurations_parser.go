@@ -53,18 +53,20 @@ type Prometheus struct {
 }
 
 type Plugin struct {
-	OpenAISecretKey         string `yaml:"openAISecretKey"`
-	Host                    string `yaml:"host"`
-	LLMModel                string `yaml:"llmModel"`
-	LLMProvider             string `yaml:"llmProvider"`
-	Prompt                  string `yaml:"prompt"`
-	InputValidationEnabled  bool   `yaml:"inputValidationEnabled"`
-	InputValidationPrompt   string `yaml:"inputValidationPrompt"`
-	OutputValidationEnabled bool   `yaml:"outputValidationEnabled"`
-	OutputValidationPrompt  string `yaml:"outputValidationPrompt"`
-	RateLimitEnabled        bool   `yaml:"rateLimitEnabled"`
-	RateLimitRequests       int    `yaml:"rateLimitRequests"`
-	RateLimitWindowSeconds  int    `yaml:"rateLimitWindowSeconds"`
+	OpenAISecretKey         string   `yaml:"openAISecretKey"`
+	Host                    string   `yaml:"host"`
+	LLMModel                string   `yaml:"llmModel"`
+	LLMProvider             string   `yaml:"llmProvider"`
+	Prompt                  string   `yaml:"prompt"`
+	Temperature             *float64 `yaml:"temperature"`
+	MaxTokens               *int     `yaml:"maxTokens"`
+	InputValidationEnabled  bool     `yaml:"inputValidationEnabled"`
+	InputValidationPrompt   string   `yaml:"inputValidationPrompt"`
+	OutputValidationEnabled bool     `yaml:"outputValidationEnabled"`
+	OutputValidationPrompt  string   `yaml:"outputValidationPrompt"`
+	RateLimitEnabled        bool     `yaml:"rateLimitEnabled"`
+	RateLimitRequests       int      `yaml:"rateLimitRequests"`
+	RateLimitWindowSeconds  int      `yaml:"rateLimitWindowSeconds"`
 }
 
 // FaultInjection configures controlled fault injection for a service.
@@ -116,6 +118,35 @@ type OllamaConfig struct {
 	PromptEvalDelayMs int               `yaml:"promptEvalDelayMs"` // initial delay before first token (simulates prompt evaluation)
 }
 
+// ShellEmulator configures the SSH command emulator.
+type ShellEmulator struct {
+	Enabled      bool                `yaml:"enabled"`
+	Hostname     string              `yaml:"hostname"`
+	Kernel       string              `yaml:"kernel"`
+	OS           string              `yaml:"os"`
+	IP           string              `yaml:"ip"`
+	User         string              `yaml:"user"`
+	UptimeDays   int                 `yaml:"uptimeDays"`
+	CanaryTokens map[string]string   `yaml:"canaryTokens"`
+	Processes    []EmulatorProcess   `yaml:"processes"`
+	EnvVars      map[string]string   `yaml:"envVars"`
+	Lures        map[string]string   `yaml:"lures"`
+	Filesystem   map[string][]string `yaml:"filesystem"`
+}
+
+// EmulatorProcess represents a process entry for the shell emulator.
+type EmulatorProcess struct {
+	PID  int    `yaml:"pid"`
+	User string `yaml:"user"`
+	CPU  string `yaml:"cpu"`
+	Mem  string `yaml:"mem"`
+	VSZ  string `yaml:"vsz"`
+	RSS  string `yaml:"rss"`
+	Cmd  string `yaml:"cmd"`
+	Stat string `yaml:"stat"`
+	Time string `yaml:"time"`
+}
+
 // NoveltyDetection configures real-time novelty scoring for a service.
 type NoveltyDetection struct {
 	Enabled          bool `yaml:"enabled"`
@@ -145,6 +176,7 @@ type BeelzebubServiceConfiguration struct {
 	FaultInjection         FaultInjection  `yaml:"faultInjection"`
 	OllamaConfig           OllamaConfig    `yaml:"ollamaConfig"`
 	NoveltyDetection       NoveltyDetection `yaml:"noveltyDetection"`
+	ShellEmulator          ShellEmulator    `yaml:"shellEmulator"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {

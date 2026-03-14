@@ -32,3 +32,12 @@ configurations/services/openclaw-18789.yaml:generic-api-key:675
 
 # Fake RSA key in MCP WorldState — honeypot filesystem breadcrumb (deploy-key.pem)
 protocols/strategies/MCP/state.go:private-key:516
+
+# Shell emulator honeypot lure credentials — all fake/example values for deception
+protocols/strategies/SSH/shellemulator/defaults.go:private-key:138
+protocols/strategies/SSH/shellemulator/defaults.go:generic-api-key:66
+
+# Shell emulator tests — fake canarytoken test values, not real credentials
+protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:51
+protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:56
+protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90

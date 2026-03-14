@@ -43,6 +43,8 @@ type LLMHoneypot struct {
 	Model                   string
 	Host                    string
 	CustomPrompt            string
+	Temperature             *float64
+	MaxTokens               *int
 	InputValidationEnabled  bool
 	InputValidationPrompt   string
 	OutputValidationEnabled bool
@@ -73,9 +75,11 @@ type Response struct {
 }
 
 type Request struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature *float64  `json:"temperature,omitempty"`
+	MaxTokens   *int      `json:"max_tokens,omitempty"`
 }
 
 type Message struct {
@@ -127,6 +131,8 @@ func BuildHoneypot(
 		Model:                   servConf.Plugin.LLMModel,
 		Provider:                llmProvider,
 		CustomPrompt:            servConf.Plugin.Prompt,
+		Temperature:             servConf.Plugin.Temperature,
+		MaxTokens:               servConf.Plugin.MaxTokens,
 		InputValidationEnabled:  servConf.Plugin.InputValidationEnabled,
 		InputValidationPrompt:   servConf.Plugin.InputValidationPrompt,
 		OutputValidationEnabled: servConf.Plugin.OutputValidationEnabled,
@@ -282,11 +288,14 @@ func (llmHoneypot *LLMHoneypot) buildOutputValidationPrompt(command string) ([]M
 func (llmHoneypot *LLMHoneypot) openAICaller(messages []Message) (string, error) {
 	var err error
 
-	requestJSON, err := json.Marshal(Request{
-		Model:    llmHoneypot.Model,
-		Messages: messages,
-		Stream:   false,
-	})
+	req := Request{
+		Model:       llmHoneypot.Model,
+		Messages:    messages,
+		Stream:      false,
+		Temperature: llmHoneypot.Temperature,
+		MaxTokens:   llmHoneypot.MaxTokens,
+	}
+	requestJSON, err := json.Marshal(req)
 	if err != nil {
 		return "", err
 	}
@@ -322,11 +331,14 @@ func (llmHoneypot *LLMHoneypot) openAICaller(messages []Message) (string, error)
 func (llmHoneypot *LLMHoneypot) ollamaCaller(messages []Message) (string, error) {
 	var err error
 
-	requestJSON, err := json.Marshal(Request{
-		Model:    llmHoneypot.Model,
-		Messages: messages,
-		Stream:   false,
-	})
+	req := Request{
+		Model:       llmHoneypot.Model,
+		Messages:    messages,
+		Stream:      false,
+		Temperature: llmHoneypot.Temperature,
+		MaxTokens:   llmHoneypot.MaxTokens,
+	}
+	requestJSON, err := json.Marshal(req)
 	if err != nil {
 		return "", err
 	}

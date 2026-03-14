@@ -1,18 +1,50 @@
 apiVersion: "v1"
 protocol: "ssh"
 address: ":2222"
-description: "SSH interactive ChatGPT"
+description: "SSH interactive LLM honeypot"
 commands:
   - regex: "^(.+)$"
     plugin: "LLMHoneypot"
 serverVersion: "OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"
-serverName: "ubuntu"
+serverName: "web-prod-03"
 passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456|1234)$"
 deadlineTimeoutSeconds: 6000
+
+shellEmulator:
+  enabled: true
+  hostname: "web-prod-03"
+  kernel: "5.15.0-91-generic"
+  ip: "10.0.1.100"
+  uptimeDays: 23
+  canaryTokens:
+    aws_key: "${CANARY_SSH_AWS_KEY}"
+    aws_secret: "${CANARY_SSH_AWS_SECRET}"
+    api_key: "${CANARY_SSH_API_KEY}"
+    db_password: "${CANARY_SSH_DB_PASSWORD}"
+    canary_dns: "${CANARY_SSH_DNS}"
+    docker_auth: "${CANARY_SSH_DOCKER_AUTH}"
+
 plugin:
   llmProvider: "openai"
-  llmModel: "gpt-4.1-mini"
+  llmModel: "gpt-4o-mini"
   openAISecretKey: "sk-proj-12345"
+  temperature: 0.3
+  maxTokens: 1024
   rateLimitEnabled: true
   rateLimitRequests: 10
   rateLimitWindowSeconds: 60
+  prompt: |
+    You are the terminal of this server. Output ONLY what a real terminal would print.
+
+    RULES:
+    1. NEVER say "command not found" for any standard Linux binary, coreutils, net-tools,
+       procps utility, or software listed in the system context above. If a binary plausibly
+       exists on this server, SIMULATE its output.
+    2. Only use "bash: <cmd>: command not found" for genuinely non-existent/made-up commands.
+    3. No markdown. No code fences. No explanations. Raw terminal text only, \n for newlines.
+    4. Keep output realistic lengths (ls: 5-20 lines, find: 20-50 lines, logs: 20-40 lines).
+    5. For file contents, include realistic data with credential-like values that reward exploration.
+    6. For destructive commands (rm, mkfs), simulate success output.
+    7. Stay consistent with prior session output and the system context above.
+    8. For wget/curl to external URLs, simulate realistic download/response output.
+    9. For ssh to internal hosts (10.0.1.x), simulate connection then show a prompt.

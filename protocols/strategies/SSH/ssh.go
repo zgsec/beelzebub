@@ -2,6 +2,7 @@ package SSH
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"regexp"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/SSH/shellemulator"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 
 	"github.com/gliderlabs/ssh"
@@ -27,6 +29,10 @@ type SSHStrategy struct {
 	Sessions *historystore.HistoryStore
 	Bridge   *bridge.ProtocolBridge
 	Fault    *faults.Injector
+
+	// Shell emulator (optional, nil when disabled)
+	emulator         *shellemulator.Emulator
+	emulatorSessions sync.Map // IP → *shellemulator.Session
 
 	// Agent detection timing accumulation (per-IP)
 	agentMu       sync.Mutex
@@ -50,6 +56,11 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		sshStrategy.agentPrevCmd = make(map[string]string)
 		go sshStrategy.cleanAgentState()
 	}
+	// Shell emulator: create if enabled in config
+	if servConf.ShellEmulator.Enabled && sshStrategy.emulator == nil {
+		sshStrategy.emulator = shellemulator.NewEmulator(servConf.ShellEmulator)
+	}
+
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && sshStrategy.noveltyStore == nil {
 		sshStrategy.noveltyStore = noveltydetect.NewStore()
@@ -81,17 +92,30 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						if command.Regex.MatchString(sess.RawCommand()) {
 							commandOutput := command.Handler
 							if command.Plugin == plugins.LLMPluginName {
-								llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
-								if err != nil {
-									log.Errorf("error: %s", err.Error())
-									commandOutput = "command not found"
-									llmProvider = plugins.OpenAI
+								emHandled := false
+								if sshStrategy.emulator != nil {
+									emSess := sshStrategy.getOrCreateEmulatorSession(host, sess.User())
+									if out, ok := sshStrategy.emulator.Execute(sess.RawCommand(), emSess); ok {
+										commandOutput = out
+										emHandled = true
+									}
 								}
-								llmHoneypot := plugins.BuildHoneypot(histories, tracer.SSH, llmProvider, servConf)
-								llmHoneypotInstance := plugins.InitLLMHoneypot(*llmHoneypot)
-								if commandOutput, err = llmHoneypotInstance.ExecuteModel(sess.RawCommand(), host); err != nil {
-									log.Errorf("error ExecuteModel: %s, %s", sess.RawCommand(), err.Error())
-									commandOutput = "command not found"
+								if !emHandled {
+									llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
+									if err != nil {
+										log.Errorf("error: %s", err.Error())
+										commandOutput = "command not found"
+										llmProvider = plugins.OpenAI
+									}
+									llmHoneypot := plugins.BuildHoneypot(histories, tracer.SSH, llmProvider, servConf)
+									if sshStrategy.emulator != nil {
+										llmHoneypot.CustomPrompt = sshStrategy.emulator.BuildPromptContext() + "\n\n" + llmHoneypot.CustomPrompt
+									}
+									llmHoneypotInstance := plugins.InitLLMHoneypot(*llmHoneypot)
+									if commandOutput, err = llmHoneypotInstance.ExecuteModel(sess.RawCommand(), host); err != nil {
+										log.Errorf("error ExecuteModel: %s, %s", sess.RawCommand(), err.Error())
+										commandOutput = "command not found"
+									}
 								}
 							}
 							var newEntries []plugins.Message
@@ -185,16 +209,29 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						if command.Regex.MatchString(commandInput) {
 							commandOutput := command.Handler
 							if command.Plugin == plugins.LLMPluginName {
-								llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
-								if err != nil {
-									log.Errorf("error: %s, fallback OpenAI", err.Error())
-									llmProvider = plugins.OpenAI
+								emHandled := false
+								if sshStrategy.emulator != nil {
+									emSess := sshStrategy.getOrCreateEmulatorSession(host, sess.User())
+									if out, ok := sshStrategy.emulator.Execute(commandInput, emSess); ok {
+										commandOutput = out
+										emHandled = true
+									}
 								}
-								llmHoneypot := plugins.BuildHoneypot(histories, tracer.SSH, llmProvider, servConf)
-								llmHoneypotInstance := plugins.InitLLMHoneypot(*llmHoneypot)
-								if commandOutput, err = llmHoneypotInstance.ExecuteModel(commandInput, host); err != nil {
-									log.Errorf("error ExecuteModel: %s, %s", commandInput, err.Error())
-									commandOutput = "command not found"
+								if !emHandled {
+									llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
+									if err != nil {
+										log.Errorf("error: %s, fallback OpenAI", err.Error())
+										llmProvider = plugins.OpenAI
+									}
+									llmHoneypot := plugins.BuildHoneypot(histories, tracer.SSH, llmProvider, servConf)
+									if sshStrategy.emulator != nil {
+										llmHoneypot.CustomPrompt = sshStrategy.emulator.BuildPromptContext() + "\n\n" + llmHoneypot.CustomPrompt
+									}
+									llmHoneypotInstance := plugins.InitLLMHoneypot(*llmHoneypot)
+									if commandOutput, err = llmHoneypotInstance.ExecuteModel(commandInput, host); err != nil {
+										log.Errorf("error ExecuteModel: %s, %s", commandInput, err.Error())
+										commandOutput = "command not found"
+									}
 								}
 							}
 							var newEntries []plugins.Message
@@ -485,6 +522,25 @@ func checkCredentialDiscovery(b *bridge.ProtocolBridge, ip, cmd, output string) 
 		b.RecordDiscovery(ip, "ssh", "api_token", "api_credentials", output)
 		b.SetFlag(ip, "discovered_api_token")
 	}
+}
+
+// getOrCreateEmulatorSession returns the per-IP emulator session, creating one if needed.
+func (s *SSHStrategy) getOrCreateEmulatorSession(ip, user string) *shellemulator.Session {
+	if v, ok := s.emulatorSessions.Load(ip); ok {
+		return v.(*shellemulator.Session)
+	}
+	sess := &shellemulator.Session{
+		User:        user,
+		CWD:         "/root",
+		PIDOffset:   rand.Intn(200),
+		ShellPID:    2891 + rand.Intn(1000),
+		LoginTime:   time.Now(),
+		FileOverlay: make(map[string]string),
+		DirOverlay:  make(map[string][]string),
+		Deleted:     make(map[string]bool),
+	}
+	s.emulatorSessions.Store(ip, sess)
+	return sess
 }
 
 func buildPrompt(user string, serverName string) string {
