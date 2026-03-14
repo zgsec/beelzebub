@@ -118,6 +118,15 @@ type OllamaConfig struct {
 	PromptEvalDelayMs int               `yaml:"promptEvalDelayMs"` // initial delay before first token (simulates prompt evaluation)
 }
 
+// JitterConfig allows overriding per-category jitter ranges (milliseconds).
+// Nil pointers mean "use default".
+type JitterConfig struct {
+	Identity *[2]int `yaml:"identity,omitempty"`
+	Memory   *[2]int `yaml:"memory,omitempty"`
+	Fs       *[2]int `yaml:"fs,omitempty"`
+	Network  *[2]int `yaml:"network,omitempty"`
+}
+
 // ShellEmulator configures the SSH command emulator.
 type ShellEmulator struct {
 	Enabled      bool                `yaml:"enabled"`
@@ -132,6 +141,7 @@ type ShellEmulator struct {
 	EnvVars      map[string]string   `yaml:"envVars"`
 	Lures        map[string]string   `yaml:"lures"`
 	Filesystem   map[string][]string `yaml:"filesystem"`
+	Jitter       JitterConfig        `yaml:"jitter,omitempty"`
 }
 
 // EmulatorProcess represents a process entry for the shell emulator.

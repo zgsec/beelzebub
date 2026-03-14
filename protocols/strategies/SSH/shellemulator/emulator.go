@@ -42,15 +42,16 @@ func (s *Session) initOverlays() {
 
 // Emulator dispatches shell commands against a persona.
 type Emulator struct {
-	persona  *Persona
-	handlers map[string]handlerFunc
-	jitter   map[string]string // command → jitter category
+	persona      *Persona
+	handlers     map[string]handlerFunc
+	jitter       map[string]string    // command → jitter category
+	jitterRanges map[string][2]int    // category → [min, max] ms
 }
 
 type handlerFunc func(args []string, sess *Session) string
 
-// jitter categories with min/max milliseconds
-var jitterRanges = map[string][2]int{
+// defaultJitterRanges defines jitter categories with min/max milliseconds.
+var defaultJitterRanges = map[string][2]int{
 	"identity": {1, 5},
 	"memory":   {2, 10},
 	"fs":       {3, 25},
@@ -192,6 +193,26 @@ func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 
 	e := &Emulator{persona: p}
 
+	// Initialize jitter ranges from defaults, then overlay config overrides
+	e.jitterRanges = make(map[string][2]int, len(defaultJitterRanges))
+	for k, v := range defaultJitterRanges {
+		e.jitterRanges[k] = v
+	}
+	if j := cfg.Jitter; true {
+		if j.Identity != nil {
+			e.jitterRanges["identity"] = *j.Identity
+		}
+		if j.Memory != nil {
+			e.jitterRanges["memory"] = *j.Memory
+		}
+		if j.Fs != nil {
+			e.jitterRanges["fs"] = *j.Fs
+		}
+		if j.Network != nil {
+			e.jitterRanges["network"] = *j.Network
+		}
+	}
+
 	e.handlers = make(map[string]handlerFunc, len(commandTable))
 	e.jitter = make(map[string]string, len(commandTable))
 	for name, def := range commandTable {
@@ -306,11 +327,15 @@ func (e *Emulator) applyJitter(cmd string) {
 	if !ok {
 		cat = "identity"
 	}
-	bounds, ok := jitterRanges[cat]
+	bounds, ok := e.jitterRanges[cat]
 	if !ok {
 		return
 	}
-	ms := bounds[0] + rand.Intn(bounds[1]-bounds[0]+1)
+	span := bounds[1] - bounds[0]
+	if span < 0 {
+		return
+	}
+	ms := bounds[0] + rand.Intn(span+1)
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 }
 
