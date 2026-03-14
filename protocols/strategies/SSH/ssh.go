@@ -36,6 +36,7 @@ type SSHStrategy struct {
 
 	// Novelty detection (optional, nil when disabled)
 	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyScorer     *noveltydetect.Scorer
 	noveltyWindowDays int
 	noveltySignals    sync.Map // IP → *noveltydetect.Signal
 }
@@ -50,9 +51,17 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		sshStrategy.agentPrevCmd = make(map[string]string)
 		go sshStrategy.cleanAgentState()
 	}
-	// Novelty detection: create store if enabled in config
+	// Novelty detection: create store + scorer if enabled in config
 	if servConf.NoveltyDetection.Enabled && sshStrategy.noveltyStore == nil {
 		sshStrategy.noveltyStore = noveltydetect.NewStore()
+		cfg := noveltydetect.DefaultConfig()
+		if servConf.NoveltyDetection.NovelThreshold > 0 {
+			cfg.NovelThreshold = servConf.NoveltyDetection.NovelThreshold
+		}
+		if servConf.NoveltyDetection.VariantThreshold > 0 {
+			cfg.VariantThreshold = servConf.NoveltyDetection.VariantThreshold
+		}
+		sshStrategy.noveltyScorer = noveltydetect.NewScorer(cfg)
 		sshStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
 		if sshStrategy.noveltyWindowDays <= 0 {
 			sshStrategy.noveltyWindowDays = 7
@@ -118,7 +127,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 									sig.CommandsNew++
 								}
 								sig.CommandsTotal++
-								rawNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+								rawNoveltyVerdict = sshStrategy.noveltyScorer.IncrementalScore(*sig)
 							}
 
 							tr.TraceEvent(tracer.Event{
@@ -222,7 +231,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 									sig.CommandsNew++
 								}
 								sig.CommandsTotal++
-								cmdNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+								cmdNoveltyVerdict = sshStrategy.noveltyScorer.IncrementalScore(*sig)
 							}
 
 							tr.TraceEvent(tracer.Event{
@@ -255,7 +264,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				if sshStrategy.noveltyStore != nil {
 					if raw, ok := sshStrategy.noveltySignals.LoadAndDelete(host); ok {
 						sig := raw.(*noveltydetect.Signal)
-						endNoveltyVerdict = noveltydetect.Score(*sig)
+						endNoveltyVerdict = sshStrategy.noveltyScorer.Score(*sig)
 					}
 				}
 
@@ -281,7 +290,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					if sshStrategy.noveltyStore.RecordCredPair(ctx.User(), password) {
 						sig.CredsNew++
 					}
-					authNoveltyVerdict = noveltydetect.IncrementalScore(*sig)
+					authNoveltyVerdict = sshStrategy.noveltyScorer.IncrementalScore(*sig)
 				}
 
 				tr.TraceEvent(tracer.Event{

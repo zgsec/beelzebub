@@ -96,6 +96,7 @@ type HTTPStrategy struct {
 
 	// Novelty detection (optional, nil when disabled)
 	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyScorer     *noveltydetect.Scorer
 	noveltyWindowDays int
 }
 
@@ -106,9 +107,17 @@ type httpResponse struct {
 }
 
 func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
-	// Novelty detection: create store if enabled in config
+	// Novelty detection: create store + scorer if enabled in config
 	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
 		httpStrategy.noveltyStore = noveltydetect.NewStore()
+		cfg := noveltydetect.DefaultConfig()
+		if servConf.NoveltyDetection.NovelThreshold > 0 {
+			cfg.NovelThreshold = servConf.NoveltyDetection.NovelThreshold
+		}
+		if servConf.NoveltyDetection.VariantThreshold > 0 {
+			cfg.VariantThreshold = servConf.NoveltyDetection.VariantThreshold
+		}
+		httpStrategy.noveltyScorer = noveltydetect.NewScorer(cfg)
 		httpStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
 		if httpStrategy.noveltyWindowDays <= 0 {
 			httpStrategy.noveltyWindowDays = 7
@@ -126,7 +135,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 			var err error
 			matched = command.Regex.MatchString(request.RequestURI)
 			if matched {
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, httpStrategy.noveltyScorer)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -140,7 +149,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, httpStrategy.noveltyScorer)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -175,7 +184,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 	return nil
 }
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore) (httpResponse, error) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, scorer *noveltydetect.Scorer) (httpResponse, error) {
 	resp := httpResponse{
 		Body:       command.Handler,
 		Headers:    command.Headers,
@@ -188,7 +197,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	if err == nil {
 		body = string(bodyBytes)
 	}
-	traceRequest(request, tr, command, servConf.Description, body, ns)
+	traceRequest(request, tr, command, servConf.Description, body, ns, scorer)
 
 	if command.Plugin == plugins.LLMPluginName {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
@@ -223,7 +232,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, scorer *noveltydetect.Scorer) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	sessionKey := "HTTP" + host
 
@@ -268,7 +277,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		if ua := request.UserAgent(); ua != "" {
 			novSig.UserAgentNew = ns.RecordUserAgent(ua)
 		}
-		noveltyVerdict = noveltydetect.IncrementalScore(novSig)
+		noveltyVerdict = scorer.IncrementalScore(novSig)
 	}
 
 	event := tracer.Event{

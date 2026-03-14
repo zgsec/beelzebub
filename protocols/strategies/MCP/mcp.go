@@ -51,6 +51,7 @@ type MCPStrategy struct {
 
 	// Novelty detection (optional, nil when disabled)
 	noveltyStore      *noveltydetect.FingerprintStore
+	noveltyScorer     *noveltydetect.Scorer
 	noveltyWindowDays int
 	noveltyToolSeqs   map[string][]string // IP → accumulated tool names for sequence tracking
 }
@@ -95,9 +96,17 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	mcpStrategy.toolHistory = make(map[string][]toolCallRecord)
 	mcpStrategy.agentTimings = make(map[string][]int64)
 	mcpStrategy.agentLastSeen = make(map[string]time.Time)
-	// Novelty detection: create store if enabled in config
+	// Novelty detection: create store + scorer if enabled in config
 	if servConf.NoveltyDetection.Enabled && mcpStrategy.noveltyStore == nil {
 		mcpStrategy.noveltyStore = noveltydetect.NewStore()
+		cfg := noveltydetect.DefaultConfig()
+		if servConf.NoveltyDetection.NovelThreshold > 0 {
+			cfg.NovelThreshold = servConf.NoveltyDetection.NovelThreshold
+		}
+		if servConf.NoveltyDetection.VariantThreshold > 0 {
+			cfg.VariantThreshold = servConf.NoveltyDetection.VariantThreshold
+		}
+		mcpStrategy.noveltyScorer = noveltydetect.NewScorer(cfg)
 		mcpStrategy.noveltyWindowDays = servConf.NoveltyDetection.WindowDays
 		if mcpStrategy.noveltyWindowDays <= 0 {
 			mcpStrategy.noveltyWindowDays = 7
@@ -618,7 +627,7 @@ func (s *MCPStrategy) recordNoveltyTool(ip, toolName string) noveltydetect.Verdi
 
 	sig.ToolSequenceNew = s.noveltyStore.RecordToolSequence(seq)
 
-	return noveltydetect.IncrementalScore(sig)
+	return s.noveltyScorer.IncrementalScore(sig)
 }
 
 // accumulateTiming records the current time for the given IP and returns the
