@@ -41,3 +41,6 @@ protocols/strategies/SSH/shellemulator/defaults.go:generic-api-key:66
 protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:51
 protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:56
 protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
+
+# .env.example — documented example values, not real secrets
+configurations/.env.example:generic-api-key:51
