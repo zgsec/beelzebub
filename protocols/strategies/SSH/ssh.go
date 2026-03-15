@@ -390,6 +390,17 @@ func (s *SSHStrategy) cleanAgentState() {
 			}
 			return true
 		})
+
+		// Clean stale emulator sessions (same cutoff as agent state)
+		s.emulatorSessions.Range(func(key, _ any) bool {
+			s.agentMu.Lock()
+			_, alive := s.agentLastSeen[key.(string)]
+			s.agentMu.Unlock()
+			if !alive {
+				s.emulatorSessions.Delete(key)
+			}
+			return true
+		})
 	}
 }
 
