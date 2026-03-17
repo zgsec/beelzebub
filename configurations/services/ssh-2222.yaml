@@ -1,7 +1,7 @@
 apiVersion: "v1"
 protocol: "ssh"
 address: ":2222"
-description: "SSH interactive LLM honeypot"
+description: "SSH LLM Honeypot Alt"
 commands:
   - regex: "^(.+)$"
     plugin: "LLMHoneypot"

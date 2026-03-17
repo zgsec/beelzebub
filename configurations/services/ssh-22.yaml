@@ -1,7 +1,7 @@
 apiVersion: "v1"
 protocol: "ssh"
 address: ":22"
-description: "SSH interactive"
+description: "SSH LLM Honeypot"
 commands:
   - regex: "^(.+)$"
     handler: ""

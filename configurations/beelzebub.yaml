@@ -1,9 +1,16 @@
+# =============================================================================
+# Beelzebub Fork — Core Configuration (production)
+# =============================================================================
+# logsPath must be absolute and match the Docker volume mount.
+# logDisableTimestamp must be false — the exporter parses event timestamps.
+# =============================================================================
+
 core:
   logging:
     debug: false
     debugReportCaller: false
-    logDisableTimestamp: true
-    logsPath: ./logs
+    logDisableTimestamp: false
+    logsPath: /var/log/beelzebub/beelzebub.log
   tracings:
     rabbit-mq:
       enabled: false
