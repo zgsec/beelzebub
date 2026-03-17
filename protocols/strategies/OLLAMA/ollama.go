@@ -22,6 +22,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 )
 
@@ -78,6 +79,35 @@ func (s *OllamaStrategy) getOrCreateSession(ip string) *OllamaSession {
 	}
 	s.ipSessions[ip] = sess
 	return sess
+}
+
+// llmResponse generates a response using the LLM plugin if configured.
+// Returns (response, true) on success, ("", false) if not configured or on failure.
+// The LLM generates only the response text; callers wrap it in the appropriate
+// API envelope (Ollama JSON, OpenAI JSON, streaming NDJSON, etc.).
+func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
+	if servConf.Plugin.LLMProvider == "" {
+		return "", false
+	}
+	llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
+	if err != nil {
+		log.Warnf("Ollama LLM provider error: %v", err)
+		return "", false
+	}
+	llmHoneypot := plugins.BuildHoneypot(nil, tracer.HTTP, llmProvider, servConf)
+	llmInstance := plugins.InitLLMHoneypot(*llmHoneypot)
+
+	// Pass the user's prompt directly — the custom system prompt handles persona
+	response, err := llmInstance.ExecuteModel(prompt, host)
+	if err != nil {
+		if err == plugins.ErrRateLimited {
+			log.WithField("host", host).Warn("Ollama LLM rate limited, falling back to templates")
+		} else {
+			log.WithFields(log.Fields{"host": host, "error": err}).Warn("Ollama LLM failed, falling back to templates")
+		}
+		return "", false
+	}
+	return response, true
 }
 
 func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -631,10 +661,16 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	category := categorizePrompt(req.Prompt)
-	s.rngMu.Lock()
-	response := buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-	s.rngMu.Unlock()
+	// Try LLM-powered response first, fall back to templates
+	var response string
+	if llmResp, ok := s.llmResponse(req.Prompt, req.Model, host, servConf); ok {
+		response = llmResp
+	} else {
+		category := categorizePrompt(req.Prompt)
+		s.rngMu.Lock()
+		response = buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+		s.rngMu.Unlock()
+	}
 
 	// Empty response = degradation tier 3 simulated error (real Ollama error format)
 	if response == "" {
@@ -733,10 +769,16 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		}
 	}
 
-	category := categorizePrompt(prompt)
-	s.rngMu.Lock()
-	response := buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-	s.rngMu.Unlock()
+	// Try LLM-powered response first, fall back to templates
+	var response string
+	if llmResp, ok := s.llmResponse(prompt, req.Model, host, servConf); ok {
+		response = llmResp
+	} else {
+		category := categorizePrompt(prompt)
+		s.rngMu.Lock()
+		response = buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+		s.rngMu.Unlock()
+	}
 
 	// Empty response = degradation tier 3 simulated error
 	if response == "" {
@@ -1003,10 +1045,16 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	category := categorizePrompt(prompt)
-	s.rngMu.Lock()
-	response := buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-	s.rngMu.Unlock()
+	// Try LLM-powered response first, fall back to templates
+	var response string
+	if llmResp, ok := s.llmResponse(prompt, req.Model, host, servConf); ok {
+		response = llmResp
+	} else {
+		category := categorizePrompt(prompt)
+		s.rngMu.Lock()
+		response = buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+		s.rngMu.Unlock()
+	}
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
@@ -1075,10 +1123,16 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		}
 	}
 
-	category := categorizePrompt(req.Prompt)
-	s.rngMu.Lock()
-	response := buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-	s.rngMu.Unlock()
+	// Try LLM-powered response first, fall back to templates
+	var response string
+	if llmResp, ok := s.llmResponse(req.Prompt, req.Model, host, servConf); ok {
+		response = llmResp
+	} else {
+		category := categorizePrompt(req.Prompt)
+		s.rngMu.Lock()
+		response = buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
+		s.rngMu.Unlock()
+	}
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {

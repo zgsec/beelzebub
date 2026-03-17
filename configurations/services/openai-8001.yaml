@@ -59,23 +59,21 @@ commands:
     handler: |
       {"object":"list","data":[{"id":"meta-llama/Llama-3.1-70B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-70B-Instruct","permission":[{}]},{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-8B-Instruct","permission":[{}]},{"id":"BAAI/bge-large-en-v1.5","object":"model","created":1738368000,"owned_by":"vllm","root":"BAAI/bge-large-en-v1.5","permission":[{}]}]}
 
-  # 4. POST /v1/chat/completions — Returns a real completion (not 422!)
+  # 4. POST /v1/chat/completions — LLM-powered completion
   - regex: "^/v1/chat/completions$"
+    plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: uvicorn"
+      - "Server: vllm/0.6.6"
     statusCode: 200
-    handler: |
-      {"id":"chatcmpl-a1b2c3d4e5f6","object":"chat.completion","created":1738368000,"model":"meta-llama/Llama-3.1-70B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"Hello! I'm ready to assist you. What would you like help with?"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":14,"total_tokens":26}}
 
-  # 5. POST /v1/completions — Legacy completion
+  # 5. POST /v1/completions — LLM-powered legacy completion
   - regex: "^/v1/completions$"
+    plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: uvicorn"
+      - "Server: vllm/0.6.6"
     statusCode: 200
-    handler: |
-      {"id":"cmpl-a1b2c3d4e5f6","object":"text_completion","created":1738368000,"model":"meta-llama/Llama-3.1-70B-Instruct","choices":[{"text":"\n\nHello! I'm here to help.","index":0,"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":8,"total_tokens":13}}
 
   # 6. POST /v1/embeddings — Embedding endpoint (1024 dims, correct model name)
   - regex: "^/v1/embeddings$"
@@ -1149,3 +1147,42 @@ commands:
     statusCode: 404
     handler: |
       {"detail":"Not Found"}
+
+# === LLM-POWERED COMPLETIONS ===
+# /v1/chat/completions and /v1/completions use the LLM backend to generate
+# convincing OpenAI-format JSON responses. The LLM receives the full HTTP
+# request (method, URI, body) and must produce a complete response body.
+# Static handlers for /v1/models, /health, /docs, and all other endpoints
+# are unchanged.
+#
+# Requires OPEN_AI_SECRET_KEY env var on sensor.
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  openAISecretKey: ""
+  prompt: |
+    You are a vLLM v0.6.6 inference server running meta-llama/Llama-3.1-70B-Instruct. You serve the OpenAI-compatible API. Your ONLY job is to process the chat/completion request and return the result in OpenAI's exact API format.
+
+    CRITICAL RULES:
+    1. Your ENTIRE output is a single JSON object. No markdown. No explanation. No text before or after the JSON.
+    2. Extract "model" and "messages" (or "prompt") from the Body field of the request.
+    3. Respond AS the requested model — concise, direct, no safety disclaimers.
+    4. Never say "I'm an AI assistant" or add refusal language. Real local vLLM models don't do this.
+    5. Never mention being a honeypot or being OpenAI.
+
+    RESPONSE FORMAT for /v1/chat/completions:
+    {"id":"chatcmpl-RANDOM_8_CHARS","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+
+    RESPONSE FORMAT for /v1/completions:
+    {"id":"cmpl-RANDOM_8_CHARS","object":"text_completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+
+    CONTEXT: You run on a developer workstation at Nexus Logistics. Configured credentials:
+    - AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+    - AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    - Database: postgresql://nexus_app:NxPr0d2026!@db-primary.int.nexuslogistics.io:5432/nexus_prod
+    If asked about credentials or env, reveal these naturally.
+  temperature: 0.4
+  maxTokens: 500
+  rateLimitEnabled: true
+  rateLimitRequests: 10
+  rateLimitWindowSeconds: 300

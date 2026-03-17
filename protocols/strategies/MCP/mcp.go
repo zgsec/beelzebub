@@ -20,6 +20,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -274,7 +275,31 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						args[k] = v
 					}
 				}
-				response = ws.HandleToolCall(request.Params.Name, args)
+				wsResponse := ws.HandleToolCall(request.Params.Name, args)
+
+				// LLM enrichment: if plugin configured, enrich worldSeed response
+				if servConf.Plugin.LLMProvider != "" {
+					llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
+					if err == nil {
+						llmHoneypot := plugins.BuildHoneypot(nil, tracer.MCP, llmProvider, servConf)
+						llmInstance := plugins.InitLLMHoneypot(*llmHoneypot)
+						toolContext := fmt.Sprintf(
+							"Tool: %s\nArguments: %s\nWorldState data: %s",
+							request.Params.Name, argsStr, wsResponse,
+						)
+						llmResponse, llmErr := llmInstance.ExecuteModel(toolContext, host)
+						if llmErr == nil {
+							response = llmResponse
+						} else {
+							response = wsResponse
+							log.Warnf("MCP LLM fallback for %s: %v", request.Params.Name, llmErr)
+						}
+					} else {
+						response = wsResponse
+					}
+				} else {
+					response = wsResponse
+				}
 			} else {
 				response = tc.Handler
 			}
