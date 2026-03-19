@@ -50,6 +50,9 @@ type MCPStrategy struct {
 	agentTimings  map[string][]int64
 	agentLastSeen map[string]time.Time
 
+	// Cached LLM instance for tool-call enrichment (nil when LLM not configured)
+	llmInstance *plugins.LLMHoneypot
+
 	// Novelty detection (optional, nil when disabled)
 	noveltyStore      *noveltydetect.FingerprintStore
 	noveltyWindowDays int
@@ -105,6 +108,26 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		}
 		mcpStrategy.noveltyToolSeqs = make(map[string][]string)
 	}
+
+	// Cache LLM instance at init time to avoid per-call allocation and connection churn.
+	if servConf.Plugin.LLMProvider != "" {
+		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
+		if err == nil {
+			honeypot := plugins.BuildHoneypot(nil, tracer.MCP, llmProvider, servConf)
+			instance := plugins.InitLLMHoneypot(*honeypot)
+			// Set Host eagerly to avoid data race in openAICaller/ollamaCaller
+			if instance.Host == "" {
+				switch llmProvider {
+				case plugins.OpenAI:
+					instance.Host = "https://api.openai.com/v1/chat/completions"
+				case plugins.Ollama:
+					instance.Host = "http://localhost:11434/api/chat"
+				}
+			}
+			mcpStrategy.llmInstance = instance
+		}
+	}
+
 	go mcpStrategy.cleanAgentState()
 
 	hasWorldSeed := len(servConf.WorldSeed.Users) > 0 || len(servConf.WorldSeed.Resources) > 0
@@ -277,25 +300,18 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 				wsResponse := ws.HandleToolCall(request.Params.Name, args)
 
-				// LLM enrichment: if plugin configured, enrich worldSeed response
-				if servConf.Plugin.LLMProvider != "" {
-					llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
-					if err == nil {
-						llmHoneypot := plugins.BuildHoneypot(nil, tracer.MCP, llmProvider, servConf)
-						llmInstance := plugins.InitLLMHoneypot(*llmHoneypot)
-						toolContext := fmt.Sprintf(
-							"Tool: %s\nArguments: %s\nWorldState data: %s",
-							request.Params.Name, argsStr, wsResponse,
-						)
-						llmResponse, llmErr := llmInstance.ExecuteModel(toolContext, host)
-						if llmErr == nil {
-							response = llmResponse
-						} else {
-							response = wsResponse
-							log.Warnf("MCP LLM fallback for %s: %v", request.Params.Name, llmErr)
-						}
+				// LLM enrichment: use cached instance if available
+				if mcpStrategy.llmInstance != nil {
+					toolContext := fmt.Sprintf(
+						"Tool: %s\nArguments: %s\nWorldState data: %s",
+						request.Params.Name, argsStr, wsResponse,
+					)
+					llmResponse, llmErr := mcpStrategy.llmInstance.ExecuteModel(toolContext, host)
+					if llmErr == nil {
+						response = llmResponse
 					} else {
 						response = wsResponse
+						log.Warnf("MCP LLM fallback for %s: %v", request.Params.Name, llmErr)
 					}
 				} else {
 					response = wsResponse
