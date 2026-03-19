@@ -241,7 +241,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 			// Check fault injection first
 			if mcpStrategy.Fault != nil {
-				faultResp, faultType, faulted := mcpStrategy.Fault.Apply()
+				faultResp, faultType, faulted := mcpStrategy.Fault.ApplyWithSequence(seq)
 				if faulted {
 					// Classify even faulted events
 					faultSig := agentdetect.Signal{

@@ -75,6 +75,54 @@ func TestApplyErrorOnly(t *testing.T) {
 	assert.Contains(t, resp, "test")
 }
 
+func TestApplyWithSequenceGracePeriod(t *testing.T) {
+	fi := NewInjector(Config{
+		Enabled:        true,
+		ErrorRate:      1.0, // 100% error rate
+		ErrorResponses: []string{`{"error":"test"}`},
+	})
+	// Default grace is 3 — calls 1-3 should not fault
+	for seq := 1; seq <= 3; seq++ {
+		_, ft, faulted := fi.ApplyWithSequence(seq)
+		assert.False(t, faulted, "seq %d should be in grace period", seq)
+		assert.Equal(t, "", ft)
+	}
+	// Call 4 should fault (100% error rate)
+	_, ft, faulted := fi.ApplyWithSequence(4)
+	assert.True(t, faulted)
+	assert.Equal(t, "error", ft)
+}
+
+func TestApplyWithSequenceDelayDuringGrace(t *testing.T) {
+	fi := NewInjector(Config{
+		Enabled:       true,
+		ErrorRate:     1.0,
+		DelayMs:       1, // minimal delay for test speed
+		DelayJitterMs: 0,
+	})
+	// During grace period: delay still applies, but no error fault
+	_, ft, faulted := fi.ApplyWithSequence(1)
+	assert.False(t, faulted)
+	assert.Equal(t, "delay", ft)
+}
+
+func TestApplyWithSequenceCustomGrace(t *testing.T) {
+	fi := NewInjector(Config{
+		Enabled:        true,
+		ErrorRate:      1.0,
+		ErrorResponses: []string{`{"error":"test"}`},
+	})
+	fi.GraceCalls = 1
+
+	// seq 1 should be in grace
+	_, _, faulted := fi.ApplyWithSequence(1)
+	assert.False(t, faulted)
+
+	// seq 2 should fault
+	_, _, faulted = fi.ApplyWithSequence(2)
+	assert.True(t, faulted)
+}
+
 func TestHasDelay(t *testing.T) {
 	fi := NewInjector(Config{Enabled: true, DelayMs: 0, DelayJitterMs: 0})
 	assert.False(t, fi.HasDelay())

@@ -17,16 +17,18 @@ type Config struct {
 
 // Injector applies fault injection based on configuration.
 type Injector struct {
-	mu     sync.Mutex
-	config Config
-	rng    *rand.Rand
+	mu         sync.Mutex
+	config     Config
+	rng        *rand.Rand
+	GraceCalls int // number of initial calls exempt from error faults
 }
 
 // NewInjector creates a fault injector from config.
 func NewInjector(config Config) *Injector {
 	return &Injector{
-		config: config,
-		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		config:     config,
+		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		GraceCalls: 3,
 	}
 }
 
@@ -82,6 +84,38 @@ func (fi *Injector) Apply() (response string, faultType string, faulted bool) {
 
 	hasDelay := fi.HasDelay()
 	isError := fi.ShouldFault()
+
+	if hasDelay {
+		time.Sleep(fi.Delay())
+	}
+
+	if isError && hasDelay {
+		return fi.ErrorResponse(), "error+delay", true
+	}
+	if isError {
+		return fi.ErrorResponse(), "error", true
+	}
+	if hasDelay {
+		return "", "delay", false
+	}
+	return "", "", false
+}
+
+// ApplyWithSequence applies fault injection with a grace period.
+// During the grace period (seq <= GraceCalls), error faults are suppressed
+// but delays still apply. After the grace period, behaves like Apply.
+func (fi *Injector) ApplyWithSequence(seq int) (response string, faultType string, faulted bool) {
+	if !fi.config.Enabled {
+		return "", "", false
+	}
+
+	hasDelay := fi.HasDelay()
+	isError := fi.ShouldFault()
+
+	// Suppress error faults during grace period
+	if seq <= fi.GraceCalls {
+		isError = false
+	}
 
 	if hasDelay {
 		time.Sleep(fi.Delay())
