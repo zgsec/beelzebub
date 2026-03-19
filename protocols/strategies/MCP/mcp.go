@@ -602,6 +602,7 @@ func (s *MCPStrategy) cleanAgentState() {
 				delete(s.agentTimings, ip)
 				delete(s.agentLastSeen, ip)
 				delete(s.toolHistory, ip)
+				delete(s.worldState, ip)
 				// Clean novelty tool sequence accumulator for stale IPs
 				if s.noveltyToolSeqs != nil {
 					delete(s.noveltyToolSeqs, ip)
