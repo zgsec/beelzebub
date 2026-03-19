@@ -245,7 +245,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						ToolChainDepth:      0,
 						InterEventTimingsMs: timings,
 						HasIdenticalRetries: isRetry,
-						HasAIDiscoveryProbe: true,
+						HasAIDiscoveryProbe: seq == 1,
 					}
 					if mcpStrategy.Bridge != nil {
 						faultSig.HasCrossProtocol = mcpStrategy.buildCrossRef(host) != ""
@@ -349,7 +349,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				InterEventTimingsMs: timings,
 				HasIdenticalRetries: isRetry,
 				HasCrossProtocol:    crossRef != "",
-				HasAIDiscoveryProbe: true, // any MCP tool call is an AI probe
+				HasAIDiscoveryProbe: seq == 1, // only first call is discovery
 			}
 			verdict := agentdetect.IncrementalClassify(sig)
 
