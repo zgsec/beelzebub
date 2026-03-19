@@ -151,6 +151,123 @@ func TestUserListUsers(t *testing.T) {
 	assert.Contains(t, result, "usr_002")
 }
 
+func TestReadFileEtcPasswd(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("read_file", map[string]interface{}{
+		"path": "/etc/passwd",
+	})
+	var resp map[string]interface{}
+	err := json.Unmarshal([]byte(result), &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, true, resp["ok"])
+	content := resp["content"].(string)
+	assert.Contains(t, content, "nexus-svc")
+	assert.Contains(t, content, "postgres")
+	assert.Contains(t, content, "redis")
+}
+
+func TestReadFileEtcShadow(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("read_file", map[string]interface{}{
+		"path": "/etc/shadow",
+	})
+	assert.Contains(t, result, "$6$rounds=")
+	assert.Contains(t, result, "nexus-svc")
+}
+
+func TestReadFileProcEnviron(t *testing.T) {
+	seed := testSeed()
+	seed.Resources["aws_access_key_id"] = "AKIAZTESTKEY"
+	ws := NewWorldState(seed)
+	result := ws.HandleToolCall("read_file", map[string]interface{}{
+		"path": "/proc/self/environ",
+	})
+	assert.Contains(t, result, "AKIAZTESTKEY")
+	assert.Contains(t, result, "VAULT_TOKEN=")
+}
+
+func TestReadFileGitConfig(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("read_file", map[string]interface{}{
+		"path": ".git/config",
+	})
+	assert.Contains(t, result, "nexuslogistics/platform-services.git")
+	assert.Contains(t, result, "hotfix/inc-4728")
+}
+
+func TestReadFileDockerConfig(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("read_file", map[string]interface{}{
+		"path": ".docker/config.json",
+	})
+	assert.Contains(t, result, "registry.int.nexuslogistics.io")
+}
+
+func TestExecuteCommandSudoList(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "sudo -l",
+	})
+	assert.Contains(t, result, "NOPASSWD")
+	assert.Contains(t, result, "/usr/bin/docker")
+	assert.Contains(t, result, "/usr/local/bin/kubectl")
+}
+
+func TestExecuteCommandAwsSts(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "aws sts get-caller-identity",
+	})
+	assert.Contains(t, result, "491837264059")
+	assert.Contains(t, result, "nexus-svc-prod")
+}
+
+func TestExecuteCommandAwsS3Ls(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "aws s3 ls",
+	})
+	assert.Contains(t, result, "nexus-prod-backups")
+	assert.Contains(t, result, "nexus-internal-configs")
+}
+
+func TestExecuteCommandCatEtcPasswd(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "cat /etc/passwd",
+	})
+	assert.Contains(t, result, "nexus-svc")
+	assert.Contains(t, result, "postgres")
+}
+
+func TestExecuteCommandCatProcEnviron(t *testing.T) {
+	seed := testSeed()
+	seed.Resources["aws_access_key_id"] = "AKIAZTESTKEY"
+	ws := NewWorldState(seed)
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "cat /proc/self/environ",
+	})
+	assert.Contains(t, result, "AKIAZTESTKEY")
+}
+
+func TestExecuteCommandMount(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "mount",
+	})
+	assert.Contains(t, result, "kubernetes.io/serviceaccount")
+	assert.Contains(t, result, "tmpfs")
+}
+
+func TestExecuteCommandLsSecrets(t *testing.T) {
+	ws := NewWorldState(testSeed())
+	result := ws.HandleToolCall("execute_command", map[string]interface{}{
+		"command": "ls /var/run/secrets/kubernetes.io/serviceaccount",
+	})
+	assert.Contains(t, result, "token")
+	assert.Contains(t, result, "ca.crt")
+}
+
 func TestPerIPIsolation(t *testing.T) {
 	seed := testSeed()
 	ws1 := NewWorldState(seed)
