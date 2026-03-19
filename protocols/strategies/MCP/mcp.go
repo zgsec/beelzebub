@@ -43,12 +43,15 @@ type MCPStrategy struct {
 	Fault       *faults.Injector
 	worldState  map[string]*WorldState
 	worldMu     sync.RWMutex
-	seedConfig  WorldSeed
+	seedConfig WorldSeed
+
 	toolHistory map[string][]toolCallRecord // IP → ordered tool call records
+	historyMu   sync.RWMutex
 
 	// Agent detection timing accumulation (per-IP)
 	agentTimings  map[string][]int64
 	agentLastSeen map[string]time.Time
+	timingMu      sync.RWMutex
 
 	// Cached LLM instance for tool-call enrichment (nil when LLM not configured)
 	llmInstance *plugins.LLMHoneypot
@@ -57,6 +60,7 @@ type MCPStrategy struct {
 	noveltyStore      *noveltydetect.FingerprintStore
 	noveltyWindowDays int
 	noveltyToolSeqs   map[string][]string // IP → accumulated tool names for sequence tracking
+	noveltyMu         sync.Mutex
 }
 
 func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
@@ -454,9 +458,9 @@ var reqIDPattern = regexp.MustCompile(`req_[0-9a-f]{12}`)
 // detectToolChain checks if the current tool call's arguments reference outputs
 // from previous tool calls for this IP. Returns (depth, comma-separated dependency list).
 func (s *MCPStrategy) detectToolChain(ip, argsStr string) (int, string) {
-	s.worldMu.RLock()
+	s.historyMu.RLock()
 	history := s.toolHistory[ip]
-	s.worldMu.RUnlock()
+	s.historyMu.RUnlock()
 
 	if len(history) == 0 {
 		return 0, ""
@@ -512,9 +516,9 @@ func (s *MCPStrategy) computeChainDepth(ip string, directDeps []string) int {
 	// A tool that depends on one prior tool has depth 1.
 	// If that prior tool also depended on something, depth 2, etc.
 	// We cap at the total history length to prevent pathological cases.
-	s.worldMu.RLock()
+	s.historyMu.RLock()
 	history := s.toolHistory[ip]
-	s.worldMu.RUnlock()
+	s.historyMu.RUnlock()
 
 	if len(directDeps) == 0 {
 		return 0
@@ -591,8 +595,8 @@ func (s *MCPStrategy) recordToolCall(ip, toolName, output string) {
 		rid = ids[0]
 	}
 
-	s.worldMu.Lock()
-	defer s.worldMu.Unlock()
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
 
 	s.toolHistory[ip] = append(s.toolHistory[ip], toolCallRecord{
 		ToolName:  toolName,
@@ -612,20 +616,53 @@ func (s *MCPStrategy) cleanAgentState() {
 	for {
 		time.Sleep(5 * time.Minute)
 		cutoff := time.Now().Add(-60 * time.Minute)
-		s.worldMu.Lock()
+
+		// Collect stale IPs under timing read lock
+		s.timingMu.RLock()
+		var staleIPs []string
 		for ip, last := range s.agentLastSeen {
 			if last.Before(cutoff) {
-				delete(s.agentTimings, ip)
-				delete(s.agentLastSeen, ip)
-				delete(s.toolHistory, ip)
-				delete(s.worldState, ip)
-				// Clean novelty tool sequence accumulator for stale IPs
-				if s.noveltyToolSeqs != nil {
-					delete(s.noveltyToolSeqs, ip)
-				}
+				staleIPs = append(staleIPs, ip)
 			}
 		}
+		s.timingMu.RUnlock()
+
+		if len(staleIPs) == 0 {
+			// Still clean novelty store even if no stale IPs
+			if s.noveltyStore != nil {
+				maxAge := time.Duration(s.noveltyWindowDays) * 24 * time.Hour
+				s.noveltyStore.Clean(maxAge)
+			}
+			continue
+		}
+
+		// Delete from each map under its own write lock
+		s.timingMu.Lock()
+		for _, ip := range staleIPs {
+			delete(s.agentTimings, ip)
+			delete(s.agentLastSeen, ip)
+		}
+		s.timingMu.Unlock()
+
+		s.historyMu.Lock()
+		for _, ip := range staleIPs {
+			delete(s.toolHistory, ip)
+		}
+		s.historyMu.Unlock()
+
+		s.worldMu.Lock()
+		for _, ip := range staleIPs {
+			delete(s.worldState, ip)
+		}
 		s.worldMu.Unlock()
+
+		if s.noveltyToolSeqs != nil {
+			s.noveltyMu.Lock()
+			for _, ip := range staleIPs {
+				delete(s.noveltyToolSeqs, ip)
+			}
+			s.noveltyMu.Unlock()
+		}
 
 		// Clean novelty store if enabled
 		if s.noveltyStore != nil {
@@ -648,7 +685,7 @@ func (s *MCPStrategy) recordNoveltyTool(ip, toolName string) noveltydetect.Verdi
 	sig.CommandsTotal++
 
 	// Accumulate tool sequence per IP and check novelty
-	s.worldMu.Lock()
+	s.noveltyMu.Lock()
 	s.noveltyToolSeqs[ip] = append(s.noveltyToolSeqs[ip], toolName)
 	seq := make([]string, len(s.noveltyToolSeqs[ip]))
 	copy(seq, s.noveltyToolSeqs[ip])
@@ -656,7 +693,7 @@ func (s *MCPStrategy) recordNoveltyTool(ip, toolName string) noveltydetect.Verdi
 	if len(s.noveltyToolSeqs[ip]) > 100 {
 		s.noveltyToolSeqs[ip] = s.noveltyToolSeqs[ip][len(s.noveltyToolSeqs[ip])-100:]
 	}
-	s.worldMu.Unlock()
+	s.noveltyMu.Unlock()
 
 	sig.ToolSequenceNew = s.noveltyStore.RecordToolSequence(seq)
 
@@ -667,8 +704,8 @@ func (s *MCPStrategy) recordNoveltyTool(ip, toolName string) noveltydetect.Verdi
 // accumulated inter-event timing deltas. Cap at 100 entries to bound memory.
 func (s *MCPStrategy) accumulateTiming(ip string) []int64 {
 	now := time.Now()
-	s.worldMu.Lock()
-	defer s.worldMu.Unlock()
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
 	if last, ok := s.agentLastSeen[ip]; ok {
 		delta := now.Sub(last).Milliseconds()
 		s.agentTimings[ip] = append(s.agentTimings[ip], delta)
