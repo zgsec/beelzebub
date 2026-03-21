@@ -1,6 +1,10 @@
 package tracer
 
-import "net"
+import (
+	"bytes"
+	"encoding/binary"
+	"net"
+)
 
 // contextKey is a typed key for storing TeeConn in context.Context or ssh.Context.
 type contextKey struct{ name string }
@@ -8,23 +12,56 @@ type contextKey struct{ name string }
 // TeeConnKey is the context key for retrieving the *TeeConn from a request or session context.
 var TeeConnKey = &contextKey{"tee-conn"}
 
-// TeeConn wraps a net.Conn to capture the first maxCap bytes of Read() data
-// while passing them through unmodified. Used by JA4H (HTTP header order) and
-// HASSH (SSH KEXINIT) to access raw protocol bytes that Go's parsers discard.
+// StopFunc inspects captured bytes and returns true when capture should stop.
+// Called after each Read() with the full accumulated buffer.
+type StopFunc func(buf []byte) bool
+
+// HTTPStopFunc stops capture after \r\n\r\n (end of HTTP headers).
+func HTTPStopFunc(buf []byte) bool {
+	return bytes.Contains(buf, []byte("\r\n\r\n"))
+}
+
+// SSHStopFunc stops capture after the version string + a complete binary packet.
+// Validates that the packet contains SSH_MSG_KEXINIT (type 20).
+func SSHStopFunc(buf []byte) bool {
+	nl := bytes.IndexByte(buf, '\n')
+	if nl < 0 {
+		return false // version string not yet complete
+	}
+	rest := buf[nl+1:]
+	if len(rest) < 5 {
+		return false // packet header not yet received
+	}
+	pktLen := binary.BigEndian.Uint32(rest[:4])
+	if pktLen < 2 || pktLen > 35000 {
+		return true // malformed — stop capturing garbage
+	}
+	needed := 4 + int(pktLen) // header(4) + packet body
+	return len(rest) >= needed
+}
+
+// TeeConn wraps a net.Conn to capture raw bytes during Read() while passing
+// them through unmodified. Capture stops when stopFn returns true or maxCap
+// is reached (safety limit). Used by JA4H (HTTP) and HASSH (SSH).
 //
 // No mutex — Read() and RawBytes() are called sequentially within the same
-// goroutine (HTTP handler or SSH session handler). No replay — bytes flow
-// to the parser normally.
+// goroutine. No replay — bytes flow to the parser normally.
 type TeeConn struct {
 	net.Conn
 	buf    []byte
 	maxCap int
 	done   bool
+	stopFn StopFunc
 }
 
 // NewTeeConn wraps a connection for raw byte capture.
-func NewTeeConn(c net.Conn, maxCapture int) *TeeConn {
-	return &TeeConn{Conn: c, buf: make([]byte, 0, 1024), maxCap: maxCapture}
+func NewTeeConn(c net.Conn, maxCapture int, stop StopFunc) *TeeConn {
+	return &TeeConn{
+		Conn:   c,
+		buf:    make([]byte, 0, 1024),
+		maxCap: maxCapture,
+		stopFn: stop,
+	}
 }
 
 func (c *TeeConn) Read(p []byte) (int, error) {
@@ -37,7 +74,8 @@ func (c *TeeConn) Read(p []byte) (int, error) {
 			}
 			c.buf = append(c.buf, p[:grab]...)
 		}
-		if len(c.buf) >= c.maxCap {
+		// Stop when protocol preamble is complete or safety cap reached
+		if (c.stopFn != nil && c.stopFn(c.buf)) || len(c.buf) >= c.maxCap {
 			c.done = true
 		}
 	}
@@ -52,11 +90,12 @@ func (c *TeeConn) RawBytes() []byte { return c.buf }
 type TeeListener struct {
 	net.Listener
 	MaxCapture int
+	StopFn     StopFunc
 }
 
-// NewTeeListener creates a listener that captures the first maxCapture bytes of each connection.
-func NewTeeListener(l net.Listener, maxCapture int) *TeeListener {
-	return &TeeListener{Listener: l, MaxCapture: maxCapture}
+// NewTeeListener creates a listener that captures connection preambles.
+func NewTeeListener(l net.Listener, maxCapture int, stop StopFunc) *TeeListener {
+	return &TeeListener{Listener: l, MaxCapture: maxCapture, StopFn: stop}
 }
 
 func (l *TeeListener) Accept() (net.Conn, error) {
@@ -64,5 +103,5 @@ func (l *TeeListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return conn, err
 	}
-	return NewTeeConn(conn, l.MaxCapture), nil
+	return NewTeeConn(conn, l.MaxCapture, l.StopFn), nil
 }

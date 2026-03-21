@@ -167,9 +167,9 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		}
 		var err error
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			err = srv.ServeTLS(tracer.NewTeeListener(ln, 8192), servConf.TLSCertPath, servConf.TLSKeyPath)
+			err = srv.ServeTLS(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc), servConf.TLSCertPath, servConf.TLSKeyPath)
 		} else {
-			err = srv.Serve(tracer.NewTeeListener(ln, 8192))
+			err = srv.Serve(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc))
 		}
 		if err != nil {
 			log.Errorf("error during init HTTP Protocol: %v", err)

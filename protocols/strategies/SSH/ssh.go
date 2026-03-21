@@ -79,7 +79,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			IdleTimeout: time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
 			Version:     servConf.ServerVersion,
 			ConnCallback: func(ctx ssh.Context, conn net.Conn) net.Conn {
-				tc := tracer.NewTeeConn(conn, 4096)
+				tc := tracer.NewTeeConn(conn, 8192, tracer.SSHStopFunc)
 				ctx.SetValue(tracer.TeeConnKey, tc)
 				return tc
 			},

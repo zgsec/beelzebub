@@ -241,7 +241,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 				return context.WithValue(ctx, tracer.TeeConnKey, c)
 			},
 		}
-		if err := srv.Serve(tracer.NewTeeListener(ln, 8192)); err != nil {
+		if err := srv.Serve(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc)); err != nil {
 			log.Errorf("Failed to start Ollama server on %s: %v", servConf.Address, err)
 		}
 	}()
