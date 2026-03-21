@@ -1,6 +1,7 @@
 package OLLAMA
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -229,7 +230,18 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	}))
 
 	go func() {
-		if err := http.ListenAndServe(servConf.Address, mux); err != nil {
+		ln, listenErr := net.Listen("tcp", servConf.Address)
+		if listenErr != nil {
+			log.Errorf("Failed to start Ollama server on %s: %v", servConf.Address, listenErr)
+			return
+		}
+		srv := &http.Server{
+			Handler: mux,
+			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+				return context.WithValue(ctx, tracer.TeeConnKey, c)
+			},
+		}
+		if err := srv.Serve(tracer.NewTeeListener(ln, 8192)); err != nil {
 			log.Errorf("Failed to start Ollama server on %s: %v", servConf.Address, err)
 		}
 	}()
@@ -353,6 +365,12 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	}
 	verdict := agentdetect.IncrementalClassify(sig)
 
+	// Extract wire-order headers from TeeConn captured bytes
+	var wireOrder []string
+	if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+	}
+
 	tr.TraceEvent(tracer.Event{
 		Msg:              "Ollama API request",
 		RequestURI:       r.RequestURI,
@@ -381,7 +399,8 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		AgentScore:       verdict.Score,
 		AgentCategory:    verdict.Category,
 		AgentSignals:     verdict.SignalsString(),
-		JA4H:            tracer.ComputeJA4H(r),
+		JA4H:            tracer.ComputeJA4H(r, wireOrder),
+		HeaderOrder:     strings.Join(wireOrder, ","),
 	})
 }
 

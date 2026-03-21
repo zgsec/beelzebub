@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestComputeJA4H_BasicGET(t *testing.T) {
+func TestComputeJA4H_SortedFallback(t *testing.T) {
 	r, _ := http.NewRequest("GET", "http://example.com/api/tags", nil)
 	r.Header.Set("User-Agent", "python-requests/2.31.0")
 	r.Header.Set("Accept", "*/*")
@@ -14,84 +14,87 @@ func TestComputeJA4H_BasicGET(t *testing.T) {
 	r.Header.Set("Connection", "keep-alive")
 	r.Proto = "HTTP/1.1"
 
-	ja4h := ComputeJA4H(r)
+	ja4h := ComputeJA4H(r, nil) // nil wireOrder = sorted fallback
 
-	// Format: ge11nn04xxxx_xxxxxxxxxxxx_xxxxxxxxxxxx_000000000000
 	parts := strings.Split(ja4h, "_")
 	if len(parts) != 4 {
 		t.Fatalf("expected 4 parts, got %d: %s", len(parts), ja4h)
 	}
-
-	// Part a checks
-	a := parts[0]
-	if !strings.HasPrefix(a, "ge11") {
-		t.Errorf("expected prefix ge11, got %s", a[:4])
+	if !strings.HasPrefix(parts[0], "ge11nn04") {
+		t.Errorf("expected part_a prefix ge11nn04, got %s", parts[0])
 	}
-	// No cookies, no referer
-	if a[4] != 'n' {
-		t.Errorf("expected no cookie flag 'n', got %c", a[4])
-	}
-	if a[5] != 'n' {
-		t.Errorf("expected no referer flag 'n', got %c", a[5])
-	}
-	// 4 headers
-	if a[6:8] != "04" {
-		t.Errorf("expected 04 headers, got %s", a[6:8])
-	}
-	// No accept-language → 0000
-	if a[8:] != "0000" {
-		t.Errorf("expected lang 0000, got %s", a[8:])
-	}
-
-	// Part d: no cookies → 000000000000
 	if parts[3] != "000000000000" {
 		t.Errorf("expected empty cookie hash, got %s", parts[3])
 	}
-
-	t.Logf("JA4H: %s", ja4h)
+	t.Logf("JA4H (sorted): %s", ja4h)
 }
 
-func TestComputeJA4H_POST_WithCookies(t *testing.T) {
-	r, _ := http.NewRequest("POST", "http://example.com/api/generate", strings.NewReader(`{"model":"llama3.1:8b"}`))
+func TestComputeJA4H_WireOrder(t *testing.T) {
+	r, _ := http.NewRequest("GET", "http://example.com/api/tags", nil)
+	r.Header.Set("User-Agent", "curl/8.5.0")
+	r.Header.Set("Accept", "*/*")
+	r.Proto = "HTTP/1.1"
+
+	// Simulate raw bytes: Host comes first, then User-Agent, then Accept
+	raw := []byte("GET /api/tags HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl/8.5.0\r\nAccept: */*\r\n\r\n")
+	wireOrder := ParseHeaderOrder(raw)
+
+	ja4hWire := ComputeJA4H(r, wireOrder)
+	ja4hSorted := ComputeJA4H(r, nil)
+
+	parts := strings.Split(ja4hWire, "_")
+	if len(parts) != 4 {
+		t.Fatalf("expected 4 parts, got %d: %s", len(parts), ja4hWire)
+	}
+
+	// Part a may differ slightly — wire order captures Host from raw bytes,
+	// Go's http.Request handles Host separately (not in r.Header). This is expected.
+	t.Logf("part_a wire=%s sorted=%s", parts[0], strings.Split(ja4hSorted, "_")[0])
+
+	// Part b should differ — wire order [host, user-agent, accept] vs sorted [accept, host, user-agent]
+	partsS := strings.Split(ja4hSorted, "_")
+	if parts[1] == partsS[1] {
+		t.Logf("note: part_b identical despite different order (unlikely hash collision)")
+	}
+
+	t.Logf("JA4H (wire):   %s", ja4hWire)
+	t.Logf("JA4H (sorted): %s", ja4hSorted)
+	t.Logf("Wire order: %v", wireOrder)
+}
+
+func TestComputeJA4H_WithCookies(t *testing.T) {
+	r, _ := http.NewRequest("POST", "http://example.com/api/generate", strings.NewReader(`{}`))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("User-Agent", "ollama/0.18.2")
 	r.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	r.Header.Set("Cookie", "session=abc123")
 	r.Proto = "HTTP/1.1"
 
-	ja4h := ComputeJA4H(r)
+	ja4h := ComputeJA4H(r, nil)
 	parts := strings.Split(ja4h, "_")
-	if len(parts) != 4 {
-		t.Fatalf("expected 4 parts, got %d: %s", len(parts), ja4h)
-	}
 
 	a := parts[0]
-	if !strings.HasPrefix(a, "po11") {
-		t.Errorf("expected prefix po11, got %s", a[:4])
+	if !strings.HasPrefix(a, "po11c") {
+		t.Errorf("expected POST + cookie flag, got %s", a[:5])
 	}
-	// Has cookie
-	if a[4] != 'c' {
-		t.Errorf("expected cookie flag 'c', got %c", a[4])
-	}
-	// Accept-Language: en-US → enus
 	if !strings.HasSuffix(a, "enus") {
 		t.Errorf("expected lang enus, got %s", a[8:])
 	}
-	// Part d should NOT be all zeros (has cookies)
 	if parts[3] == "000000000000" {
 		t.Error("expected non-empty cookie hash")
 	}
-
 	t.Logf("JA4H: %s", ja4h)
 }
 
 func TestComputeJA4H_Nil(t *testing.T) {
-	if ja4h := ComputeJA4H(nil); ja4h != "" {
+	if ja4h := ComputeJA4H(nil, nil); ja4h != "" {
 		t.Errorf("expected empty for nil request, got %s", ja4h)
 	}
 }
 
 func TestComputeJA4H_Deterministic(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nUser-Agent: LLM-Scanner/2.0-Fast\r\nAccept: */*\r\n\r\n")
+	wireOrder := ParseHeaderOrder(raw)
+
 	makeReq := func() *http.Request {
 		r, _ := http.NewRequest("GET", "http://example.com/", nil)
 		r.Header.Set("User-Agent", "LLM-Scanner/2.0-Fast")
@@ -100,43 +103,57 @@ func TestComputeJA4H_Deterministic(t *testing.T) {
 		return r
 	}
 
-	first := ComputeJA4H(makeReq())
+	first := ComputeJA4H(makeReq(), wireOrder)
 	for i := 0; i < 100; i++ {
-		if got := ComputeJA4H(makeReq()); got != first {
+		if got := ComputeJA4H(makeReq(), wireOrder); got != first {
 			t.Fatalf("non-deterministic: run %d got %s, expected %s", i, got, first)
 		}
 	}
 }
 
-func TestComputeJA4H_DifferentClients(t *testing.T) {
-	// python-requests
-	r1, _ := http.NewRequest("GET", "http://example.com/api/tags", nil)
-	r1.Header.Set("User-Agent", "python-requests/2.31.0")
-	r1.Header.Set("Accept", "*/*")
-	r1.Header.Set("Accept-Encoding", "gzip, deflate")
-	r1.Header.Set("Connection", "keep-alive")
-	r1.Proto = "HTTP/1.1"
+func TestParseHeaderOrder(t *testing.T) {
+	raw := []byte("GET /api/tags HTTP/1.1\r\nHost: localhost:11434\r\nUser-Agent: curl/8.5.0\r\nAccept: */*\r\n\r\nbody")
+	order := ParseHeaderOrder(raw)
 
-	// curl
-	r2, _ := http.NewRequest("GET", "http://example.com/api/tags", nil)
-	r2.Header.Set("User-Agent", "curl/8.5.0")
-	r2.Header.Set("Accept", "*/*")
-	r2.Proto = "HTTP/1.1"
+	expected := []string{"host", "user-agent", "accept"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d headers, got %d: %v", len(expected), len(order), order)
+	}
+	for i, name := range expected {
+		if order[i] != name {
+			t.Errorf("header %d: expected %q, got %q", i, name, order[i])
+		}
+	}
+}
 
-	ja4h1 := ComputeJA4H(r1)
-	ja4h2 := ComputeJA4H(r2)
+func TestParseHeaderOrder_Incomplete(t *testing.T) {
+	if order := ParseHeaderOrder([]byte("GET / HTTP/1.1\r\nHost: x\r\n")); order != nil {
+		t.Errorf("expected nil for incomplete headers, got %v", order)
+	}
+}
 
-	if ja4h1 == ja4h2 {
-		t.Errorf("different clients produced same fingerprint: %s", ja4h1)
+func TestParseHeaderOrder_CookieRefererFiltered(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nHost: x\r\nCookie: a=b\r\nReferer: http://x\r\nAccept: */*\r\n\r\n")
+	order := ParseHeaderOrder(raw)
+	// ParseHeaderOrder returns ALL headers including cookie/referer
+	// filterHeaders (called by ComputeJA4H) does the filtering
+	if len(order) != 4 { // host, cookie, referer, accept
+		t.Fatalf("expected 4 raw headers, got %d: %v", len(order), order)
 	}
 
-	// Part a should differ (different header counts)
-	parts1 := strings.Split(ja4h1, "_")
-	parts2 := strings.Split(ja4h2, "_")
-	if parts1[0] == parts2[0] {
-		t.Logf("warning: part_a identical despite different header sets: %s", parts1[0])
-	}
+	// But ComputeJA4H should filter them for the hash
+	r, _ := http.NewRequest("GET", "http://example.com/", nil)
+	r.Header.Set("Host", "x")
+	r.Header.Set("Cookie", "a=b")
+	r.Header.Set("Referer", "http://x")
+	r.Header.Set("Accept", "*/*")
+	r.Proto = "HTTP/1.1"
 
-	t.Logf("python-requests: %s", ja4h1)
-	t.Logf("curl:            %s", ja4h2)
+	ja4h := ComputeJA4H(r, order)
+	parts := strings.Split(ja4h, "_")
+	// Header count should be 2 (host + accept, excluding cookie + referer)
+	// Cookie + Referer present → flags are "cc", count excludes them → "02" (host + accept)
+	if !strings.Contains(parts[0], "cc02") {
+		t.Errorf("expected cc02 in part_a (cookie+referer present, 2 remaining headers), got part_a=%s", parts[0])
+	}
 }

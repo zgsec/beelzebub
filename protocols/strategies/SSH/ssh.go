@@ -78,6 +78,11 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			MaxTimeout:  time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
 			IdleTimeout: time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
 			Version:     servConf.ServerVersion,
+			ConnCallback: func(ctx ssh.Context, conn net.Conn) net.Conn {
+				tc := tracer.NewTeeConn(conn, 4096)
+				ctx.SetValue(tracer.TeeConnKey, tc)
+				return tc
+			},
 			Handler: func(sess ssh.Session) {
 				uuidSession := uuid.New()
 
@@ -168,6 +173,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyScore:    rawNoveltyVerdict.Score,
 								NoveltyCategory: rawNoveltyVerdict.Category,
 								NoveltySignals:  rawNoveltyVerdict.SignalsString(),
+								HASSH:           hasshFromContext(sess.Context()),
 							})
 							return
 						}
@@ -186,6 +192,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					User:       sess.User(),
 					Description: servConf.Description,
 					SessionKey: sessionKey,
+					HASSH:      hasshFromContext(sess.Context()),
 				})
 
 				// Record SSH authentication in bridge
@@ -356,6 +363,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltyScore:    authNoveltyVerdict.Score,
 					NoveltyCategory: authNoveltyVerdict.Category,
 					NoveltySignals:  authNoveltyVerdict.SignalsString(),
+					HASSH:           hasshFromContext(ctx),
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 				if err != nil {
@@ -529,6 +537,14 @@ func levenshtein(a, b string) int {
 func fingerprintKey(key ssh.PublicKey) string {
 	h := sha256.Sum256(key.Marshal())
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(h[:])
+}
+
+// hasshFromContext extracts the HASSH fingerprint from a session or context that carries a TeeConn.
+func hasshFromContext(ctx interface{ Value(any) any }) string {
+	if tc, ok := ctx.Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		return tracer.ComputeHASSH(tc.RawBytes())
+	}
+	return ""
 }
 
 // checkCredentialDiscovery scans command output for credential-like content and records via bridge.

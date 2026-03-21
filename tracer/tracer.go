@@ -77,8 +77,10 @@ type Event struct {
 	NoveltyCategory string `json:"NoveltyCategory,omitempty"`
 	NoveltySignals  string `json:"NoveltySignals,omitempty"`
 
-	// HTTP client fingerprint
-	JA4H string `json:"JA4H,omitempty"`
+	// Network fingerprints
+	JA4H        string `json:"JA4H,omitempty"`
+	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
+	HASSH       string `json:"HASSH,omitempty"`
 }
 
 type (

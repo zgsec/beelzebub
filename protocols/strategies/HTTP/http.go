@@ -1,6 +1,7 @@
 package HTTP
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -153,14 +154,22 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 
 	})
 	go func() {
+		ln, listenErr := net.Listen("tcp", servConf.Address)
+		if listenErr != nil {
+			log.Errorf("error during init HTTP Protocol: %v", listenErr)
+			return
+		}
+		srv := &http.Server{
+			Handler: serverMux,
+			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+				return context.WithValue(ctx, tracer.TeeConnKey, c)
+			},
+		}
 		var err error
-		// Launch a TLS supporting server if we are supplied a TLS Key and Certificate.
-		// If relative paths are supplied, they are relative to the CWD of the binary.
-		// The can be self-signed, only the client will validate this (or not).
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			err = http.ListenAndServeTLS(servConf.Address, servConf.TLSCertPath, servConf.TLSKeyPath, serverMux)
+			err = srv.ServeTLS(tracer.NewTeeListener(ln, 8192), servConf.TLSCertPath, servConf.TLSKeyPath)
 		} else {
-			err = http.ListenAndServe(servConf.Address, serverMux)
+			err = srv.Serve(tracer.NewTeeListener(ln, 8192))
 		}
 		if err != nil {
 			log.Errorf("error during init HTTP Protocol: %v", err)
@@ -271,6 +280,12 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		noveltyVerdict = noveltydetect.IncrementalScore(novSig)
 	}
 
+	// Extract wire-order headers from TeeConn captured bytes
+	var wireOrder []string
+	if tc, ok := request.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+	}
+
 	event := tracer.Event{
 		Msg:             "HTTP New request",
 		RequestURI:      request.RequestURI,
@@ -297,7 +312,8 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		NoveltyScore:    noveltyVerdict.Score,
 		NoveltyCategory: noveltyVerdict.Category,
 		NoveltySignals:  noveltyVerdict.SignalsString(),
-		JA4H:            tracer.ComputeJA4H(request),
+		JA4H:            tracer.ComputeJA4H(request, wireOrder),
+		HeaderOrder:     strings.Join(wireOrder, ","),
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {
