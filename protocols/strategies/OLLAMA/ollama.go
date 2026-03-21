@@ -381,6 +381,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		AgentScore:       verdict.Score,
 		AgentCategory:    verdict.Category,
 		AgentSignals:     verdict.SignalsString(),
+		JA4H:            tracer.ComputeJA4H(r),
 	})
 }
 

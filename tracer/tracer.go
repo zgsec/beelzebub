@@ -76,6 +76,9 @@ type Event struct {
 	NoveltyScore    int    `json:"NoveltyScore,omitempty"`
 	NoveltyCategory string `json:"NoveltyCategory,omitempty"`
 	NoveltySignals  string `json:"NoveltySignals,omitempty"`
+
+	// HTTP client fingerprint
+	JA4H string `json:"JA4H,omitempty"`
 }
 
 type (

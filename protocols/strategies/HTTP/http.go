@@ -297,6 +297,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		NoveltyScore:    noveltyVerdict.Score,
 		NoveltyCategory: noveltyVerdict.Category,
 		NoveltySignals:  noveltyVerdict.SignalsString(),
+		JA4H:            tracer.ComputeJA4H(request),
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

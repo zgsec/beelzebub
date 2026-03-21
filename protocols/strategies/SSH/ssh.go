@@ -1,6 +1,8 @@
 package SSH
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"math/rand"
 	"net"
@@ -308,6 +310,24 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltySignals:  endNoveltyVerdict.SignalsString(),
 				})
 			},
+			PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
+				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
+				fingerprint := fingerprintKey(key)
+				tr.TraceEvent(tracer.Event{
+					Msg:         "SSH Public Key Offered",
+					Protocol:    tracer.SSH.String(),
+					Status:      tracer.Stateless.String(),
+					User:        ctx.User(),
+					Client:      ctx.ClientVersion(),
+					RemoteAddr:  ctx.RemoteAddr().String(),
+					SourceIp:    host,
+					SourcePort:  port,
+					ID:          uuid.New().String(),
+					Description: servConf.Description,
+					Command:     key.Type() + " " + fingerprint,
+				})
+				return false // always reject, fall through to password auth
+			},
 			PasswordHandler: func(ctx ssh.Context, password string) bool {
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 
@@ -503,6 +523,12 @@ func levenshtein(a, b string) int {
 		prev = curr
 	}
 	return prev[lb]
+}
+
+// fingerprintKey returns the SHA256 fingerprint of an SSH public key in OpenSSH format.
+func fingerprintKey(key ssh.PublicKey) string {
+	h := sha256.Sum256(key.Marshal())
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(h[:])
 }
 
 // checkCredentialDiscovery scans command output for credential-like content and records via bridge.
