@@ -280,10 +280,11 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		noveltyVerdict = noveltydetect.IncrementalScore(novSig)
 	}
 
-	// Extract wire-order headers from TeeConn captured bytes
+	// Extract wire-order headers from TeeConn captured bytes, then release buffer
 	var wireOrder []string
 	if tc, ok := request.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
 		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+		tc.Release()
 	}
 
 	event := tracer.Event{

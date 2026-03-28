@@ -28,6 +28,8 @@ import (
 )
 
 type remoteAddrCtxKey struct{}
+type ja4hCtxKey struct{}
+type headerOrderCtxKey struct{}
 
 // toolCallRecord stores the output of a previous tool call for chain detection.
 type toolCallRecord struct {
@@ -400,7 +402,15 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	mcpHandler := server.NewStreamableHTTPServer(
 		mcpServer,
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+			ctx = context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+			// Compute JA4H from wire-order headers if TeeConn is available
+			if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+				wireOrder := tracer.ParseHeaderOrder(tc.RawBytes())
+				ctx = context.WithValue(ctx, ja4hCtxKey{}, tracer.ComputeJA4H(r, wireOrder))
+				ctx = context.WithValue(ctx, headerOrderCtxKey{}, strings.Join(wireOrder, ","))
+				tc.Release()
+			}
+			return ctx
 		}),
 	)
 
@@ -437,7 +447,18 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			})
 		}
 
-		if err := http.ListenAndServe(servConf.Address, mux); err != nil {
+		ln, listenErr := net.Listen("tcp", servConf.Address)
+		if listenErr != nil {
+			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, listenErr)
+			return
+		}
+		srv := &http.Server{
+			Handler: mux,
+			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+				return context.WithValue(ctx, tracer.TeeConnKey, c)
+			},
+		}
+		if err := srv.Serve(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc)); err != nil {
 			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
 		}
 	}()

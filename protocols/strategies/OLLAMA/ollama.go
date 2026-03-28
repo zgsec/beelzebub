@@ -369,6 +369,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	var wireOrder []string
 	if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
 		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+		tc.Release()
 	}
 
 	tr.TraceEvent(tracer.Event{

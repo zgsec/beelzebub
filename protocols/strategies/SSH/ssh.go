@@ -539,12 +539,28 @@ func fingerprintKey(key ssh.PublicKey) string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(h[:])
 }
 
-// hasshFromContext extracts the HASSH fingerprint from a session or context that carries a TeeConn.
-func hasshFromContext(ctx interface{ Value(any) any }) string {
-	if tc, ok := ctx.Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
-		return tracer.ComputeHASSH(tc.RawBytes())
+// hasshCtxKey stores the computed HASSH so we compute once and release the buffer.
+type hasshCtxKey struct{}
+
+// hasshFromContext extracts the HASSH fingerprint from a session context.
+// Computes from TeeConn on first call, caches the result, and releases the
+// capture buffer to avoid pinning memory for the lifetime of long sessions.
+func hasshFromContext(ctx interface {
+	Value(any) any
+	SetValue(any, any)
+}) string {
+	// Return cached value if already computed
+	if cached, ok := ctx.Value(hasshCtxKey{}).(string); ok {
+		return cached
 	}
-	return ""
+	// Compute from TeeConn, cache, and release buffer
+	hassh := ""
+	if tc, ok := ctx.Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		hassh = tracer.ComputeHASSH(tc.RawBytes())
+		tc.Release()
+	}
+	ctx.SetValue(hasshCtxKey{}, hassh)
+	return hassh
 }
 
 // checkCredentialDiscovery scans command output for credential-like content and records via bridge.
