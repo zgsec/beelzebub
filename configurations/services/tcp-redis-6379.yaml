@@ -1,0 +1,60 @@
+apiVersion: "v1"
+protocol: "tcp"
+address: ":6379"
+description: "Redis 7.2.4"
+banner: ""
+serverName: ""
+deadlineTimeoutSeconds: 120
+commands:
+  - regex: "^(PING|ping)$"
+    handler: "+PONG"
+  - regex: "^(INFO|info)$"
+    handler: |
+      # Server
+      redis_version:7.2.4
+      redis_mode:standalone
+      os:Linux 5.15.0-91-generic x86_64
+      arch_bits:64
+      tcp_port:6379
+      uptime_in_seconds:892847
+      uptime_in_days:10
+      # Clients
+      connected_clients:3
+      blocked_clients:0
+      # Memory
+      used_memory:1048576
+      used_memory_human:1.00M
+      # Keyspace
+      db0:keys=47,expires=12,avg_ttl=3600000
+  - regex: "^(CONFIG GET|config get)"
+    handler: |
+      1) "dir"
+      2) "/var/lib/redis"
+  - regex: "^(KEYS|keys)\\s+"
+    handler: |
+      1) "session:a1b2c3d4"
+      2) "session:e5f6g7h8"
+      3) "user:admin"
+      4) "user:deploy"
+      5) "config:app"
+  - regex: "^(GET|get)\\s+"
+    plugin: "LLMHoneypot"
+  - regex: "^(SET|set|DEL|del|FLUSHALL|flushall|FLUSHDB|flushdb)"
+    handler: "-READONLY You can't write against a read only replica."
+  - regex: "^(quit|QUIT)$"
+    name: "quit"
+    handler: "+OK"
+  - regex: ".*"
+    plugin: "LLMHoneypot"
+fallbackCommand:
+  handler: "-ERR unknown command"
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  prompt: |
+    You are a Redis 7.2.4 server in read-only replica mode. Respond exactly as
+    Redis would, using RESP protocol format (+ for simple strings, $ for bulk
+    strings, * for arrays, - for errors, : for integers).
+    The instance has keys: session:*, user:*, config:*, api_key:*.
+    For GET commands, return realistic values.
+    For write commands, return -READONLY error.

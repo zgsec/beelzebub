@@ -1,0 +1,70 @@
+apiVersion: "v1"
+protocol: "tcp"
+address: ":3306"
+description: "MySQL 8.0.32"
+banner: "5.7.38-0ubuntu0.22.04.2\r\n"
+serverName: "mysql> "
+passwordRegex: ".*"
+deadlineTimeoutSeconds: 300
+commands:
+  - regex: "^(SHOW DATABASES|show databases)"
+    handler: |
+      +--------------------+
+      | Database           |
+      +--------------------+
+      | information_schema |
+      | mysql              |
+      | performance_schema |
+      | sys                |
+      | app_production     |
+      +--------------------+
+      5 rows in set (0.01 sec)
+  - regex: "^(SHOW TABLES|show tables)"
+    handler: |
+      +--------------------------+
+      | Tables_in_app_production |
+      +--------------------------+
+      | users                    |
+      | sessions                 |
+      | orders                   |
+      | payments                 |
+      | api_keys                 |
+      +--------------------------+
+      5 rows in set (0.00 sec)
+  - regex: "^(SELECT|select).*version"
+    handler: |
+      +-----------+
+      | version() |
+      +-----------+
+      | 8.0.32    |
+      +-----------+
+      1 row in set (0.00 sec)
+  - regex: "^(SELECT|select)"
+    plugin: "LLMHoneypot"
+  - regex: "^(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|GRANT)"
+    handler: "ERROR 1142 (42000): INSERT command denied to user 'app_reader'@'10.0.1.%' for table"
+  - regex: "^(USE|use)\\s+"
+    handler: "Database changed"
+  - regex: "^(status|\\\\s)"
+    handler: |
+      mysql  Ver 8.0.32-0ubuntu0.22.04.2 for Linux on x86_64
+      Connection id:          4819
+      Current database:       app_production
+      Current user:           app_reader@10.0.1.47
+      Server version:         8.0.32-0ubuntu0.22.04.2
+      Uptime:                 47 days 13 hours 22 min 8 sec
+      Threads: 4  Questions: 892341  Slow queries: 12
+  - regex: "^(quit|exit|\\\\q)"
+    name: "quit"
+    handler: "Bye"
+fallbackCommand:
+  handler: "ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use"
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  prompt: |
+    You are a MySQL 8.0.32 server. Respond exactly as MySQL would to SQL commands.
+    The database 'app_production' contains tables: users, orders, payments, sessions, api_keys.
+    Format output as MySQL result tables with row counts and timing.
+    For SELECT queries, return realistic sample data.
+    For unauthorized operations, return ERROR 1142 (access denied).

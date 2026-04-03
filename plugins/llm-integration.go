@@ -216,6 +216,18 @@ func (llmHoneypot *LLMHoneypot) buildPrompt(command string) ([]Message, error) {
 		for _, history := range llmHoneypot.Histories {
 			messages = append(messages, history)
 		}
+	case tracer.TCP:
+		prompt = "You will act as the described TCP service. The user will type commands, and you are to reply with what the service should show. Your responses must be realistic and match the service's actual output format. Do not provide explanations or commentary."
+		if llmHoneypot.CustomPrompt != "" {
+			prompt = llmHoneypot.CustomPrompt
+		}
+		messages = append(messages, Message{
+			Role:    SYSTEM.String(),
+			Content: prompt,
+		})
+		for _, history := range llmHoneypot.Histories {
+			messages = append(messages, history)
+		}
 	default:
 		return nil, errors.New("no prompt for protocol selected")
 	}

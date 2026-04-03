@@ -84,8 +84,8 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
-	// Drain any unsolicited client negotiation requests
-	negotiateTelnet(conn)
+	// Capture client telnet negotiation as a tracer event
+	captureTelnetHandshake(conn, tr, host, port, servConf.Description)
 
 	// Authentication phase
 	_, err := conn.Write([]byte("\r\nlogin: "))
@@ -290,14 +290,91 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	})
 }
 
-func negotiateTelnet(conn net.Conn) {
-	// Minimal telnet negotiation
-	// Don't send WILL ECHO or SUPPRESS_GO_AHEAD, let client stay in NVT line mode
-	// WILL ECHO is only used during password phase to hide input
+// captureTelnetHandshake reads the client's initial IAC negotiation and emits
+// it as a tracer event. Different clients negotiate different options — this
+// acts as a client fingerprint (e.g., real terminal vs automated script).
+func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, description string) {
 	buf := make([]byte, 256)
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	conn.Read(buf)
+	n, _ := conn.Read(buf)
 	conn.SetReadDeadline(time.Time{})
+
+	if n == 0 {
+		return
+	}
+
+	// Parse IAC sequences into human-readable summary
+	summary := parseIACOptions(buf[:n])
+	if summary == "" {
+		return
+	}
+
+	tr.TraceEvent(tracer.Event{
+		Msg:         "TELNET Client Negotiation",
+		Protocol:    tracer.TELNET.String(),
+		Status:      tracer.Stateless.String(),
+		Command:     summary,
+		SourceIp:    host,
+		SourcePort:  port,
+		RemoteAddr:  net.JoinHostPort(host, port),
+		ID:          uuid.New().String(),
+		Description: description,
+	})
+}
+
+// parseIACOptions extracts telnet IAC option negotiations from raw bytes
+// and returns a compact summary like "WILL:ECHO,DO:SGA,WILL:NAWS".
+func parseIACOptions(data []byte) string {
+	cmdNames := map[byte]string{WILL: "WILL", WONT: "WONT", DO: "DO", DONT: "DONT"}
+	optNames := map[byte]string{
+		1: "ECHO", 3: "SGA", 5: "STATUS", 6: "TIMING",
+		24: "TTYPE", 31: "NAWS", 32: "TSPEED", 33: "RFLOW",
+		34: "LINEMODE", 35: "XDISPLOC", 36: "ENVIRON", 39: "NEWENV",
+	}
+
+	var parts []string
+	i := 0
+	for i < len(data) {
+		if data[i] != IAC {
+			i++
+			continue
+		}
+		i++
+		if i >= len(data) {
+			break
+		}
+		cmd := data[i]
+		i++
+
+		if cmd == SB {
+			// Subnegotiation — skip until IAC SE
+			for i < len(data)-1 {
+				if data[i] == IAC && data[i+1] == SE {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		if cmd == WILL || cmd == WONT || cmd == DO || cmd == DONT {
+			if i >= len(data) {
+				break
+			}
+			opt := data[i]
+			i++
+
+			cmdStr := cmdNames[cmd]
+			optStr := optNames[opt]
+			if optStr == "" {
+				optStr = fmt.Sprintf("%d", opt)
+			}
+			parts = append(parts, cmdStr+":"+optStr)
+		}
+	}
+
+	return strings.Join(parts, ",")
 }
 
 func readLine(conn net.Conn) (string, error) {

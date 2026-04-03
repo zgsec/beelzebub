@@ -255,7 +255,7 @@ func TestBuildExecuteModelFailValidationStrategyType(t *testing.T) {
 	llmHoneypot := LLMHoneypot{
 		Histories: make([]Message, 0),
 		OpenAIKey: "",
-		Protocol:  tracer.TCP,
+		Protocol:  tracer.Protocol(99), // Use undefined protocol to trigger default case
 		Model:     "gpt-4o",
 		Provider:  OpenAI,
 	}
