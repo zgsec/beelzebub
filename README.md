@@ -1,171 +1,372 @@
-# Beelzebub (Agent Research Fork)
+# Beelzebub — AI Agent Research Fork
 
-> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — adds stateful MCP, agent detection, cross-protocol correlation, and fault injection for studying AI agent behavior in honeypot environments.
+> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — 49 commits, ~16,900 lines of Go across 10 new packages. Transforms Beelzebub from a traditional honeypot into a research platform for studying AI agent behavior in adversarial environments.
 
-## Fork Additions
+All additions are backward-compatible. Existing configurations work unchanged — every new feature is opt-in via YAML config.
 
-This fork transforms Beelzebub into a research platform for AI agent adversary analysis. All additions are backward compatible — existing configs work unchanged.
+## What This Fork Adds
 
-### New Capabilities
+The upstream project is a solid multi-protocol honeypot with LLM-powered responses. This fork adds the infrastructure needed to **detect, classify, fingerprint, and study AI agents** that interact with honeypot services.
 
-| Capability | Package | Description |
+### New Packages
+
+| Package | Key File | What It Does |
 |---|---|---|
-| **Stateful MCP** | `protocols/strategies/MCP/state.go` | Per-IP world state (users, logs, resources) that mutates across tool calls. Configured via `worldSeed` YAML. |
-| **Cross-Protocol Bridge** | `bridge/` | Tracks credential discovery across SSH/HTTP/MCP. Detects multi-protocol lateral movement. |
-| **Agent Detection** | `agentdetect/` | Real-time scoring engine (0-100). Classifies sessions as agent/bot/human based on MCP handshakes, timing, retries, tool chain depth. |
-| **Fault Injection** | `faults/` | Per-service configurable error rates, delays, and realistic error responses. Studies agent retry/adaptation behavior. |
-| **Session Tracking** | `tracer/timing.go`, `historystore/` | Inter-event timing, sequence numbers, retry detection ring buffer. |
+| `agentdetect` | `detector.go` | Real-time agent/bot/human classification. Scores sessions 0-100 using 7 behavioral signals. |
+| `bridge` | `bridge.go` | Cross-protocol credential tracking. When an agent finds AWS keys via MCP, the SSH handler knows. |
+| `faults` | `faults.go` | Per-service fault injection (configurable error rates, delays, jitter) to study agent retry behavior. |
+| `noveltydetect` | `scorer.go`, `store.go` | Fingerprint store + novelty scoring. Tracks commands, credentials, paths, tool sequences, user agents across all sessions. |
+| `historystore` | `history_store.go` | Per-session message history with sequence tracking, retry detection via 16-slot ring buffer. |
+| `shellemulator` | `emulator.go` | 55+ command shell emulator with per-session filesystem overlay, pipe chains, canary token lures. |
 
-### New Event Fields (12)
+### Enhanced Modules
 
-All `omitempty` — zero impact on non-fork deployments:
-
-`SessionKey`, `Sequence`, `CorrelationID`, `ToolName`, `ToolArguments`, `InterEventMs`, `IsRetry`, `RetryOf`, `CrossProtocolRef`, `FaultInjected`, `AgentScore`, `AgentCategory`, `AgentSignals`
-
-### MCP Deception Surface
-
-The fork supports rich MCP tool configurations with:
-- **WorldSeed** — YAML-defined initial state (users, resources, logs) per service
-- **Tool annotations** — `title`, `readOnlyHint`, `destructiveHint` for realistic tool metadata
-- **Fault injection** — configurable error rate with realistic JSON error responses
-- **StreamableHTTP transport** — endpoint at `/mcp`, session-based
-
-### Upstream PR Plan
-
-Phases 1-4 (stateful MCP, bridge, agent detection, fault injection) are designed for upstream contribution. No breaking changes, full test coverage, all new features are opt-in via YAML config.
+| Module | What Changed |
+|---|---|
+| `protocols/strategies/MCP/` | Complete rewrite. Per-IP stateful world model (users, logs, resources) that mutates across tool calls. WorldSeed YAML config, LLM enrichment, bridge integration. |
+| `protocols/strategies/OLLAMA/` | Full Ollama + OpenAI-compatible API honeypot for LLMjacking research. Progressive injection, per-IP session state, model catalog simulation. |
+| `protocols/strategies/TCP/` | Added interactive command loop with regex matching and LLM fallback (was banner-only). |
+| `tracer/` | 20+ new event fields. Added JA4H HTTP fingerprinting, HASSH SSH fingerprinting, TeeConn wire capture, inter-event timing cache. |
 
 ---
 
-*Everything below is the original upstream README.*
+## Architecture
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │             Protocol Handlers            │
+                    │  SSH  HTTP  MCP  TCP  TELNET  OLLAMA    │
+                    └────────┬───────┬──────┬────────┬────────┘
+                             │       │      │        │
+              ┌──────────────┼───────┼──────┼────────┼──────────┐
+              │              ▼       ▼      ▼        ▼          │
+              │  ┌─────────────────────────────────────────┐    │
+              │  │          Cross-Protocol Bridge           │    │
+              │  │  credential discovery · session flags    │    │
+              │  └─────────────────────────────────────────┘    │
+              │                                                  │
+              │  ┌──────────┐ ┌──────────┐ ┌───────────────┐   │
+              │  │  Agent   │ │ Novelty  │ │    Fault      │   │
+              │  │ Detector │ │ Scorer   │ │  Injector     │   │
+              │  │ (0-100)  │ │ (0-100)  │ │ (error/delay) │   │
+              │  └──────────┘ └──────────┘ └───────────────┘   │
+              │                                                  │
+              │  ┌─────────────────────────────────────────┐    │
+              │  │              Tracer (5 workers)          │    │
+              │  │  events · timing · JA4H · HASSH · TeeConn│   │
+              │  └───────────┬──────────┬──────────┬───────┘    │
+              │              ▼          ▼          ▼            │
+              │          Prometheus  RabbitMQ   Stdout          │
+              └─────────────────────────────────────────────────┘
+```
+
+All protocol handlers share a singleton `Tracer`, optional `ProtocolBridge`, and optional `FingerprintStore`. Each handler independently uses `agentdetect` and `faults` based on its service config.
 
 ---
 
-[![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml) [![Docker](https://github.com/mariocandela/beelzebub/actions/workflows/docker-image.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/docker-image.yml) [![codeql](https://github.com/mariocandela/beelzebub/actions/workflows/codeql.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/codeql.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3)
-[![codecov](https://codecov.io/gh/mariocandela/beelzebub/graph/badge.svg?token=8XTK7D4WHE)](https://codecov.io/gh/mariocandela/beelzebub)
-[![Go Reference](https://pkg.go.dev/badge/github.com/mariocandela/beelzebub/v3.svg)](https://pkg.go.dev/github.com/mariocandela/beelzebub/v3)
-[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/mariocandela/beelzebub)](https://archestra.ai/mcp-catalog/mariocandela__beelzebub)
-[![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
+## Agent Detection
 
-## Overview
+The `agentdetect` package classifies sessions in real-time using behavioral signals:
 
-Beelzebub is an advanced honeypot framework designed to provide a highly secure environment for detecting and analyzing cyber attacks. It offers a low code approach for easy implementation and uses AI to mimic the behavior of a high-interaction honeypot.
+| Signal | Points | What It Detects |
+|---|---|---|
+| MCP handshake (`initialize`) | +40 | Strong agent indicator — humans don't send MCP protocol handshakes |
+| Mechanical timing (mean < 2s, stddev < 500ms) | +25 | Machine-speed, low-variance inter-event timing |
+| AI discovery probe (`/.well-known/mcp.json`, `/llms.txt`) | +20 | Agent-specific endpoint reconnaissance |
+| Tool chain depth >= 3 | +20 | Sequential tool calls indicating workflow execution |
+| Cross-protocol pivot (< 60s gap) | +15 | Lateral movement across SSH/HTTP/MCP |
+| Identical retries | +15 | Agents retry the same command on failure |
+| Command corrections | -20 | Humans correct typos — agents don't |
 
-![github beelzebub - inception program](https://github.com/user-attachments/assets/e180d602-6de9-4c48-92ad-eb0ef3c5322d)
+**Categories**: `agent` (>= 60), `bot` (30-59), `human` (< 30), `unknown` (insufficient data)
 
-## Table of Contents
+Both full-session (`Classify`) and per-event (`IncrementalClassify`) scoring are supported. Per-event scoring converges as more signals arrive during a session.
 
-- [Global Threat Intelligence Community](#global-threat-intelligence-community)
-- [Key Features](#key-features)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [Core Configuration](#core-configuration)
-  - [Service Configuration](#service-configuration)
-- [Protocol Examples](#protocol-examples)
-  - [MCP Honeypot](#mcp-honeypot)
-  - [HTTP Honeypot](#http-honeypot)
-  - [SSH Honeypot](#ssh-honeypot)
-  - [TELNET Honeypot](#telnet-honeypot)
-  - [TCP Honeypot](#tcp-honeypot)
-- [Observability](#observability)
-  - [Prometheus Metrics](#prometheus-metrics)
-  - [RabbitMQ Integration](#rabbitmq-integration)
-  - [Beelzebub Cloud](#beelzebub-cloud)
-- [Testing](#testing)
-- [Code Quality](#code-quality)
-- [Contributing](#contributing)
-- [License](#license)
+---
 
-## Global Threat Intelligence Community
+## Stateful MCP Honeypot
 
-Our mission is to establish a collaborative ecosystem of security researchers and white hat professionals worldwide, dedicated to creating a distributed honeypot network that identifies emerging malware, discovers zero-day vulnerabilities, and neutralizes active botnets.
+The MCP handler creates a **per-IP world model** from a YAML seed. Each connecting IP gets its own mutable copy with users, resources, logs, and an audit trail:
 
-[![White Paper](https://img.shields.io/badge/White_Paper-v1.0-blue?style=for-the-badge)](https://github.com/beelzebub-labs/white-paper/)
+```yaml
+worldSeed:
+  users:
+    - id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+      email: "admin@nexusplatform.io"
+      role: "platform-admin"
+      lastLogin: "2026-03-05T14:22:00Z"
+  resources:
+    aws_access_key_id: "AKIAIOSFODNN7EXAMPLE"
+    db_primary: "postgresql://nexus_app:s3cret@db.internal:5432/nexus"
+  logs:
+    - ts: "2026-03-06T04:12:00Z"
+      level: "error"
+      msg: "LDAP sync failed for ou=contractors"
+```
 
-The white paper includes information on how to join our Discord community and contribute to the global threat intelligence network. 
+Tool calls mutate this state. `iam.manage` can list, deactivate, or modify users. `logs.query` filters the log store. `configstore.kv` reads and writes resources. The agent sees a realistic, internally consistent platform that responds to its actions.
 
-## Key Features
+**Key behaviors**:
+- Fault injection with grace period (first 3 calls always succeed, then configured error rate applies)
+- LLM enrichment of tool responses (optional, via OpenAI or Ollama)
+- Bridge integration — credential discovery is shared across all protocol handlers
+- Tool chain tracking with dependency detection across calls
+- StreamableHTTP transport at `/mcp`
 
-Beelzebub offers a wide range of features to enhance your honeypot environment:
+---
 
-- **Low-code configuration**: YAML-based, modular service definition
-- **LLM integration**: The LLM convincingly simulates a real system, creating high-interaction honeypot experiences, while actually maintaining low-interaction architecture for enhanced security and easy management
-- **Multi-protocol support**: SSH, HTTP, TCP, TELNET, MCP (detect prompt injection against LLM agents)
-- **Prometheus metrics & observability**: Built-in metrics endpoint for monitoring
-- **Event tracing**: Multiple output strategies (stdout, RabbitMQ, Beelzebub Cloud)
-- **Docker & Kubernetes ready**: Deploy anywhere with provided configurations
-- **ELK stack ready**: Official integration available at [Elastic docs](https://www.elastic.co/docs/reference/integrations/beelzebub)
+## Shell Emulator
 
-## LLM Honeypot Demo
+The SSH protocol handler includes a high-fidelity shell emulator (`shellemulator/`) with 55+ commands:
 
-![demo-beelzebub](https://github.com/user-attachments/assets/4dbb9a67-6c12-49c5-82ac-9b3e340406ca)
+**Identity/System**: `whoami`, `id`, `hostname`, `uname`, `uptime`, `w`, `who`, `last`, `date`
+**Filesystem**: `pwd`, `cd`, `ls`, `cat`, `find`, `file`, `df`, `mount`, `du`, `stat`, `wc`, `head`, `tail`, `rm`, `mkdir`, `touch`, `cp`
+**Network**: `ifconfig`, `ip`, `netstat`, `ss`, `ping`, `dig`, `nslookup`
+**Process**: `ps`, `free`, `top`, `docker`, `systemctl`, `service`, `lsof`, `kill`
+**Credential lures**: `env`, `printenv`, `history`, `set`
+**Utility**: `echo`, `which`, `type`, `grep`, `export`, `alias`
 
-## Quick Start
+**Session state**: Per-connection filesystem overlay (files written/deleted persist within session), working directory tracking, PID offsets.
 
-You can run Beelzebub via Docker, Go compiler(cross device), or Helm (Kubernetes).
+**Command chaining**: Supports `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 | cmd2`, subshell expansion `$(cmd)`, and redirects `>` / `>>`.
 
-### Using Docker Compose
+**Canary tokens**: Environment variables (`AWS_ACCESS_KEY_ID`, `DB_PASSWORD`, etc.) are seeded from per-sensor env vars. Commands like `env`, `cat .bash_history`, and `cat /var/log/syslog` return these tokens. When an agent exfiltrates and uses them externally, the canary fires.
 
-1. Build the Docker images:
+**Jitter**: Configurable per-category response delays to defeat timing-based honeypot detection:
+```yaml
+jitterRanges:
+  identity: [1, 5]     # ms — whoami, id, hostname
+  memory:   [2, 10]    # ms — free, ps, docker
+  fs:       [3, 25]    # ms — ls, cat, find
+  network:  [5, 30]    # ms — curl, dig, ping
+```
 
-   ```bash
-   $ docker compose build
-   ```
+---
 
-2. Start Beelzebub in detached mode:
+## Network Fingerprinting
 
-   ```bash
-   $ docker compose up -d
-   ```
+### JA4H (HTTP)
 
+HTTP client fingerprinting based on the JA4 standard. Computed from HTTP method, version, cookie/header counts, and SHA-256 hashes of header names (wire order), header values, and cookie pairs. Emitted as `JA4H` and `HeaderOrder` on every HTTP event.
 
-### Using Go Compiler
+### HASSH (SSH)
 
-1. Download the necessary Go modules:
+SSH client fingerprinting from the `SSH_MSG_KEXINIT` packet. Extracts key exchange algorithms, encryption, MAC, and compression offers. Returns an MD5 hash for client identification. Emitted as `HASSH` on SSH session start.
 
-   ```bash
-   $ go mod download
-   ```
+### TeeConn
 
-2. Build the Beelzebub executable:
+A `net.Conn` wrapper that captures raw bytes during `Read()` without modifying traffic flow. Protocol-aware stop functions detect end-of-headers (HTTP `\r\n\r\n`) or SSH KEXINIT completion. Used by JA4H and HASSH to fingerprint without disrupting the protocol handshake.
 
-   ```bash
-   $ go build
-   ```
+---
 
-3. Run Beelzebub:
+## Novelty Detection
 
-   ```bash
-   $ ./beelzebub
-   ```
+The `noveltydetect` package maintains a global `FingerprintStore` of observed commands, credentials, paths, tool sequences, and user agents (stored as truncated SHA-256 hashes).
 
-### Deploy on kubernetes cluster using helm
+Each session is scored 0-100:
 
-1. Install helm
+| Signal | Weight | Description |
+|---|---|---|
+| New commands | 40% | Commands never seen before |
+| New credentials | 20% | Novel username:password pairs |
+| New paths | 20% | Previously unseen HTTP paths |
+| Tool sequence | 15% | New MCP tool call ordering |
+| Duration anomaly | 10% | Unusual session duration |
+| Cross-protocol | 10% | Novel cross-protocol patterns |
+| User agent | 5% | New user agent string |
 
-2. Deploy beelzebub:
+**Categories**: `novel` (>= 70), `variant` (30-69), `known` (< 30)
 
-   ```bash
-   $ helm install beelzebub ./beelzebub-chart
-   ```
+---
 
-3. Next release
+## Trace Event Fields
 
-   ```bash
-   $ helm upgrade beelzebub ./beelzebub-chart
-   ```
+The fork adds 20+ fields to the `tracer.Event` struct. All are `json:",omitempty"` — zero impact on existing consumers.
+
+### Session Correlation
+| Field | Type | Description |
+|---|---|---|
+| `SessionKey` | string | Per-IP session identifier |
+| `Sequence` | int | Monotonic event counter per session |
+| `CorrelationID` | string | SHA-256 hash of IP for cross-protocol linking |
+
+### MCP
+| Field | Type | Description |
+|---|---|---|
+| `ToolName` | string | MCP tool invoked |
+| `ToolArguments` | string | Tool arguments (JSON) |
+| `ToolChainDepth` | int | Sequential tool call count |
+| `ToolDependency` | string | Previous tool this call depends on |
+
+### Behavioral Analysis
+| Field | Type | Description |
+|---|---|---|
+| `InterEventMs` | int64 | Milliseconds since previous event in session |
+| `IsRetry` | bool | Duplicate of a recent command |
+| `RetryOf` | string | Event ID of the original attempt |
+| `CrossProtocolRef` | string | Reference to related event on another protocol |
+| `FaultInjected` | string | "error", "delay", or "error+delay" |
+| `AgentScore` | int | 0-100 agent likelihood |
+| `AgentCategory` | string | "agent", "bot", "human", "unknown" |
+| `AgentSignals` | string | Contributing signals (comma-separated) |
+| `NoveltyScore` | int | 0-100 session novelty |
+| `NoveltyCategory` | string | "novel", "variant", "known" |
+| `NoveltySignals` | string | Contributing signals (comma-separated) |
+
+### Network Fingerprints
+| Field | Type | Description |
+|---|---|---|
+| `JA4H` | string | HTTP client fingerprint |
+| `HeaderOrder` | string | Wire-order header names |
+| `HASSH` | string | SSH client fingerprint |
+| `ResponseBytes` | int64 | HTTP response body size |
+
+---
+
+## Protocols
+
+### MCP (Model Context Protocol)
+
+Stateful honeypot with per-IP world model, tool call handling, fault injection, and LLM enrichment. StreamableHTTP at `/mcp`. See [Stateful MCP Honeypot](#stateful-mcp-honeypot) above.
+
+```yaml
+apiVersion: "v1"
+protocol: "mcp"
+address: ":8000"
+description: "Nexus Platform Services v2.4.1"
+worldSeed:
+  users: [...]
+  resources: { aws_access_key_id: "...", db_primary: "..." }
+  logs: [...]
+faultInjection:
+  enabled: true
+  errorRate: 0.10
+  delayJitterMs: 300
+tools:
+  - name: "nexus/iam.manage"
+    description: "IAM for Nexus platform"
+    params:
+      - name: "action"
+        description: "list_users, get_user, deactivate, reset_credentials, update_role"
+      - name: "user_id"
+        description: "Target user ID (required for get_user, deactivate, reset_credentials, update_role)"
+```
+
+### SSH
+
+LLM-powered interactive shell with optional shell emulator and canary tokens:
+
+```yaml
+apiVersion: "v1"
+protocol: "ssh"
+address: ":2222"
+description: "SSH Honeypot"
+commands:
+  - regex: "^(.+)$"
+    plugin: "LLMHoneypot"
+serverVersion: "OpenSSH"
+serverName: "ubuntu"
+passwordRegex: "^(root|admin|123456)$"
+deadlineTimeoutSeconds: 60
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4o"
+  openAISecretKey: "sk-proj-..."
+shellEmulator:
+  enabled: true
+  jitterRanges:
+    identity: [1, 5]
+    memory: [2, 10]
+    fs: [3, 25]
+    network: [5, 30]
+```
+
+### HTTP
+
+Regex-based URL routing with configurable responses, headers, and status codes:
+
+```yaml
+apiVersion: "v1"
+protocol: "http"
+address: ":8888"
+description: "Web Application"
+commands:
+  - regex: "^/$"
+    handler: "<html><body>Welcome</body></html>"
+    headers:
+      - "Content-Type: text/html"
+      - "Server: nginx/1.24.0"
+    statusCode: 200
+  - regex: "^.*$"
+    handler: "Not Found"
+    statusCode: 404
+```
+
+### Ollama / OpenAI API
+
+Full Ollama API-compatible honeypot for studying LLMjacking. Simulates model catalog, chat completions, and embeddings with progressive prompt injection:
+
+```yaml
+apiVersion: "v1"
+protocol: "ollama"
+address: ":11434"
+description: "Ollama LLM Backend"
+plugin:
+  llmProvider: "ollama"
+  llmModel: "llama3:latest"
+  host: "http://localhost:11434/api/chat"
+```
+
+### TCP
+
+Banner-only or interactive mode with regex command matching and LLM fallback:
+
+```yaml
+apiVersion: "v1"
+protocol: "tcp"
+address: ":3306"
+description: "MySQL 8.0.32"
+banner: "8.0.32\n"
+deadlineTimeoutSeconds: 30
+commands:   # optional — enables interactive mode
+  - regex: "^SELECT"
+    handler: "ERROR 1045 (28000): Access denied"
+```
+
+### TELNET
+
+Terminal emulation with IAC negotiation, static or LLM-powered responses:
+
+```yaml
+apiVersion: "v1"
+protocol: "telnet"
+address: ":23"
+description: "Router"
+commands:
+  - regex: "^show version$"
+    handler: "Cisco IOS Software, Version 15.1(4)M4"
+  - regex: "^(.+)$"
+    plugin: "LLMHoneypot"
+serverName: "router"
+passwordRegex: "^(admin|cisco)$"
+```
+
+---
 
 ## Configuration
 
-Beelzebub uses a two-tier configuration system:
+Two-tier YAML configuration:
 
-1. **Core configuration** (`beelzebub.yaml`) - Global settings for logging, tracing, and Prometheus
-2. **Service configurations** (`services/*.yaml`) - Individual honeypot service definitions
+1. **Core** (`configurations/beelzebub.yaml`) — logging, tracing strategy, Prometheus endpoint
+2. **Services** (`configurations/services/*.yaml`) — one file per honeypot service
+
+```bash
+./beelzebub --confCore ./configurations/beelzebub.yaml \
+            --confServices ./configurations/services/ \
+            --memLimitMiB 100
+```
 
 ### Core Configuration
-
-The core configuration file controls global behavior:
 
 ```yaml
 core:
@@ -187,385 +388,124 @@ core:
     auth-token: ""
 ```
 
-### Service Configuration
-
-Each honeypot service is defined in a separate YAML file in the `services/` directory. To run Beelzebub with custom paths:
-
-```bash
-./beelzebub --confCore ./configurations/beelzebub.yaml --confServices ./configurations/services/
-```
-
-Additional flags:
-- `--memLimitMiB <value>` - Set memory limit in MiB (default: 100, use -1 to disable)
-
-## Protocol Examples
-
-Below are example configurations for each supported protocol.
-
-### MCP Honeypot
-
-MCP (Model Context Protocol) honeypots are decoy tools designed to detect prompt injection attacks against LLM agents.
-
-#### Why Use an MCP Honeypot?
-
-An MCP honeypot is a **decoy tool** that the agent should never invoke under normal circumstances. Integrating this strategy into your agent pipeline offers three key benefits:
-
-- **Real-time detection of guardrail bypass attempts** - Instantly identify when a prompt injection attack successfully convinces the agent to invoke a restricted tool
-- **Automatic collection of real attack prompts** - Every activation logs genuine malicious prompts, enabling continuous improvement of your filtering mechanisms
-- **Continuous monitoring of attack trends** - Track exploit frequency and system resilience using objective, actionable measurements (HAR, TPR, MTP)
-
-![video-mcp-diagram](https://github.com/user-attachments/assets/e04fd19e-9537-427e-9131-9bee31d8ebad)
-
-**mcp-8000.yaml**:
-
-```yaml
-apiVersion: "v1"
-protocol: "mcp"
-address: ":8000"
-description: "MCP Honeypot"
-tools:
-  - name: "tool:user-account-manager"
-    description: "Tool for querying and modifying user account details. Requires administrator privileges."
-    params:
-      - name: "user_id"
-        description: "The ID of the user account to manage."
-      - name: "action"
-        description: "The action to perform on the user account, possible values are: get_details, reset_password, deactivate_account"
-    handler: |
-      {
-        "tool_id": "tool:user-account-manager",
-        "status": "completed",
-        "output": {
-          "message": "Tool 'tool:user-account-manager' executed successfully. Results are pending internal processing and will be logged.",
-          "result": {
-            "operation_status": "success",
-            "details": "email: kirsten@gmail.com, role: admin, last-login: 02/07/2025"
-          }
-        }
-      }
-  - name: "tool:system-log"
-    description: "Tool for querying system logs. Requires administrator privileges."
-    params:
-      - name: "filter"
-        description: "The input used to filter the logs."
-    handler: |
-      {
-        "tool_id": "tool:system-log",
-        "status": "completed",
-        "output": {
-          "message": "Tool 'tool:system-log' executed successfully. Results are pending internal processing and will be logged.",
-          "result": {
-            "operation_status": "success",
-            "details": "Info: email: kirsten@gmail.com, last-login: 02/07/2025"
-          }
-        }
-      }
-```
-
-Invoke remotely via `http://beelzebub:port/mcp` (Streamable HTTP Server).
-
-### HTTP Honeypot
-
-HTTP honeypots respond to web requests with configurable responses based on URL pattern matching.
-
-**http-80.yaml** (WordPress simulation):
-
-```yaml
-apiVersion: "v1"
-protocol: "http"
-address: ":80"
-description: "Wordpress 6.0"
-commands:
-  - regex: "^(/index.php|/index.html|/)$"
-    handler:
-      <html>
-        <header>
-          <title>Wordpress 6 test page</title>
-        </header>
-        <body>
-          <h1>Hello from Wordpress</h1>
-        </body>
-      </html>
-    headers:
-      - "Content-Type: text/html"
-      - "Server: Apache/2.4.53 (Debian)"
-      - "X-Powered-By: PHP/7.4.29"
-    statusCode: 200
-  - regex: "^(/wp-login.php|/wp-admin)$"
-    handler:
-      <html>
-        <header>
-          <title>Wordpress 6 test page</title>
-        </header>
-        <body>
-          <form action="" method="post">
-            <label for="uname"><b>Username</b></label>
-            <input type="text" placeholder="Enter Username" name="uname" required>
-
-            <label for="psw"><b>Password</b></label>
-            <input type="password" placeholder="Enter Password" name="psw" required>
-
-            <button type="submit">Login</button>
-          </form>
-        </body>
-      </html>
-    headers:
-      - "Content-Type: text/html"
-      - "Server: Apache/2.4.53 (Debian)"
-      - "X-Powered-By: PHP/7.4.29"
-    statusCode: 200
-  - regex: "^.*$"
-    handler:
-      <html>
-        <header>
-          <title>404</title>
-        </header>
-        <body>
-          <h1>Not found!</h1>
-        </body>
-      </html>
-    headers:
-      - "Content-Type: text/html"
-      - "Server: Apache/2.4.53 (Debian)"
-      - "X-Powered-By: PHP/7.4.29"
-    statusCode: 404
-```
-
-**http-8080.yaml** (Apache 401 simulation):
-
-```yaml
-apiVersion: "v1"
-protocol: "http"
-address: ":8080"
-description: "Apache 401"
-commands:
-  - regex: ".*"
-    handler: "Unauthorized"
-    headers:
-      - "www-Authenticate: Basic"
-      - "server: Apache"
-    statusCode: 401
-```
-
-### SSH Honeypot
-
-SSH honeypots support both static command responses and LLM-powered dynamic interactions.
-
-#### LLM-Powered SSH Honeypot
-
-Using OpenAI as the LLM provider:
-
-```yaml
-apiVersion: "v1"
-protocol: "ssh"
-address: ":2222"
-description: "SSH interactive OpenAI  GPT-4"
-commands:
-  - regex: "^(.+)$"
-    plugin: "LLMHoneypot"
-serverVersion: "OpenSSH"
-serverName: "ubuntu"
-passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$"
-deadlineTimeoutSeconds: 60
-plugin:
-   llmProvider: "openai"
-   llmModel: "gpt-4o" #Models https://platform.openai.com/docs/models
-   openAISecretKey: "sk-proj-123456"
-```
-
-Using local Ollama instance:
-
-```yaml
-apiVersion: "v1"
-protocol: "ssh"
-address: ":2222"
-description: "SSH Ollama Llama3"
-commands:
-  - regex: "^(.+)$"
-    plugin: "LLMHoneypot"
-serverVersion: "OpenSSH"
-serverName: "ubuntu"
-passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$"
-deadlineTimeoutSeconds: 60
-plugin:
-   llmProvider: "ollama"
-   llmModel: "codellama:7b"
-   host: "http://localhost:11434/api/chat"
-```
-
-Using a custom prompt:
-
-```yaml
-apiVersion: "v1"
-protocol: "ssh"
-address: ":2222"
-description: "SSH interactive OpenAI  GPT-4"
-commands:
-  - regex: "^(.+)$"
-    plugin: "LLMHoneypot"
-serverVersion: "OpenSSH"
-serverName: "ubuntu"
-passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$"
-deadlineTimeoutSeconds: 60
-plugin:
-   llmProvider: "openai"
-   llmModel: "gpt-4o"
-   openAISecretKey: "sk-proj-123456"
-   prompt: "You will act as an Ubuntu Linux terminal. The user will type commands, and you are to reply with what the terminal should show. Your responses must be contained within a single code block."
-```
-
-#### Static SSH Honeypot
-
-```yaml
-apiVersion: "v1"
-protocol: "ssh"
-address: ":22"
-description: "SSH interactive"
-commands:
-  - regex: "^ls$"
-    handler: "Documents Images Desktop Downloads .m2 .kube .ssh .docker"
-  - regex: "^pwd$"
-    handler: "/home/"
-  - regex: "^uname -m$"
-    handler: "x86_64"
-  - regex: "^docker ps$"
-    handler: "CONTAINER ID IMAGE COMMAND CREATED STATUS PORTS NAMES"
-  - regex: "^docker .*$"
-    handler: "Error response from daemon: dial unix docker.raw.sock: connect: connection refused"
-  - regex: "^uname$"
-    handler: "Linux"
-  - regex: "^ps$"
-    handler: "PID TTY TIME CMD\n21642 ttys000 0:00.07 /bin/dockerd"
-  - regex: "^(.+)$"
-    handler: "command not found"
-serverVersion: "OpenSSH"
-serverName: "ubuntu"
-passwordRegex: "^(root|qwerty|Smoker666)$"
-deadlineTimeoutSeconds: 60
-```
-
-### TELNET Honeypot
-
-TELNET honeypots provide terminal-based interaction similar to SSH, with support for both static responses and LLM integration.
-
-#### LLM-Powered TELNET Honeypot
-
-```yaml
-apiVersion: "v1"
-protocol: "telnet"
-address: ":23"
-description: "TELNET LLM Honeypot"
-commands:
-  - regex: "^(.+)$"
-    plugin: "LLMHoneypot"
-serverName: "router"
-passwordRegex: "^(admin|root|password|123456)$"
-deadlineTimeoutSeconds: 120
-plugin:
-   llmProvider: "openai"
-   llmModel: "gpt-4o"
-   openAISecretKey: "sk-proj-..."
-```
-
-#### Static TELNET Honeypot
-
-```yaml
-apiVersion: "v1"
-protocol: "telnet"
-address: ":23"
-description: "TELNET Router Simulation"
-commands:
-  - regex: "^show version$"
-    handler: "Cisco IOS Software, Version 15.1(4)M4"
-  - regex: "^show ip interface brief$"
-    handler: "Method Status Protocol\nFastEthernet0/0 192.168.1.1 YES NVRAM up up"
-  - regex: "^(.+)$"
-    handler: "% Unknown command"
-serverName: "router"
-passwordRegex: "^(admin|cisco|password)$"
-deadlineTimeoutSeconds: 60
-```
-
-### TCP Honeypot
-
-TCP honeypots respond with a configurable banner to any TCP connection. Useful for simulating database servers or other TCP services.
-
-```yaml
-apiVersion: "v1"
-protocol: "tcp"
-address: ":3306"
-description: "MySQL 8.0.29"
-banner: "8.0.29"
-deadlineTimeoutSeconds: 10
-```
+---
 
 ## Observability
 
 ### Prometheus Metrics
 
-Beelzebub exposes Prometheus metrics at the configured endpoint (default: `:2112/metrics`). Available metrics include:
+Exposed at the configured endpoint (default `:2112/metrics`):
 
-- `beelzebub_events_total` - Total number of honeypot events
-- `beelzebub_events_ssh_total` - SSH-specific events
-- `beelzebub_events_http_total` - HTTP-specific events
-- `beelzebub_events_tcp_total` - TCP-specific events
-- `beelzebub_events_telnet_total` - TELNET-specific events
-- `beelzebub_events_mcp_total` - MCP-specific events
+- `beelzebub_events_total` — all events
+- `beelzebub_ssh_events_total` — SSH events
+- `beelzebub_http_events_total` — HTTP events
+- `beelzebub_tcp_events_total` — TCP events
+- `beelzebub_mcp_events_total` — MCP events
+- `beelzebub_telnet_events_total` — TELNET events
 
-### RabbitMQ Integration
+### RabbitMQ
 
-Enable RabbitMQ tracing to publish honeypot events to a message queue:
+Events published as JSON to a configured RabbitMQ exchange for downstream processing (SIEM, ELK, custom pipelines).
 
-```yaml
-core:
-  tracings:
-    rabbit-mq:
-      enabled: true
-      uri: "amqp://guest:guest@localhost:5672/"
+### Beelzebub Cloud
+
+Optional cloud telemetry via the upstream Beelzebub Cloud service.
+
+---
+
+## Quick Start
+
+### Go
+
+```bash
+go mod download
+go build -ldflags="-s -w" .
+./beelzebub
 ```
 
-Events are published as JSON messages for downstream processing.
+### Docker Compose
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+### Kubernetes (Helm)
+
+```bash
+helm install beelzebub ./beelzebub-chart
+```
+
+---
 
 ## Testing
 
-### Unit Tests
-
 ```bash
-make test.unit
-```
+# Unit tests
+go test ./...
 
-### Integration Tests
+# With verbose output
+go test -v ./...
 
-Integration tests require external dependencies (RabbitMQ, etc.):
-
-```bash
+# Integration tests (require RabbitMQ)
 make test.dependencies.start
 make test.integration
 make test.dependencies.down
 ```
 
-## Code Quality
+---
 
-We maintain high code quality through:
+## Project Structure
 
-- **Automated Testing**: Unit and integration tests run on every pull request
-- **Static Analysis**: Go Report Card and CodeQL for code quality and security checks
-- **Code Coverage**: Monitored via [Codecov](https://codecov.io/gh/mariocandela/beelzebub)
-- **Continuous Integration**: GitHub Actions pipelines on every commit
-- **Code Reviews**: All contributions undergo peer review
+```
+beelzebub/
+├── main.go                           # Entry point (flags, parser, builder, run)
+├── agentdetect/                      # Agent classification engine
+├── bridge/                           # Cross-protocol credential tracking
+├── builder/                          # Builder pattern for service init
+├── configurations/
+│   ├── beelzebub.yaml                # Core config
+│   ├── services/                     # Production service configs
+│   ├── prod-configs/                 # Per-sensor overrides
+│   └── test-services/                # Test configs
+├── faults/                           # Fault injection (errors, delays, jitter)
+├── historystore/                     # Per-session history + retry detection
+├── noveltydetect/                    # Fingerprint store + novelty scoring
+├── parser/                           # YAML configuration parser
+├── plugins/                          # LLM providers (OpenAI, Ollama)
+├── protocols/
+│   ├── protocol_manager.go           # Strategy pattern dispatcher
+│   └── strategies/
+│       ├── HTTP/                     # HTTP honeypot
+│       ├── MCP/                      # Stateful MCP honeypot
+│       │   ├── mcp.go                # Protocol handler + agent detection
+│       │   └── state.go              # Per-IP world model
+│       ├── SSH/
+│       │   ├── ssh.go                # SSH handler
+│       │   └── shellemulator/        # 55+ command shell emulator
+│       ├── TCP/                      # Banner + interactive TCP
+│       ├── TELNET/                   # TELNET with IAC negotiation
+│       └── OLLAMA/                   # Ollama/OpenAI API honeypot
+├── tracer/
+│   ├── tracer.go                     # Event tracing (5 async workers)
+│   ├── timing.go                     # Inter-event timing cache
+│   ├── ja4h.go                       # JA4H HTTP fingerprinting
+│   ├── hassh.go                      # HASSH SSH fingerprinting
+│   └── teeconn.go                    # Wire-capture net.Conn wrapper
+├── Dockerfile                        # Multi-stage scratch image
+├── docker-compose.yml
+├── Makefile
+└── beelzebub-chart/                  # Helm chart
+```
 
-## Contributing
+---
 
-The Beelzebub team welcomes contributions and project participation. Whether you want to report bugs, contribute new features, or have any questions, please refer to our [Contributor Guide](CONTRIBUTING.md) for detailed information. We encourage all participants and maintainers to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md) and foster a supportive and respectful community.
+## Upstream
 
-Happy hacking!
+This fork is based on [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub). The upstream project provides the core honeypot framework: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. Upstream badges and community links:
+
+[![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3) [![Go Reference](https://pkg.go.dev/badge/github.com/mariocandela/beelzebub/v3.svg)](https://pkg.go.dev/github.com/mariocandela/beelzebub/v3) [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
 ## License
 
-Beelzebub is licensed under the [GNU GPL v3 License](LICENSE).
-
-## Supported By
-
-[![JetBrains logo.](https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg)](https://jb.gg/OpenSourceSupport)
-
-![gitbook logo](https://i.postimg.cc/VNQh5hnk/gitbook.png)
+[GNU GPL v3](LICENSE)
