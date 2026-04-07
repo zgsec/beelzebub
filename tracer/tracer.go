@@ -77,6 +77,9 @@ type Event struct {
 	NoveltyCategory string `json:"NoveltyCategory,omitempty"`
 	NoveltySignals  string `json:"NoveltySignals,omitempty"`
 
+	// Response metrics
+	ResponseBytes int64 `json:"ResponseBytes,omitempty"` // actual HTTP response body size (bytes)
+
 	// Network fingerprints
 	JA4H        string `json:"JA4H,omitempty"`
 	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
