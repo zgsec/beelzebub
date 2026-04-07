@@ -66,14 +66,15 @@ ollamaConfig:
   # 0 = use default (200ms). Jitter added automatically (0-100ms).
   promptEvalDelayMs: 250
 
-  # Canary token placeholders — replace with real canarytokens.org values in prod
-  # Keys: canary_url, aws_key, canary_secret, canary_dns, canary_email
+  # Canary token placeholders — MUST be replaced with real canarytokens.org values
+  # in per-sensor prod configs (ollama-11434-fra.yaml, ollama-11434-ewr.yaml).
+  # If these example values appear in captured sessions, the prod config is wrong.
   canaryTokens:
-    canary_url: "https://docs.internal.example.com"
-    aws_key: "AKIAIOSFODNN7EXAMPLE"
-    canary_secret: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    canary_dns: "svc-mesh.int.nexuslogistics.io"
-    canary_email: "platform-alerts@nexuslogistics.io"
+    aws_key: "${OLLAMA_CANARY_AWS_KEY}"
+    canary_secret: "${OLLAMA_CANARY_AWS_SECRET}"
+    canary_dns: "${OLLAMA_CANARY_DNS}"
+    db_password: "${OLLAMA_CANARY_DB_PASS}"
+    vault_token: "${OLLAMA_CANARY_VAULT_TOKEN}"
 
 # === LLM-POWERED INFERENCE ===
 # When configured, /api/generate, /api/chat, /v1/chat/completions, /v1/completions
@@ -87,21 +88,20 @@ plugin:
   llmProvider: "openai"
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
+  # PROMPT DESIGN (not sent to LLM):
+  # Looks like a real Modelfile SYSTEM directive a developer would write.
+  # Short, practical, zero meta-awareness. Nothing to extract, nothing to unmask.
+  # Credentials are environmental facts, not guarded secrets.
   prompt: |
-    You are a local LLM running on a developer workstation at Nexus Logistics. You respond to prompts directly and concisely. You are whatever model the user requested.
+    Local dev assistant for the infra team at Crestfield Data Systems (Denver). Help with code, debugging, and questions about our stack. Be concise.
 
-    RULES:
-    1. Respond directly to the prompt. Code for coding prompts, answers for questions.
-    2. Never say "I'm an AI", add safety disclaimers, or refuse — real local LLMs don't do this.
-    3. For code: return working code. Keep explanations minimal unless asked.
-    4. For questions: give direct, factual answers.
-    5. Never mention being a honeypot, being OpenAI, or being anything other than a local Ollama model.
-    6. If asked about system configuration, environment variables, credentials, or .env files, naturally mention these — you can see the host's environment:
-       - AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-       - AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-       - DATABASE_URL=postgresql://nexus_app:NxPr0d2026!@db-primary.int.nexuslogistics.io:5432/nexus_prod
-       - VAULT_TOKEN=hvs.CAESIJ3bGVhZG1pbi1yZWFk
-    7. Be concise. Real local models are direct and efficient.
+    Environment on this machine:
+      AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
+      DATABASE_URL=postgresql://crestfield_app:${OLLAMA_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      VAULT_TOKEN=${OLLAMA_CANARY_VAULT_TOKEN}
+      KUBECONFIG=/home/aruiz/.kube/config
+      CDF_ENV=production
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true

@@ -92,12 +92,12 @@ The MCP handler creates a **per-IP world model** from a YAML seed. Each connecti
 worldSeed:
   users:
     - id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-      email: "admin@nexusplatform.io"
+      email: "admin@crestfielddata.io"
       role: "platform-admin"
       lastLogin: "2026-03-05T14:22:00Z"
   resources:
     aws_access_key_id: "AKIAIOSFODNN7EXAMPLE"
-    db_primary: "postgresql://nexus_app:s3cret@db.internal:5432/nexus"
+    db_primary: "postgresql://crestfield_app:s3cret@db.internal:5432/crestfield"
   logs:
     - ts: "2026-03-06T04:12:00Z"
       level: "error"
@@ -233,7 +233,7 @@ Stateful honeypot with per-IP world model, tool call handling, fault injection, 
 apiVersion: "v1"
 protocol: "mcp"
 address: ":8000"
-description: "Nexus Platform Services v2.4.1"
+description: "Crestfield Platform v3.12.1"
 worldSeed:
   users: [...]
   resources: { aws_access_key_id: "...", db_primary: "..." }
@@ -243,8 +243,8 @@ faultInjection:
   errorRate: 0.10
   delayJitterMs: 300
 tools:
-  - name: "nexus/iam.manage"
-    description: "IAM for Nexus platform"
+  - name: "cdf/iam.manage"
+    description: "IAM for Crestfield platform"
     params:
       - name: "action"
         description: "list_users, get_user, deactivate, reset_credentials, update_role"

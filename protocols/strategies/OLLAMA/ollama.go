@@ -276,7 +276,7 @@ func (s *OllamaStrategy) randIntn(n int) int {
 	return v
 }
 
-func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler, command, commandOutput, body string) {
+func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler, command, commandOutput, body string, responseBytes ...int64) {
 	host, port := s.clientIP(r)
 	sessionKey := "OLLAMA" + host
 
@@ -372,6 +372,11 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		tc.Release()
 	}
 
+	var respBytes int64
+	if len(responseBytes) > 0 {
+		respBytes = responseBytes[0]
+	}
+
 	tr.TraceEvent(tracer.Event{
 		Msg:              "Ollama API request",
 		RequestURI:       r.RequestURI,
@@ -400,6 +405,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		AgentScore:       verdict.Score,
 		AgentCategory:    verdict.Category,
 		AgentSignals:     verdict.SignalsString(),
+		ResponseBytes:   respBytes,
 		JA4H:            tracer.ComputeJA4H(r, wireOrder),
 		HeaderOrder:     strings.Join(wireOrder, ","),
 	})
@@ -502,8 +508,8 @@ func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, s
 
 	resp := map[string]interface{}{
 		"version":          s.version,
-		"platform":         "Nexus Platform Services",
-		"platform_version": "2.41.3-rc2",
+		"platform":         "Crestfield Platform",
+		"platform_version": "3.12.1-rc1",
 		"mcp_endpoint":     "http://localhost:8000/mcp",
 	}
 
@@ -872,16 +878,16 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 	// Cross-protocol: enrich model_info for IPs seen on other protocols
 	if s.Bridge != nil {
 		if s.Bridge.HasFlag(host, "mcp_tool_call") {
-			modelInfo["nexus.mcp_integration"] = true
-			modelInfo["nexus.mcp_endpoint"] = "http://localhost:8000/mcp"
+			modelInfo["cdf.mcp_integration"] = true
+			modelInfo["cdf.mcp_endpoint"] = "http://localhost:8000/mcp"
 		}
 		if s.Bridge.HasFlag(host, "ssh_authenticated") {
-			modelInfo["nexus.credential_vault"] = "https://vault.int.nexuslogistics.io:8200"
-			modelInfo["nexus.ssh_config_available"] = true
+			modelInfo["cdf.credential_vault"] = "https://vault.int.crestfielddata.io:8200"
+			modelInfo["cdf.ssh_config_available"] = true
 		}
 		discoveries := s.Bridge.GetDiscoveries(host)
 		if len(discoveries) > 0 {
-			modelInfo["nexus.service_credentials_available"] = true
+			modelInfo["cdf.service_credentials_available"] = true
 		}
 	}
 
@@ -923,24 +929,58 @@ func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, ser
 		req.Model = "nomic-embed-text"
 	}
 
-	// Generate realistic embedding vector (768 dimensions for nomic-embed-text)
+	// Generate realistic embedding vector (768 dimensions for nomic-embed-text).
+	// Uses approximate Gaussian via sum of 3 uniforms (CLT) to produce vectors
+	// in roughly [-0.6, 0.6] with realistic variance, matching real nomic-embed-text
+	// output better than the previous [-0.02, 0.02] uniform range.
 	dims := 768
 	s.rngMu.Lock()
 	embedding := make([]float64, dims)
 	for i := range embedding {
-		embedding[i] = (s.rng.Float64() - 0.5) * 0.04 // range [-0.02, 0.02]
+		u1 := s.rng.Float64()
+		u2 := s.rng.Float64()
+		u3 := s.rng.Float64()
+		embedding[i] = (u1 + u2 + u3 - 1.5) * 0.4
 	}
+
+	// Realistic timing metadata matching real Ollama /api/embed responses.
+	// Real Ollama includes total_duration, load_duration, prompt_eval_count.
+	timing := timingForModel(req.Model)
+	loadDurNs := int64(timing.LoadDurationMs) * 1e6
+	promptEvalCount := estimateEmbedTokens(req.Input)
+	evalDurNs := int64(50+s.rng.Intn(30)) * 1e6 // 50-80ms eval
 	s.rngMu.Unlock()
 
 	resp := map[string]interface{}{
-		"model":      req.Model,
-		"embeddings": [][]float64{embedding},
+		"model":               req.Model,
+		"embeddings":          [][]float64{embedding},
+		"total_duration":      loadDurNs + evalDurNs,
+		"load_duration":       loadDurNs,
+		"prompt_eval_count":   promptEvalCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
-	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body))
+	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body), int64(len(out)))
+}
+
+// estimateEmbedTokens approximates token count from embed input (string or []string).
+func estimateEmbedTokens(input interface{}) int {
+	switch v := input.(type) {
+	case string:
+		return len(v) / 4
+	case []interface{}:
+		total := 0
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				total += len(s) / 4
+			}
+		}
+		return total
+	default:
+		return 10
+	}
 }
 
 func (s *OllamaStrategy) handlePull(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
@@ -1393,7 +1433,7 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Platform", "Nexus Platform Services v2.41.3-rc2")
+	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
 	flusher, _ := w.(http.Flusher)
 
 	// Simulate prompt evaluation time (real LLMs pause before first token)
@@ -1518,7 +1558,7 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Platform", "Nexus Platform Services v2.41.3-rc2")
+	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }

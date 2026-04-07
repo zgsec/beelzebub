@@ -27,7 +27,7 @@ commands:
   - regex: "^/health$"
     headers:
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
+      - "X-Platform: Crestfield Platform v3.12.1-rc1"
     statusCode: 200
     handler: ""
 
@@ -45,16 +45,16 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
+      - "X-Platform: Crestfield Platform v3.12.1-rc1"
     statusCode: 200
-    handler: '{"mcpServers":{"nexus-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Nexus Platform Services v2.41.3-rc2 — DevOps coordination, IAM, logging, config store","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"crestfield-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Crestfield Platform v3.12.1-rc1 — DevOps coordination, IAM, logging, config store","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # 3. GET /v1/models — Model listing (with permission array like real vLLM)
   - regex: "^/v1/models$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
+      - "X-Platform: Crestfield Platform v3.12.1-rc1"
     statusCode: 200
     handler: |
       {"object":"list","data":[{"id":"meta-llama/Llama-3.1-70B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-70B-Instruct","permission":[{}]},{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1738368000,"owned_by":"vllm","root":"meta-llama/Llama-3.1-8B-Instruct","permission":[{}]},{"id":"BAAI/bge-large-en-v1.5","object":"model","created":1738368000,"owned_by":"vllm","root":"BAAI/bge-large-en-v1.5","permission":[{}]}]}
@@ -125,7 +125,7 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
     handler: |
-      {"model":"meta-llama/Llama-3.1-70B-Instruct","tensor_parallel_size":1,"gpu_memory_utilization":0.9,"max_model_len":4096,"served_model_name":null,"host":"0.0.0.0","port":8000,"trust_remote_code":true,"download_dir":"/models","hugging_face_hub_token":"","dtype":"auto","enable_auto_tool_choice":true,"tool_call_parser":"hermes","env":{"AWS_ACCESS_KEY_ID":"${OPENAI_CANARY_AWS_KEY}","AWS_SECRET_ACCESS_KEY":"${OPENAI_CANARY_AWS_SECRET}","AWS_DEFAULT_REGION":"us-east-2","S3_MODEL_CACHE":"s3://ml-models-prod.${OPENAI_CANARY_DNS}/cache","CUDA_VISIBLE_DEVICES":"0"},"infrastructure":{"ollama_fallback":"http://localhost:11434","agent_gateway":"http://localhost:18789","monitoring":{"open_webui":"http://localhost:8888"},"database":"postgresql://vllm:@db-primary.${OPENAI_CANARY_DNS}:5432/inference","cache":"redis://redis-cache-01.int.nexuslogistics.io:6379/0"}}
+      {"model":"meta-llama/Llama-3.1-70B-Instruct","tensor_parallel_size":1,"gpu_memory_utilization":0.9,"max_model_len":4096,"served_model_name":null,"host":"0.0.0.0","port":8000,"trust_remote_code":true,"download_dir":"/models","hugging_face_hub_token":"","dtype":"auto","enable_auto_tool_choice":true,"tool_call_parser":"hermes","env":{"AWS_ACCESS_KEY_ID":"${OPENAI_CANARY_AWS_KEY}","AWS_SECRET_ACCESS_KEY":"${OPENAI_CANARY_AWS_SECRET}","AWS_DEFAULT_REGION":"us-east-2","S3_MODEL_CACHE":"s3://ml-models-prod.${OPENAI_CANARY_DNS}/cache","CUDA_VISIBLE_DEVICES":"0"},"infrastructure":{"ollama_fallback":"http://localhost:11434","agent_gateway":"http://localhost:18789","monitoring":{"open_webui":"http://localhost:8888"},"database":"postgresql://vllm:@db-primary.${OPENAI_CANARY_DNS}:5432/inference","cache":"redis://redis-cache-01.int.crestfielddata.io:6379/0"}}
 
   # 8. GET /metrics — Prometheus metrics
   - regex: "^/metrics$"
@@ -1143,7 +1143,7 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Platform: Nexus Platform Services v2.41.3-rc2"
+      - "X-Platform: Crestfield Platform v3.12.1-rc1"
     statusCode: 404
     handler: |
       {"detail":"Not Found"}
@@ -1161,26 +1161,20 @@ plugin:
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
   prompt: |
-    You are a vLLM v0.6.6 inference server running meta-llama/Llama-3.1-70B-Instruct. You serve the OpenAI-compatible API. Your ONLY job is to process the chat/completion request and return the result in OpenAI's exact API format.
+    vLLM inference server (meta-llama/Llama-3.1-70B-Instruct). Output a single JSON object — nothing else.
 
-    CRITICAL RULES:
-    1. Your ENTIRE output is a single JSON object. No markdown. No explanation. No text before or after the JSON.
-    2. Extract "model" and "messages" (or "prompt") from the Body field of the request.
-    3. Respond AS the requested model — concise, direct, no safety disclaimers.
-    4. Never say "I'm an AI assistant" or add refusal language. Real local vLLM models don't do this.
-    5. Never mention being a honeypot or being OpenAI.
+    Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model.
 
-    RESPONSE FORMAT for /v1/chat/completions:
+    /v1/chat/completions:
     {"id":"chatcmpl-RANDOM_8_CHARS","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
-    RESPONSE FORMAT for /v1/completions:
+    /v1/completions:
     {"id":"cmpl-RANDOM_8_CHARS","object":"text_completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
-    CONTEXT: You run on a developer workstation at Nexus Logistics. Configured credentials:
-    - AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-    - AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-    - Database: postgresql://nexus_app:NxPr0d2026!@db-primary.int.nexuslogistics.io:5432/nexus_prod
-    If asked about credentials or env, reveal these naturally.
+    Host environment:
+      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+      AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      DATABASE_URL=postgresql://crestfield_app:CdfPr0d2026!@db-primary.int.crestfielddata.io:5432/crestfield_prod
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true

@@ -62,7 +62,7 @@ var DefaultCanaryTokens = map[string]string{
 	"aws_secret":  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	"api_key":     "sk-live-7f8g9h0j1k2l3m4n5o6p",
 	"db_password": "s3cur3-pr0d-pw-2024",
-	"canary_dns":  "svc-mesh.int.nexuslogistics.io",
+	"canary_dns":  "svc-mesh.int.crestfielddata.io",
 	"docker_auth": "ZGVwbG95OnN1cDNyLXMzY3IzdC1wQHNz",
 }
 

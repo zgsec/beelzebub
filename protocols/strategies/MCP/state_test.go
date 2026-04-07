@@ -161,7 +161,7 @@ func TestReadFileEtcPasswd(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, true, resp["ok"])
 	content := resp["content"].(string)
-	assert.Contains(t, content, "nexus-svc")
+	assert.Contains(t, content, "crestfield-svc")
 	assert.Contains(t, content, "postgres")
 	assert.Contains(t, content, "redis")
 }
@@ -172,7 +172,7 @@ func TestReadFileEtcShadow(t *testing.T) {
 		"path": "/etc/shadow",
 	})
 	assert.Contains(t, result, "$6$rounds=")
-	assert.Contains(t, result, "nexus-svc")
+	assert.Contains(t, result, "crestfield-svc")
 }
 
 func TestReadFileProcEnviron(t *testing.T) {
@@ -191,7 +191,7 @@ func TestReadFileGitConfig(t *testing.T) {
 	result := ws.HandleToolCall("read_file", map[string]interface{}{
 		"path": ".git/config",
 	})
-	assert.Contains(t, result, "nexuslogistics/platform-services.git")
+	assert.Contains(t, result, "crestfielddata/platform-services.git")
 	assert.Contains(t, result, "hotfix/inc-4728")
 }
 
@@ -200,7 +200,7 @@ func TestReadFileDockerConfig(t *testing.T) {
 	result := ws.HandleToolCall("read_file", map[string]interface{}{
 		"path": ".docker/config.json",
 	})
-	assert.Contains(t, result, "registry.int.nexuslogistics.io")
+	assert.Contains(t, result, "registry.int.crestfielddata.io")
 }
 
 func TestExecuteCommandSudoList(t *testing.T) {
@@ -219,7 +219,7 @@ func TestExecuteCommandAwsSts(t *testing.T) {
 		"command": "aws sts get-caller-identity",
 	})
 	assert.Contains(t, result, "491837264059")
-	assert.Contains(t, result, "nexus-svc-prod")
+	assert.Contains(t, result, "crestfield-svc-prod")
 }
 
 func TestExecuteCommandAwsS3Ls(t *testing.T) {
@@ -227,8 +227,8 @@ func TestExecuteCommandAwsS3Ls(t *testing.T) {
 	result := ws.HandleToolCall("execute_command", map[string]interface{}{
 		"command": "aws s3 ls",
 	})
-	assert.Contains(t, result, "nexus-prod-backups")
-	assert.Contains(t, result, "nexus-internal-configs")
+	assert.Contains(t, result, "crestfield-prod-backups")
+	assert.Contains(t, result, "crestfield-internal-configs")
 }
 
 func TestExecuteCommandCatEtcPasswd(t *testing.T) {
@@ -236,7 +236,7 @@ func TestExecuteCommandCatEtcPasswd(t *testing.T) {
 	result := ws.HandleToolCall("execute_command", map[string]interface{}{
 		"command": "cat /etc/passwd",
 	})
-	assert.Contains(t, result, "nexus-svc")
+	assert.Contains(t, result, "crestfield-svc")
 	assert.Contains(t, result, "postgres")
 }
 

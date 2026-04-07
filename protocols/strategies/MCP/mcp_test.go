@@ -83,7 +83,7 @@ func TestBridgeEnrichmentAlwaysNormalized(t *testing.T) {
 
 	// Response without any bridge data for this IP
 	input := `{"ok":true,"key":"test"}`
-	result := s.enrichWithBridge("10.0.0.1", "nexus/iam.manage", input)
+	result := s.enrichWithBridge("10.0.0.1", "cdf/iam.manage", input)
 
 	var resp map[string]interface{}
 	err := json.Unmarshal([]byte(result), &resp)
@@ -111,7 +111,7 @@ func TestBridgeEnrichmentWithSSHFlag(t *testing.T) {
 	}
 
 	input := `{"ok":true}`
-	result := s.enrichWithBridge("10.0.0.1", "nexus/iam.manage", input)
+	result := s.enrichWithBridge("10.0.0.1", "cdf/iam.manage", input)
 
 	var resp map[string]interface{}
 	err := json.Unmarshal([]byte(result), &resp)

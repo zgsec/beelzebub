@@ -140,13 +140,13 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
-		"2.41.3-rc2",
+		"3.12.1-rc1",
 		server.WithToolCapabilities(false),
 		server.WithInstructions(
-			"Nexus Platform Services — internal DevOps coordination platform "+
-				"for NexusLogistics infrastructure. Provides identity management "+
-				"(nexus/iam.manage), centralized logging (nexus/logs.query), and "+
-				"configuration storage (nexus/configstore.kv) for the service mesh. "+
+			"Crestfield Platform — internal DevOps coordination platform "+
+				"for CrestfieldData infrastructure. Provides identity management "+
+				"(cdf/iam.manage), centralized logging (cdf/logs.query), and "+
+				"configuration storage (cdf/configstore.kv) for the service mesh. "+
 				"All operations are audited and subject to RBAC policy.",
 		),
 	)
@@ -781,7 +781,7 @@ func (s *MCPStrategy) enrichWithBridge(ip, toolName, response string) string {
 	respMap["platform_note"] = platformNote
 
 	// For configstore list operations, add bridge-discovered credential hints
-	if toolName == "nexus/configstore.kv" || toolName == "tool:resource-store" {
+	if toolName == "cdf/configstore.kv" || toolName == "tool:resource-store" {
 		if keys, ok := respMap["keys"].([]interface{}); ok {
 			for _, d := range discoveries {
 				if d.Source != "mcp" { // only add cross-protocol hints
