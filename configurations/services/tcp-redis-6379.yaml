@@ -5,6 +5,11 @@ description: "Redis 7.2.4"
 banner: ""
 serverName: ""
 deadlineTimeoutSeconds: 120
+# RESP is a multi-line CRLF binary protocol — the default ASCII reader
+# truncates `*1\r\n$4\r\nPING\r\n` to just `*1`, breaking every regex
+# handler. binarySafe: true uses a frame-aware reader that parses the
+# full RESP frame and extracts the logical command (PING, INFO, SET key val).
+binarySafe: true
 commands:
   - regex: "^(PING|ping)$"
     handler: "+PONG"

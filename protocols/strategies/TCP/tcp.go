@@ -2,6 +2,7 @@ package TCP
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strings"
@@ -185,11 +186,32 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			}
 		}
 
-		commandInput, err := readLine(conn)
-		if err != nil {
-			break
+		var commandInput string
+		var commandRawHex string // hex-escaped raw bytes, for v2 classifier (binarySafe only)
+		var err error
+		if servConf.BinarySafe {
+			// Binary-safe path: read the full frame (multi-line CRLF-terminated)
+			// then protocol-decode it to extract the command name. The decoded
+			// form drives the regex matcher (so existing handlers like
+			// `^(PING|ping)$` still work); the hex-escaped raw bytes are
+			// stored alongside in CommandRaw for downstream protocol-aware
+			// classification.
+			var rawBytes []byte
+			rawBytes, err = readBinaryFrame(conn, deadline)
+			if err != nil && len(rawBytes) == 0 {
+				break
+			}
+			commandRawHex = hexEscapeNonPrintable(rawBytes)
+			commandInput = decodeProtocolCommand(rawBytes)
+		} else {
+			// Default path: printable-ASCII, newline-delimited (legacy
+			// behavior, used by telnet / LLM-plugin services / etc.).
+			commandInput, err = readLine(conn)
+			if err != nil {
+				break
+			}
+			commandInput = strings.TrimSpace(commandInput)
 		}
-		commandInput = strings.TrimSpace(commandInput)
 
 		if commandInput == "" {
 			continue
@@ -272,6 +294,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			SourcePort:    port,
 			Status:        tracer.Interaction.String(),
 			Command:       commandInput,
+			CommandRaw:    commandRawHex,
 			CommandOutput: commandOutput,
 			ID:            sessionID,
 			Protocol:      tracer.TCP.String(),
@@ -321,6 +344,256 @@ func readLine(conn net.Conn) (string, error) {
 		}
 	}
 	return string(line), nil
+}
+
+// readBinaryFrame reads bytes from conn into a single buffer until either:
+//  1. A short read settles (the client stopped sending — best signal of "end
+//     of one logical request" for protocols like Redis RESP that may send
+//     multiple newlines per logical command),
+//  2. maxLineLength bytes have been read,
+//  3. The connection closes,
+//  4. The deadline expires.
+//
+// Unlike readLine, no bytes are dropped — CR/LF and non-printable bytes
+// are preserved verbatim. Caller is responsible for hex-escaping before
+// storing the bytes in trace events.
+//
+// The "settle" detection works by setting a short read deadline after the
+// first byte arrives — if no more bytes show up within ~50ms the client is
+// done sending its current frame and we return what we have. This lets us
+// capture multi-line RESP frames (`*1\r\n$4\r\nPING\r\n`) as a single
+// logical event without conflating them with the next request.
+func readBinaryFrame(conn net.Conn, sessionDeadline time.Duration) ([]byte, error) {
+	const settleWindow = 50 * time.Millisecond
+	buf := make([]byte, 0, 256)
+	chunk := make([]byte, 256)
+
+	// First read uses the long session deadline — we wait however long the
+	// client takes to send their first byte.
+	if err := conn.SetReadDeadline(time.Now().Add(sessionDeadline)); err != nil {
+		return buf, err
+	}
+	n, err := conn.Read(chunk)
+	if n > 0 {
+		buf = append(buf, chunk[:n]...)
+	}
+	if err != nil {
+		// io.EOF or timeout on the very first read — return whatever we got
+		// (probably nothing) and let the caller close the loop.
+		if err == io.EOF {
+			return buf, err
+		}
+		// On timeout / other read errors with no data, propagate.
+		if len(buf) == 0 {
+			return buf, err
+		}
+	}
+
+	// Subsequent reads use the short settle window. We keep reading until
+	// the client pauses long enough that we believe the frame is complete.
+	for len(buf) < maxLineLength {
+		if err := conn.SetReadDeadline(time.Now().Add(settleWindow)); err != nil {
+			break
+		}
+		n, err := conn.Read(chunk)
+		if n > 0 {
+			remaining := maxLineLength - len(buf)
+			if n > remaining {
+				n = remaining
+			}
+			buf = append(buf, chunk[:n]...)
+		}
+		if err != nil {
+			// Settle timeout fires here — that's the signal that the frame
+			// is done. Don't propagate, just return what we collected.
+			break
+		}
+	}
+
+	// Restore the session-level deadline so the rest of the handler isn't
+	// surprised by our short window.
+	_ = conn.SetReadDeadline(time.Now().Add(sessionDeadline))
+	return buf, nil
+}
+
+// hexEscapeNonPrintable returns a printable-ASCII representation of b,
+// rendering each non-printable byte as \xNN. Result is safe to store in
+// trace events / JSON / database TEXT columns.
+func hexEscapeNonPrintable(b []byte) string {
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for _, c := range b {
+		if c >= 32 && c <= 126 && c != '\\' {
+			sb.WriteByte(c)
+		} else {
+			fmt.Fprintf(&sb, "\\x%02x", c)
+		}
+	}
+	return sb.String()
+}
+
+// decodeProtocolCommand inspects the first byte of a captured frame and
+// extracts a logical command string suitable for regex matching.
+//
+// Supported protocols (auto-detected from first byte):
+//   - RESP (Redis): `*N\r\n$M\r\nCMD\r\n$L\r\nARG1\r\n...` → "CMD ARG1 ARG2"
+//   - RESP simple/error/integer (`+OK`, `-ERR ...`, `:42`) → returned as-is, CRLF stripped
+//   - HTTP-on-TCP (`GET / HTTP/1.1\r\n...`) → returned as the request line
+//   - Plain ASCII text (telnet-like) → returned with CRLF stripped
+//   - Binary / unknown → hex-escaped representation (so something is captured)
+//
+// The goal is to give the regex matcher a string that looks like the command
+// the attacker intended, regardless of how the wire protocol framed it.
+func decodeProtocolCommand(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+
+	// Try RESP array (`*N\r\n$M\r\nCMD\r\n...`)
+	if b[0] == '*' {
+		if cmd := decodeRESPArray(b); cmd != "" {
+			return cmd
+		}
+		// Fall through — malformed RESP, hex-escape it
+	}
+
+	// RESP simple string / error / integer / bulk-string-header — return as-is,
+	// CRLF stripped.
+	if b[0] == '+' || b[0] == '-' || b[0] == ':' || b[0] == '$' {
+		return strings.TrimRight(string(b), "\r\n\x00")
+	}
+
+	// HTTP request line on a non-HTTP port: GET / HTTP/1.1\r\n...
+	// Return just the request line.
+	if isLikelyHTTP(b) {
+		if i := bytesIndexCRLF(b); i > 0 {
+			return string(b[:i])
+		}
+		return string(b)
+	}
+
+	// Plain printable ASCII (telnet, CLI banners, etc.) — strip CRLF and
+	// non-printable trailing bytes.
+	if isMostlyPrintable(b) {
+		s := string(b)
+		s = strings.TrimRight(s, "\r\n\x00 \t")
+		return s
+	}
+
+	// Binary noise / unknown protocol — hex-escape it so something useful
+	// reaches the trace event.
+	return hexEscapeNonPrintable(b)
+}
+
+// decodeRESPArray parses a RESP array frame and returns "CMD ARG1 ARG2 ...".
+// Returns empty string if the frame is malformed or truncated.
+//
+// Format: *N\r\n$L1\r\nARG1\r\n$L2\r\nARG2\r\n...
+func decodeRESPArray(b []byte) string {
+	// Read array length: *N\r\n
+	if len(b) < 4 || b[0] != '*' {
+		return ""
+	}
+	end := bytesIndexCRLF(b)
+	if end < 2 {
+		return ""
+	}
+	count := 0
+	for _, c := range b[1:end] {
+		if c < '0' || c > '9' {
+			return ""
+		}
+		count = count*10 + int(c-'0')
+	}
+	if count <= 0 || count > 64 {
+		// Sanity cap — real Redis commands rarely have >64 args
+		return ""
+	}
+
+	// Walk the bulk string headers + values
+	pos := end + 2 // skip CRLF
+	parts := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		if pos >= len(b) || b[pos] != '$' {
+			return ""
+		}
+		// Read bulk length: $L\r\n
+		hdrEnd := bytesIndexCRLFFrom(b, pos)
+		if hdrEnd < 0 {
+			return ""
+		}
+		bulkLen := 0
+		for _, c := range b[pos+1 : hdrEnd] {
+			if c < '0' || c > '9' {
+				return ""
+			}
+			bulkLen = bulkLen*10 + int(c-'0')
+		}
+		if bulkLen < 0 || bulkLen > maxLineLength {
+			return ""
+		}
+		valStart := hdrEnd + 2
+		valEnd := valStart + bulkLen
+		if valEnd > len(b) {
+			// Truncated — return what we have so far if any
+			if len(parts) > 0 {
+				return strings.Join(parts, " ")
+			}
+			return ""
+		}
+		parts = append(parts, string(b[valStart:valEnd]))
+		pos = valEnd + 2 // skip trailing CRLF
+	}
+	return strings.Join(parts, " ")
+}
+
+// bytesIndexCRLF returns the index of the first \r\n sequence in b, or -1.
+func bytesIndexCRLF(b []byte) int {
+	for i := 0; i < len(b)-1; i++ {
+		if b[i] == '\r' && b[i+1] == '\n' {
+			return i
+		}
+	}
+	return -1
+}
+
+// bytesIndexCRLFFrom returns the index of the first \r\n at or after `from`, or -1.
+func bytesIndexCRLFFrom(b []byte, from int) int {
+	if from < 0 {
+		from = 0
+	}
+	for i := from; i < len(b)-1; i++ {
+		if b[i] == '\r' && b[i+1] == '\n' {
+			return i
+		}
+	}
+	return -1
+}
+
+// isLikelyHTTP returns true if b starts with an HTTP method followed by space.
+func isLikelyHTTP(b []byte) bool {
+	methods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "}
+	for _, m := range methods {
+		if len(b) >= len(m) && string(b[:len(m)]) == m {
+			return true
+		}
+	}
+	return false
+}
+
+// isMostlyPrintable returns true if at least 90% of bytes are printable ASCII
+// or whitespace. Used to detect "this is text" vs "this is binary noise".
+func isMostlyPrintable(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	printable := 0
+	for _, c := range b {
+		if (c >= 32 && c <= 126) || c == '\t' || c == '\n' || c == '\r' {
+			printable++
+		}
+	}
+	return printable*10 >= len(b)*9
 }
 
 // extractPort returns the port portion of an address string.

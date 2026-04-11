@@ -15,12 +15,19 @@ import (
 const Workers = 5
 
 type Event struct {
-	DateTime        string
-	RemoteAddr      string
-	Protocol        string
-	Command         string
-	CommandOutput   string
-	Status          string
+	DateTime      string
+	RemoteAddr    string
+	Protocol      string
+	Command       string
+	// CommandRaw is a hex-escaped representation of the raw bytes the
+	// attacker sent for binary protocols (Redis RESP, MySQL handshake, etc).
+	// Only populated when the service config sets `binarySafe: true`.
+	// Empty for ASCII protocols. Stored alongside Command (which holds the
+	// protocol-decoded form) so downstream classifiers can reason about the
+	// wire-level protocol class without re-parsing.
+	CommandRaw    string `json:"CommandRaw,omitempty"`
+	CommandOutput string
+	Status        string
 	Msg             string
 	ID              string
 	Environ         string

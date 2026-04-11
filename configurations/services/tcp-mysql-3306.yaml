@@ -6,6 +6,10 @@ banner: "5.7.38-0ubuntu0.22.04.2\r\n"
 serverName: "mysql> "
 passwordRegex: ".*"
 deadlineTimeoutSeconds: 300
+# MySQL is binary wire protocol — default line reader truncates handshake
+# bytes. binarySafe: true captures full frames and hex-escapes them so
+# the v2 classifier can detect port-protocol mismatch scans.
+binarySafe: true
 commands:
   - regex: "^(SHOW DATABASES|show databases)"
     handler: |

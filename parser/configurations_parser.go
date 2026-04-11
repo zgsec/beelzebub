@@ -187,6 +187,14 @@ type BeelzebubServiceConfiguration struct {
 	OllamaConfig           OllamaConfig    `yaml:"ollamaConfig"`
 	NoveltyDetection       NoveltyDetection `yaml:"noveltyDetection"`
 	ShellEmulator          ShellEmulator    `yaml:"shellEmulator"`
+	// BinarySafe switches the TCP handler from line-by-line ASCII reading
+	// to a binary-safe reader that preserves all bytes (CR/LF, non-printable)
+	// and hex-escapes them before emitting trace events. Used for protocols
+	// that aren't newline-delimited ASCII — Redis RESP, MySQL handshake, etc.
+	// Default false (backward compat with existing text-based services).
+	// `omitempty` keeps the JSON shape identical to pre-change for the
+	// default value, so HashCode() stays stable for all existing configs.
+	BinarySafe bool `yaml:"binarySafe" json:",omitempty"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {
