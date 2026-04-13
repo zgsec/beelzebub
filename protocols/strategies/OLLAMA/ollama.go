@@ -285,9 +285,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	}
 	sessionID := s.Sessions.GetSessionID(sessionKey)
 
-	s.Sessions.Lock()
 	seq := s.Sessions.NextSequence(sessionKey)
-	s.Sessions.Unlock()
 
 	cmdStr := fmt.Sprintf("%s|%s", handler, command)
 	// Embed LLMjacking session metadata for downstream analysis

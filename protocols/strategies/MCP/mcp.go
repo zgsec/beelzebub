@@ -221,10 +221,8 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			}
 			sessionID := mcpStrategy.Sessions.GetSessionID(sessionKey)
 
-			// Sequence tracking
-			mcpStrategy.Sessions.Lock()
+			// Sequence tracking (NextSequence is internally locked)
 			seq := mcpStrategy.Sessions.NextSequence(sessionKey)
-			mcpStrategy.Sessions.Unlock()
 
 			// Build tool arguments string
 			argsJSON, _ := json.Marshal(request.Params.Arguments)

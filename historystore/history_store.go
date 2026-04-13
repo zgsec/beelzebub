@@ -74,8 +74,13 @@ func (hs *HistoryStore) Append(key string, message ...plugins.Message) {
 }
 
 // NextSequence increments and returns the sequence number for a session.
-// The caller must hold the HistoryStore lock.
+// Acquires the HistoryStore lock internally; safe to call concurrently.
 func (hs *HistoryStore) NextSequence(key string) int {
+	hs.Lock()
+	defer hs.Unlock()
+	if hs.sessions == nil {
+		hs.sessions = make(map[string]HistoryEvent)
+	}
 	e := hs.sessions[key]
 	e.Sequence++
 	e.LastSeen = time.Now()
