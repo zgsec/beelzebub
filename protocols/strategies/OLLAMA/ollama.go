@@ -44,6 +44,12 @@ type OllamaStrategy struct {
 	rngMu             sync.Mutex
 	modelDigests      map[string]string // stable per-model digests computed at init
 	promptEvalDelayMs int
+	// lastInferenceAt is the timestamp of the last successful /api/generate
+	// or /api/chat completion (across all IPs). /api/ps uses it to decide
+	// whether to report a model as "loaded" — real Ollama only does so
+	// while a model is resident in VRAM.
+	lastInferenceAt time.Time
+	lastInferenceMu sync.RWMutex
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -241,7 +247,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.handleEmbed(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("POST /api/embeddings", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		s.handleEmbed(w, r, servConf, tr)
+		s.handleEmbeddingsLegacy(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("POST /api/pull", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handlePull(w, r, servConf, tr)
@@ -451,10 +457,27 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 // Also stamps X-Request-ID on every response, matching OpenAI's invariant
 // that every response carries one (covers success and failure paths).
 func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler string, body []byte) bool {
-	reqID := "req_" + randomHex(24)
-	w.Header().Set("X-Request-ID", reqID)
-	w.Header().Set("openai-organization", "user-"+randomHex(12))
-	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 50+s.randIntn(150)))
+	// Response headers that appear on EVERY OpenAI-compat response (success
+	// or failure). Lengths / alphabets match real api.openai.com captures:
+	//   x-request-id:       req_ + 29 lowercase hex
+	//   openai-organization: user- + 24 alnum mixed case
+	//   openai-processing-ms: 300-3000ms range (real chat is rarely <300)
+	//   openai-version:     date-pinned API version (never changes)
+	// Cloudflare-chain headers mirror the production fronting stack.
+	reqID := "req_" + randomHexN(29)
+	s.rngMu.Lock()
+	airport := cfAirportCode(s.rng)
+	s.rngMu.Unlock()
+	w.Header().Set("x-request-id", reqID)
+	w.Header().Set("openai-organization", "user-"+randomAlnumN(24))
+	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 300+s.randIntn(2700)))
+	w.Header().Set("openai-version", "2020-10-01")
+	w.Header().Set("strict-transport-security", "max-age=15552000; includeSubDomains; preload")
+	w.Header().Set("cf-cache-status", "DYNAMIC")
+	w.Header().Set("x-content-type-options", "nosniff")
+	w.Header().Set("server", "cloudflare")
+	w.Header().Set("cf-ray", fmt.Sprintf("%s-%s", randomHexN(16), airport))
+	w.Header().Set("alt-svc", `h3=":443"; ma=86400`)
 
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if auth == "" {
@@ -542,13 +565,22 @@ func (s *OllamaStrategy) modelExists(name string) bool {
 	return false
 }
 
-// stableDigest returns a deterministic digest for a model name.
+// stableDigest returns a deterministic digest for a model name, prefixed
+// with "sha256:". Used on /api/pull where real Ollama ships the prefix.
 func (s *OllamaStrategy) stableDigest(modelName string) string {
 	if d, ok := s.modelDigests[modelName]; ok {
 		return d
 	}
 	h := sha256.Sum256([]byte(modelName + s.version + "ollama-digest-salt"))
 	return "sha256:" + hex.EncodeToString(h[:])
+}
+
+// stableDigestHex returns the bare-hex digest (no "sha256:" prefix). Used
+// on /api/tags and /api/ps where real Ollama emits the bare 64-char hex.
+// A honeypot emitting "sha256:…" on those endpoints is an instant tell —
+// every Ollama GUI and `ollama list` parses this exact field.
+func (s *OllamaStrategy) stableDigestHex(modelName string) string {
+	return strings.TrimPrefix(s.stableDigest(modelName), "sha256:")
 }
 
 // defaultModelName returns the first configured model or a fallback.
@@ -647,7 +679,7 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 			Model:      m.Name,
 			ModifiedAt: ts,
 			Size:       sizeFromParam(m.ParameterSize),
-			Digest:     s.stableDigest(m.Name),
+			Digest:     s.stableDigestHex(m.Name),
 		}
 		e.Details.Format = "gguf"
 		e.Details.Family = m.Family
@@ -670,18 +702,31 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/ps")
 
-	var running []map[string]interface{}
-	if len(s.models) > 0 {
+	// Real Ollama /api/ps returns only models actively resident in VRAM.
+	// Before any /api/generate or /api/chat hits, or after OLLAMA_KEEP_ALIVE
+	// expires (default 5m), the list is empty. A honeypot that always shows
+	// a loaded model is trivially detectable by polling /api/ps on a fresh
+	// target. Mirror the real behavior: require at least one inference call
+	// from ANY IP within the last 5 minutes to list a model as loaded.
+	running := []map[string]interface{}{}
+	s.lastInferenceMu.RLock()
+	fresh := !s.lastInferenceAt.IsZero() && time.Since(s.lastInferenceAt) < 5*time.Minute
+	s.lastInferenceMu.RUnlock()
+	if fresh && len(s.models) > 0 {
 		m := s.models[0]
 		running = append(running, map[string]interface{}{
-			"name":       m.Name,
-			"model":      m.Name,
-			"size":       sizeFromParam(m.ParameterSize),
-			"digest":     s.stableDigest(m.Name),
-			"expires_at": time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339),
-			"size_vram":  sizeFromParam(m.ParameterSize), // fully GPU-loaded
+			"name":           m.Name,
+			"model":          m.Name,
+			"size":           sizeFromParam(m.ParameterSize),
+			"digest":         s.stableDigestHex(m.Name),
+			"expires_at":     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+			"size_vram":      sizeFromParam(m.ParameterSize),
+			"context_length": 4096,
 			"details": map[string]interface{}{
+				"parent_model":       "",
+				"format":             "gguf",
 				"family":             m.Family,
+				"families":           []string{m.Family},
 				"parameter_size":     m.ParameterSize,
 				"quantization_level": m.QuantizationLevel,
 			},
@@ -801,6 +846,9 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	if s.Bridge != nil {
 		s.Bridge.SetFlag(host, "ollama_inference_used")
 	}
+	s.lastInferenceMu.Lock()
+	s.lastInferenceAt = time.Now()
+	s.lastInferenceMu.Unlock()
 
 	s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, response, string(body))
 }
@@ -932,6 +980,9 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	if s.Bridge != nil {
 		s.Bridge.SetFlag(host, "ollama_inference_used")
 	}
+	s.lastInferenceMu.Lock()
+	s.lastInferenceAt = time.Now()
+	s.lastInferenceMu.Unlock()
 
 	s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, response, string(body))
 }
@@ -1020,6 +1071,67 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 
 // --- New endpoint handlers ---
 
+// embeddingDimsForModel returns the output vector length real Ollama would
+// produce for a given embedding model. 768 is ONLY correct for
+// nomic-embed-text; mxbai-embed-large and snowflake-arctic-embed are 1024,
+// bge-small is 384, etc. A honeypot that always returns 768 dims fails any
+// multi-model probe checking `len(embedding)` matches the model's spec.
+func embeddingDimsForModel(model string) int {
+	n := strings.ToLower(model)
+	if idx := strings.Index(n, ":"); idx >= 0 {
+		n = n[:idx]
+	}
+	switch {
+	case strings.HasPrefix(n, "nomic-embed"):
+		return 768
+	case strings.HasPrefix(n, "mxbai-embed-large"):
+		return 1024
+	case strings.HasPrefix(n, "snowflake-arctic-embed"):
+		return 1024
+	case strings.HasPrefix(n, "bge-large"):
+		return 1024
+	case strings.HasPrefix(n, "bge-base"):
+		return 768
+	case strings.HasPrefix(n, "bge-small"):
+		return 384
+	case strings.HasPrefix(n, "all-minilm-l12"):
+		return 384
+	case strings.HasPrefix(n, "all-minilm"):
+		return 384
+	case strings.HasPrefix(n, "gte-large"):
+		return 1024
+	case strings.HasPrefix(n, "gte-base"):
+		return 768
+	case strings.HasPrefix(n, "gte-small"):
+		return 384
+	case strings.HasPrefix(n, "text-embedding-3-small"):
+		return 1536
+	case strings.HasPrefix(n, "text-embedding-3-large"):
+		return 3072
+	case strings.HasPrefix(n, "text-embedding-ada-002"):
+		return 1536
+	default:
+		return 768
+	}
+}
+
+// newEmbeddingVector builds a dims-long []float32 using approximate Gaussian
+// (sum of 3 uniforms, CLT) scaled to roughly [-0.6, 0.6]. Float32 is what
+// real Ollama wire-serializes — float64 produces 16-17 significant JSON
+// digits, Ollama emits 7-9. The number-of-decimals delta is a direct tell.
+func (s *OllamaStrategy) newEmbeddingVector(dims int) []float32 {
+	out := make([]float32, dims)
+	s.rngMu.Lock()
+	defer s.rngMu.Unlock()
+	for i := range out {
+		u1 := s.rng.Float64()
+		u2 := s.rng.Float64()
+		u3 := s.rng.Float64()
+		out[i] = float32((u1 + u2 + u3 - 1.5) * 0.4)
+	}
+	return out
+}
+
 func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/embed")
 	body := s.readBody(r)
@@ -1033,40 +1145,60 @@ func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, ser
 		req.Model = "nomic-embed-text"
 	}
 
-	// Generate realistic embedding vector (768 dimensions for nomic-embed-text).
-	// Uses approximate Gaussian via sum of 3 uniforms (CLT) to produce vectors
-	// in roughly [-0.6, 0.6] with realistic variance, matching real nomic-embed-text
-	// output better than the previous [-0.02, 0.02] uniform range.
-	dims := 768
-	s.rngMu.Lock()
-	embedding := make([]float64, dims)
-	for i := range embedding {
-		u1 := s.rng.Float64()
-		u2 := s.rng.Float64()
-		u3 := s.rng.Float64()
-		embedding[i] = (u1 + u2 + u3 - 1.5) * 0.4
-	}
+	dims := embeddingDimsForModel(req.Model)
+	embedding := s.newEmbeddingVector(dims)
 
-	// Realistic timing metadata matching real Ollama /api/embed responses.
-	// Real Ollama includes total_duration, load_duration, prompt_eval_count.
 	timing := timingForModel(req.Model)
 	loadDurNs := int64(timing.LoadDurationMs) * 1e6
 	promptEvalCount := estimateEmbedTokens(req.Input)
-	evalDurNs := int64(50+s.rng.Intn(30)) * 1e6 // 50-80ms eval
+	s.rngMu.Lock()
+	evalDurNs := int64(50+s.rng.Intn(30)) * 1e6
 	s.rngMu.Unlock()
 
 	resp := map[string]interface{}{
-		"model":               req.Model,
-		"embeddings":          [][]float64{embedding},
-		"total_duration":      loadDurNs + evalDurNs,
-		"load_duration":       loadDurNs,
-		"prompt_eval_count":   promptEvalCount,
+		"model":             req.Model,
+		"embeddings":        [][]float32{embedding},
+		"total_duration":    loadDurNs + evalDurNs,
+		"load_duration":     loadDurNs,
+		"prompt_eval_count": promptEvalCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body), int64(len(out)))
+}
+
+// handleEmbeddingsLegacy serves /api/embeddings (the pre-v0.2 endpoint).
+// Real legacy behavior: accepts `{"model":..., "prompt":"text"}` (singular
+// string, not Input); returns `{"embedding":[flat float32...]}` — singular
+// key, flat vector (not nested). Clients that haven't migrated (older
+// LangChain, older langchain-ollama) hit this path and break on the new
+// {"embeddings":[[...]]} shape. Keeping the split is what real Ollama does.
+func (s *OllamaStrategy) handleEmbeddingsLegacy(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/embeddings")
+	body := s.readBody(r)
+
+	var req struct {
+		Model  string `json:"model"`
+		Prompt string `json:"prompt"`
+	}
+	json.Unmarshal(body, &req)
+	if req.Model == "" {
+		req.Model = "nomic-embed-text"
+	}
+
+	dims := embeddingDimsForModel(req.Model)
+	embedding := s.newEmbeddingVector(dims)
+
+	resp := map[string]interface{}{
+		"embedding": embedding,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	out, _ := json.Marshal(resp)
+	w.Write(out)
+	s.traceEvent(r, tr, servConf, "ollama/embeddings", req.Model, fmt.Sprintf("[%d-dim legacy embedding]", dims), string(body), int64(len(out)))
 }
 
 // estimateEmbedTokens approximates token count from embed input (string or []string).
@@ -1101,13 +1233,22 @@ func (s *OllamaStrategy) handlePull(w http.ResponseWriter, r *http.Request, serv
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
 
+	// Real Ollama status line: "pulling <first-12-hex-of-digest>" — NO
+	// "sha256:" prefix. Prior impl emitted "pulling sha256:abc123def456"
+	// which every Ollama user recognizes as wrong on sight. The `digest`
+	// FIELD inside each stage keeps the "sha256:<64hex>" form (matches
+	// real server). Also adds the "removing any unused layers" stage that
+	// real pulls emit between writing-manifest and success.
+	shortHex := s.stableDigestHex(req.Name)[:12]
+	fullDigest := s.stableDigest(req.Name)
 	stages := []map[string]interface{}{
 		{"status": "pulling manifest"},
-		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 1200000000},
-		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 3500000000},
-		{"status": "pulling " + s.stableDigest(req.Name)[:19], "digest": s.stableDigest(req.Name), "total": 4700000000, "completed": 4700000000},
+		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 1200000000},
+		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 3500000000},
+		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 4700000000},
 		{"status": "verifying sha256 digest"},
 		{"status": "writing manifest"},
+		{"status": "removing any unused layers"},
 		{"status": "success"},
 	}
 
@@ -1133,6 +1274,16 @@ func (s *OllamaStrategy) handleDelete(w http.ResponseWriter, r *http.Request, se
 	}
 	json.Unmarshal(body, &req)
 
+	// Real Ollama 404's on unknown models with a typed error envelope.
+	// Blanket 200 on any name was an easy "delete anything-you-like"
+	// fingerprint.
+	if req.Name == "" || !s.modelExists(req.Name) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"error":"model '%s' not found"}`, req.Name)
+		s.traceEvent(r, tr, servConf, "ollama/delete", req.Name, "[404:not-found]", string(body))
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	s.traceEvent(r, tr, servConf, "ollama/delete", req.Name, "deleted", string(body))
 }
@@ -1157,7 +1308,9 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		Stream *bool `json:"stream"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":{"message":"invalid request body","type":"invalid_request_error"}}`, http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request. (HINT: This likely means you aren't using your HTTP library correctly. The OpenAI API expects a JSON payload, but what was sent was not valid JSON.)","type":"invalid_request_error","param":null,"code":null}}`))
 		return
 	}
 	if req.Model == "" {
@@ -1279,7 +1432,9 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		Stream *bool  `json:"stream"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":{"message":"invalid request body","type":"invalid_request_error"}}`, http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request.","type":"invalid_request_error","param":null,"code":null}}`))
 		return
 	}
 	if req.Model == "" {
@@ -1336,9 +1491,58 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Legacy completions endpoint — non-streaming by default
-	s.writeOpenAINonStreaming(w, req.Model, response, len(req.Prompt))
+	// Legacy completions: real API returns object="text_completion" with a
+	// text field per choice (no message wrapper). Emitting the chat shape
+	// here is a schema break that any legacy SDK catches immediately.
+	s.writeOpenAITextCompletion(w, req.Model, response, len(req.Prompt))
 	s.traceEvent(r, tr, servConf, "openai/completions", req.Model, response, string(body))
+}
+
+type openAITextChoice struct {
+	Text         string    `json:"text"`
+	Index        int       `json:"index"`
+	Logprobs     *struct{} `json:"logprobs"`
+	FinishReason string    `json:"finish_reason"`
+}
+
+type openAITextCompletion struct {
+	ID                string             `json:"id"`
+	Object            string             `json:"object"`
+	Created           int64              `json:"created"`
+	Model             string             `json:"model"`
+	Choices           []openAITextChoice `json:"choices"`
+	Usage             openAIUsage        `json:"usage"`
+	SystemFingerprint string             `json:"system_fingerprint"`
+}
+
+func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model, response string, promptLen int) {
+	cmplID := "cmpl-" + randomAlnumN(29)
+	fingerprint := "fp_" + randomHexN(10)
+	promptTokens := promptLen/4 + 1
+	completionTokens := len(response) / 4
+
+	resp := openAITextCompletion{
+		ID:      cmplID,
+		Object:  "text_completion",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []openAITextChoice{{
+			Text:         response,
+			Index:        0,
+			Logprobs:     nil,
+			FinishReason: "stop",
+		}},
+		Usage: openAIUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		},
+		SystemFingerprint: fingerprint,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
+	out, _ := json.Marshal(resp)
+	w.Write(out)
 }
 
 func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
@@ -1355,13 +1559,37 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 		OwnedBy string `json:"owned_by"`
 	}
 
+	// Pin created timestamps to per-model deterministic values derived from
+	// a hash of the name. Real OpenAI emits distinct per-model created
+	// timestamps (e.g. gpt-4o = 1715367049, gpt-3.5-turbo = 1677610602);
+	// identical created across every model is a trivial tell.
+	//
+	// owned_by MUST match the real OpenAI vocabulary: "system" (gpt-3.5+),
+	// "openai" (dall-e, whisper, text-embedding-*), "openai-internal"
+	// (experimental), "user-<orgid>" (fine-tunes). "library" is an
+	// Ollama-ism; emitting it on /v1/models is a honeypot giveaway.
+	pickOwner := func(name string) string {
+		lower := strings.ToLower(name)
+		switch {
+		case strings.Contains(lower, "whisper"), strings.Contains(lower, "dall-e"),
+			strings.Contains(lower, "embedding"), strings.Contains(lower, "tts-"):
+			return "openai"
+		case strings.Contains(lower, "ft:"), strings.HasPrefix(lower, "user-"):
+			return "user-" + randomAlnumN(24)
+		default:
+			return "system"
+		}
+	}
 	var models []openAIModel
 	for _, m := range s.models {
+		h := sha256.Sum256([]byte(m.Name))
+		// Distribute across 2022-2024 (real OpenAI model creation epoch range).
+		created := int64(1640995200) + int64(uint32(h[0])<<24|uint32(h[1])<<16|uint32(h[2])<<8|uint32(h[3]))%int64(94608000)
 		models = append(models, openAIModel{
 			ID:      m.Name,
 			Object:  "model",
-			Created: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Unix(),
-			OwnedBy: "library",
+			Created: created,
+			OwnedBy: pickOwner(m.Name),
 		})
 	}
 
@@ -1564,10 +1792,84 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 	w.Write(out)
 }
 
+// --- OpenAI response types --------------------------------------------------
+//
+// These shapes are DELIBERATE structs (not map[string]interface{}) because
+// real api.openai.com uses Go-style struct marshaling with deterministic
+// field ordering. A map-based response yields alphabetical field order on
+// the wire, which is the single easiest Censys/Shodan banner signature.
+// Field ORDER in the struct definition below is the order OpenAI emits on
+// the wire — do not reorder without checking a real capture.
+
+type openAIChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Refusal *string `json:"refusal"`
+}
+
+type openAIChatChoice struct {
+	Index        int                `json:"index"`
+	Message      openAIChatMessage  `json:"message"`
+	Logprobs     *struct{}          `json:"logprobs"`
+	FinishReason string             `json:"finish_reason"`
+}
+
+type openAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+	AudioTokens  int `json:"audio_tokens"`
+}
+
+type openAICompletionTokensDetails struct {
+	ReasoningTokens          int `json:"reasoning_tokens"`
+	AudioTokens              int `json:"audio_tokens"`
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
+}
+
+type openAIUsage struct {
+	PromptTokens            int                           `json:"prompt_tokens"`
+	CompletionTokens        int                           `json:"completion_tokens"`
+	TotalTokens             int                           `json:"total_tokens"`
+	PromptTokensDetails     openAIPromptTokensDetails     `json:"prompt_tokens_details"`
+	CompletionTokensDetails openAICompletionTokensDetails `json:"completion_tokens_details"`
+}
+
+type openAIChatCompletion struct {
+	ID                string             `json:"id"`
+	Object            string             `json:"object"`
+	Created           int64              `json:"created"`
+	Model             string             `json:"model"`
+	Choices           []openAIChatChoice `json:"choices"`
+	Usage             openAIUsage        `json:"usage"`
+	SystemFingerprint string             `json:"system_fingerprint"`
+	ServiceTier       string             `json:"service_tier"`
+}
+
+type openAIChunkDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type openAIChunkChoice struct {
+	Index        int              `json:"index"`
+	Delta        openAIChunkDelta `json:"delta"`
+	Logprobs     *struct{}        `json:"logprobs"`
+	FinishReason *string          `json:"finish_reason"`
+}
+
+type openAIChatChunk struct {
+	ID                string              `json:"id"`
+	Object            string              `json:"object"`
+	Created           int64               `json:"created"`
+	Model             string              `json:"model"`
+	Choices           []openAIChunkChoice `json:"choices"`
+	SystemFingerprint string              `json:"system_fingerprint"`
+	ServiceTier       string              `json:"service_tier"`
+}
+
 func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, response string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
 	flusher, _ := w.(http.Flusher)
 
@@ -1578,54 +1880,78 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	s.rngMu.Unlock()
 	time.Sleep(promptEvalDelay + jitter)
 
-	chatID := "chatcmpl-" + randomHex(14)
+	chatID := "chatcmpl-" + randomAlnumN(29)
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
 	created := time.Now().Unix()
+	fingerprint := "fp_" + randomHexN(10)
 
-	s.rngMu.Lock()
-	fingerprint := fmt.Sprintf("fp_%012x", s.rng.Int63())
-	s.rngMu.Unlock()
-
-	// First chunk: role-only (real OpenAI/Ollama behavior)
-	roleChunk := map[string]interface{}{
-		"id":                 chatID,
-		"object":             "chat.completion.chunk",
-		"created":            created,
-		"model":              model,
-		"system_fingerprint": fingerprint,
-		"choices": []map[string]interface{}{
-			{
-				"index": 0,
-				"delta": map[string]string{
-					"role": "assistant",
-				},
-				"finish_reason": nil,
-			},
-		},
+	emptyContent := ""
+	roleChunk := openAIChatChunk{
+		ID:                chatID,
+		Object:            "chat.completion.chunk",
+		Created:           created,
+		Model:             model,
+		Choices: []openAIChunkChoice{{
+			Index:        0,
+			Delta:        openAIChunkDelta{Role: "assistant", Content: emptyContent},
+			FinishReason: nil,
+		}},
+		SystemFingerprint: fingerprint,
+		ServiceTier:       "default",
 	}
-	roleOut, _ := json.Marshal(roleChunk)
+	// Force the empty Content to serialize (omitempty would drop it, but
+	// real OpenAI emits `"content":""` in the first chunk). Work around by
+	// marshaling explicitly after the struct.
+	roleOut, _ := json.Marshal(struct {
+		openAIChatChunk
+		Choices []struct {
+			Index        int `json:"index"`
+			Delta        struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"delta"`
+			Logprobs     *struct{} `json:"logprobs"`
+			FinishReason *string   `json:"finish_reason"`
+		} `json:"choices"`
+	}{
+		openAIChatChunk: roleChunk,
+		Choices: []struct {
+			Index        int `json:"index"`
+			Delta        struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"delta"`
+			Logprobs     *struct{} `json:"logprobs"`
+			FinishReason *string   `json:"finish_reason"`
+		}{{
+			Index: 0,
+			Delta: struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			}{Role: "assistant", Content: ""},
+			Logprobs:     nil,
+			FinishReason: nil,
+		}},
+	})
 	fmt.Fprintf(w, "data: %s\n\n", roleOut)
 	if flusher != nil {
 		flusher.Flush()
 	}
 
 	for i, token := range tokens {
-		chunk := map[string]interface{}{
-			"id":                 chatID,
-			"object":             "chat.completion.chunk",
-			"created":            created,
-			"model":              model,
-			"system_fingerprint": fingerprint,
-			"choices": []map[string]interface{}{
-				{
-					"index": 0,
-					"delta": map[string]string{
-						"content": token,
-					},
-					"finish_reason": nil,
-				},
-			},
+		chunk := openAIChatChunk{
+			ID:                chatID,
+			Object:            "chat.completion.chunk",
+			Created:           created,
+			Model:             model,
+			Choices: []openAIChunkChoice{{
+				Index:        0,
+				Delta:        openAIChunkDelta{Content: token},
+				FinishReason: nil,
+			}},
+			SystemFingerprint: fingerprint,
+			ServiceTier:       "default",
 		}
 		out, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", out)
@@ -1640,20 +1966,19 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 		}
 	}
 
-	// Final chunk with finish_reason
-	finalChunk := map[string]interface{}{
-		"id":                 chatID,
-		"object":             "chat.completion.chunk",
-		"created":            created,
-		"model":              model,
-		"system_fingerprint": fingerprint,
-		"choices": []map[string]interface{}{
-			{
-				"index":         0,
-				"delta":         map[string]string{},
-				"finish_reason": "stop",
-			},
-		},
+	stop := "stop"
+	finalChunk := openAIChatChunk{
+		ID:                chatID,
+		Object:            "chat.completion.chunk",
+		Created:           created,
+		Model:             model,
+		Choices: []openAIChunkChoice{{
+			Index:        0,
+			Delta:        openAIChunkDelta{},
+			FinishReason: &stop,
+		}},
+		SystemFingerprint: fingerprint,
+		ServiceTier:       "default",
 	}
 	out, _ := json.Marshal(finalChunk)
 	fmt.Fprintf(w, "data: %s\n\n", out)
@@ -1664,33 +1989,33 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 }
 
 func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
-	chatID := "chatcmpl-" + randomHex(14)
-	s.rngMu.Lock()
-	fingerprint := fmt.Sprintf("fp_%012x", s.rng.Int63())
-	s.rngMu.Unlock()
+	chatID := "chatcmpl-" + randomAlnumN(29)
+	fingerprint := "fp_" + randomHexN(10)
 	promptTokens := promptLen/4 + 1
 	completionTokens := len(response) / 4
-	resp := map[string]interface{}{
-		"id":                 chatID,
-		"object":             "chat.completion",
-		"created":            time.Now().Unix(),
-		"model":              model,
-		"system_fingerprint": fingerprint,
-		"choices": []map[string]interface{}{
-			{
-				"index": 0,
-				"message": map[string]string{
-					"role":    "assistant",
-					"content": response,
-				},
-				"finish_reason": "stop",
+
+	resp := openAIChatCompletion{
+		ID:      chatID,
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []openAIChatChoice{{
+			Index: 0,
+			Message: openAIChatMessage{
+				Role:    "assistant",
+				Content: response,
+				Refusal: nil,
 			},
+			Logprobs:     nil,
+			FinishReason: "stop",
+		}},
+		Usage: openAIUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
 		},
-		"usage": map[string]int{
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-			"total_tokens":      promptTokens + completionTokens,
-		},
+		SystemFingerprint: fingerprint,
+		ServiceTier:       "default",
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")

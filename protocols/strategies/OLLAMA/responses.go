@@ -610,7 +610,8 @@ func tokenizeResponse(text string) []string {
 // Utility
 // =============================================================================
 
-// randomHex returns a random hex string of the given byte length.
+// randomHex returns a random hex string of the given byte length (output
+// length = n*2).
 func randomHex(n int) string {
 	const hex = "0123456789abcdef"
 	b := make([]byte, n*2)
@@ -618,4 +619,46 @@ func randomHex(n int) string {
 		b[i] = hex[rand.Intn(len(hex))]
 	}
 	return string(b)
+}
+
+// randomHexN returns exactly n lowercase hex characters. Used for OpenAI-
+// style identifiers whose real length is not a multiple of 2 (x-request-id
+// 29 chars, system_fingerprint 10 chars).
+func randomHexN(n int) string {
+	const hex = "0123456789abcdef"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = hex[rand.Intn(len(hex))]
+	}
+	return string(b)
+}
+
+// randomAlnumN returns exactly n alphanumeric mixed-case characters. Used
+// for OpenAI-style identifiers (chatcmpl-<29>, user-<24>, org-<24>) whose
+// real alphabet is base62-ish (Stripe-style).
+func randomAlnumN(n int) string {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = alphabet[rand.Intn(len(alphabet))]
+	}
+	return string(b)
+}
+
+// cfAirportCodes are the 3-letter IATA-ish suffixes Cloudflare's cf-ray
+// header emits, identifying the edge PoP that served the request. Real
+// OpenAI fronts globally; picking a plausible one per response avoids the
+// trivial "cf-ray with fake suffix" tell.
+var cfAirportCodes = []string{
+	"EWR", "IAD", "LAX", "SJC", "ORD", "DFW", "ATL", "MIA",
+	"SEA", "DEN", "LHR", "CDG", "FRA", "AMS", "ARN", "DUB",
+	"NRT", "HND", "KIX", "SIN", "HKG", "ICN", "SYD", "MEL",
+	"GRU", "SCL", "JNB", "DXB", "MAD", "WAW",
+}
+
+// cfAirportCode returns a random edge PoP suffix for the cf-ray header.
+// Caller must hold no locks on the rng — accepts a *rand.Rand and expects
+// the caller to serialize access.
+func cfAirportCode(r *rand.Rand) string {
+	return cfAirportCodes[r.Intn(len(cfAirportCodes))]
 }
