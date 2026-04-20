@@ -76,6 +76,73 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 	return ws
 }
 
+// defaultMCPCanaryFallbacks gives realistic-looking replacements for every
+// CANARYTOKEN_* placeholder that ships in the stock mcp-8000.yaml. Operators
+// who have minted real Canarytokens.org tokens should bake the real values
+// directly into the yaml (replacing the literal placeholder strings), since
+// canary attribution wiring is per-sensor. These fallbacks exist purely so
+// we NEVER leak the literal string "CANARYTOKEN_X" to a client — that is
+// the fingerprint we're eliminating here.
+var defaultMCPCanaryFallbacks = map[string]string{
+	"CANARYTOKEN_EMAIL_1": "svc-sentinel@crestfielddata.io",
+	"CANARYTOKEN_EMAIL_2": "platform-alerts@crestfielddata.io",
+	// AWS_KEY / AWS_SECRET fallbacks intentionally use the canonical AWS
+	// documentation example values. These are the expected placeholders
+	// when no real Canarytokens.org AKIA token has been wired in yet —
+	// they're recognizable to an attacker as "tutorial example" (intel),
+	// and gitleaks allowlists them so they can live in source. Operators
+	// should replace these literally in their per-sensor mcp-8000.yaml
+	// with real canary AKIA tokens minted from canarytokens.org.
+	"CANARYTOKEN_AWS_KEY":    "AKIAIOSFODNN7EXAMPLE",
+	"CANARYTOKEN_AWS_SECRET": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+	"CANARYTOKEN_DB_PASS":    "Crestfield-prod-db-7a9c2e5f1b8d",
+	"CANARYTOKEN_DNS_URL":    "svc-mesh.int.crestfielddata.io",
+	"CANARYTOKEN_WEB_URL":    "https://hooks.int.crestfielddata.io/platform-sync",
+	"CANARYTOKEN_DD_KEY":     "REPLACE_WITH_CANARY_DD_API_KEY",
+}
+
+// substituteMCPCanaries rewrites every CANARYTOKEN_* placeholder embedded in
+// MCP service configuration with either the operator-supplied value (if a
+// top-level canaryTokens map is ever added to BeelzebubServiceConfiguration)
+// or a realistic fallback. Mutates the slices and map in place via the
+// shared backing arrays so the substitution is visible to every subsequent
+// handler that reads servConf.Commands / .Tools / .FallbackCommand /
+// .WorldSeed.
+func substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
+	apply := func(s string) string {
+		for k, v := range defaultMCPCanaryFallbacks {
+			if strings.Contains(s, k) {
+				s = strings.ReplaceAll(s, k, v)
+			}
+		}
+		return s
+	}
+	for i := range servConf.Commands {
+		servConf.Commands[i].Handler = apply(servConf.Commands[i].Handler)
+		for j := range servConf.Commands[i].Headers {
+			servConf.Commands[i].Headers[j] = apply(servConf.Commands[i].Headers[j])
+		}
+	}
+	servConf.FallbackCommand.Handler = apply(servConf.FallbackCommand.Handler)
+	for i := range servConf.FallbackCommand.Headers {
+		servConf.FallbackCommand.Headers[i] = apply(servConf.FallbackCommand.Headers[i])
+	}
+	for i := range servConf.Tools {
+		servConf.Tools[i].Handler = apply(servConf.Tools[i].Handler)
+	}
+	for i := range servConf.WorldSeed.Users {
+		servConf.WorldSeed.Users[i].Email = apply(servConf.WorldSeed.Users[i].Email)
+	}
+	for i := range servConf.WorldSeed.Logs {
+		servConf.WorldSeed.Logs[i].Message = apply(servConf.WorldSeed.Logs[i].Message)
+	}
+	if servConf.WorldSeed.Resources != nil {
+		for k, v := range servConf.WorldSeed.Resources {
+			servConf.WorldSeed.Resources[k] = apply(v)
+		}
+	}
+}
+
 // seedFromConfig converts parser WorldSeedConfig to MCP WorldSeed.
 func seedFromConfig(cfg parser.WorldSeedConfig) WorldSeed {
 	seed := WorldSeed{
@@ -99,6 +166,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		mcpStrategy.Sessions = historystore.NewHistoryStore()
 	}
 	go mcpStrategy.Sessions.HistoryCleaner()
+
+	// Substitute CANARYTOKEN_* placeholders before anything reads the config.
+	// See substituteMCPCanaries — the literal placeholder strings previously
+	// leaked straight to clients, an unambiguous honeypot fingerprint.
+	substituteMCPCanaries(&servConf)
 
 	mcpStrategy.seedConfig = seedFromConfig(servConf.WorldSeed)
 	mcpStrategy.worldState = make(map[string]*WorldState)

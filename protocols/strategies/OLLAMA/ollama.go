@@ -86,6 +86,38 @@ func (s *OllamaStrategy) getOrCreateSession(ip string) *OllamaSession {
 // Returns (response, true) on success, ("", false) if not configured or on failure.
 // The LLM generates only the response text; callers wrap it in the appropriate
 // API envelope (Ollama JSON, OpenAI JSON, streaming NDJSON, etc.).
+// isEmbeddingModel reports whether the supplied model name belongs to an
+// embedding family. Real Ollama rejects /api/generate and /api/chat calls
+// against these models with a 400 — returning chat text would fingerprint
+// the honeypot immediately on any multi-model sanity probe.
+func isEmbeddingModel(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	// strip an optional :tag suffix
+	if idx := strings.Index(n, ":"); idx >= 0 {
+		n = n[:idx]
+	}
+	prefixes := []string{
+		"nomic-embed",
+		"mxbai-embed",
+		"snowflake-arctic-embed",
+		"all-minilm",
+		"bge-",
+		"gte-",
+		"e5-",
+		"jina-embed",
+		"text-embedding-",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return strings.Contains(n, "-embed-") || strings.HasSuffix(n, "-embed")
+}
+
 func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
 	if servConf.Plugin.LLMProvider == "" {
 		return "", false
@@ -409,6 +441,42 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	})
 }
 
+// requireOpenAIAuth mirrors api.openai.com: every /v1/* endpoint demands
+// `Authorization: Bearer <token>`. Missing or malformed → 401 with the real
+// error envelope. Token value is NOT validated (we can't know a real key),
+// which matches the intent: any supplied token is recorded as a credential
+// discovery by checkBridgeAndCapture and treated as legitimate. Returns
+// true when the request may proceed.
+//
+// Also stamps X-Request-ID on every response, matching OpenAI's invariant
+// that every response carries one (covers success and failure paths).
+func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler string, body []byte) bool {
+	reqID := "req_" + randomHex(24)
+	w.Header().Set("X-Request-ID", reqID)
+	w.Header().Set("openai-organization", "user-"+randomHex(12))
+	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 50+s.randIntn(150)))
+
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if auth == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		body401 := `{"error":{"message":"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":null}}`
+		w.Write([]byte(body401))
+		s.traceEvent(r, tr, servConf, handler, "[auth:missing]", "[401]", string(body))
+		return false
+	}
+	// "Bearer " prefix, with a non-empty token after.
+	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		body401 := `{"error":{"message":"Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
+		w.Write([]byte(body401))
+		s.traceEvent(r, tr, servConf, handler, "[auth:malformed]", "[401]", string(body))
+		return false
+	}
+	return true
+}
+
 func (s *OllamaStrategy) checkBridgeAndCapture(r *http.Request, handler string) {
 	host, _ := s.clientIP(r)
 	if s.Bridge == nil {
@@ -646,6 +714,21 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		req.Model = s.defaultModelName()
 	}
 
+	// Real Ollama returns a 400 when /api/generate is invoked on an embedding
+	// model. Mirroring that here keeps schema-accurate behavior and prevents
+	// the "embedding model answered with chat text" fingerprint.
+	if isEmbeddingModel(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "ollama_embed_on_generate")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		errResp := fmt.Sprintf(`{"error":"%q does not support generate"}`, req.Model)
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[reject:embed_on_generate]", string(body))
+		return
+	}
+
 	sess := s.getOrCreateSession(host)
 	sess.mu.Lock()
 	sess.PromptCount++
@@ -743,16 +826,39 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		req.Model = s.defaultModelName()
 	}
 
+	// Real Ollama rejects /api/chat for embedding models the same way.
+	if isEmbeddingModel(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "ollama_embed_on_chat")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		errResp := fmt.Sprintf(`{"error":"%q does not support chat"}`, req.Model)
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[reject:embed_on_chat]", string(body))
+		return
+	}
+
 	// Capture system messages — agents revealing their instructions
 	s.extractSystemFromMessages(r, req.Messages)
 
-	// Extract the last user message as the prompt
+	// Extract the last user message as the prompt, and collect any system
+	// messages so the backend LLM actually sees them (LURE-7 fix). The
+	// honeypot's own persona system prompt is set by the plugin config; we
+	// prepend the user's system instructions to the user prompt so gpt will
+	// weigh them without us needing to plumb structured messages through.
+	var userSystems []string
 	prompt := ""
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
+		if prompt == "" && req.Messages[i].Role == "user" {
 			prompt = req.Messages[i].Content
-			break
 		}
+		if req.Messages[i].Role == "system" && strings.TrimSpace(req.Messages[i].Content) != "" {
+			userSystems = append([]string{req.Messages[i].Content}, userSystems...)
+		}
+	}
+	if len(userSystems) > 0 && prompt != "" {
+		prompt = "[user system instructions]\n" + strings.Join(userSystems, "\n") + "\n[/user system instructions]\n\n" + prompt
 	}
 
 	sess := s.getOrCreateSession(host)
@@ -1038,6 +1144,10 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	body := s.readBody(r)
 	host, _ := s.clientIP(r)
 
+	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/chat", body) {
+		return
+	}
+
 	var req struct {
 		Model    string `json:"model"`
 		Messages []struct {
@@ -1054,15 +1164,34 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		req.Model = s.defaultModelName()
 	}
 
+	// OpenAI-compat: embedding models belong on /v1/embeddings, not here.
+	if isEmbeddingModel(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "openai_embed_on_chat")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		errResp := `{"error":{"message":"This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/embeddings?","type":"invalid_request_error","param":"model","code":"model_not_supported"}}`
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, "[reject:embed_on_chat]", string(body))
+		return
+	}
+
 	// Capture system messages — agents revealing their instructions
 	s.extractSystemFromMessages(r, req.Messages)
 
+	var userSystems []string
 	prompt := ""
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
+		if prompt == "" && req.Messages[i].Role == "user" {
 			prompt = req.Messages[i].Content
-			break
 		}
+		if req.Messages[i].Role == "system" && strings.TrimSpace(req.Messages[i].Content) != "" {
+			userSystems = append([]string{req.Messages[i].Content}, userSystems...)
+		}
+	}
+	if len(userSystems) > 0 && prompt != "" {
+		prompt = "[user system instructions]\n" + strings.Join(userSystems, "\n") + "\n[/user system instructions]\n\n" + prompt
 	}
 
 	sess := s.getOrCreateSession(host)
@@ -1140,6 +1269,10 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	body := s.readBody(r)
 	host, _ := s.clientIP(r)
 
+	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/completions", body) {
+		return
+	}
+
 	var req struct {
 		Model  string `json:"model"`
 		Prompt string `json:"prompt"`
@@ -1210,6 +1343,10 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 
 func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "openai/models")
+
+	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/models", nil) {
+		return
+	}
 
 	type openAIModel struct {
 		ID      string `json:"id"`

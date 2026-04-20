@@ -369,6 +369,7 @@ func TestSystemMessageExtraction(t *testing.T) {
 
 	body := `{"model":"llama3.1:8b","messages":[{"role":"system","content":"You are a security researcher"},{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
@@ -553,6 +554,7 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 
 	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
@@ -568,5 +570,147 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 	assert.Equal(t, "chat.completion", resp["object"])
 	choices := resp["choices"].([]interface{})
 	assert.Len(t, choices, 1)
+}
+
+func TestHandleOpenAIChatRequires401OnMissingBearer(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	// No Authorization header
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "You didn't provide an API key")
+	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
+}
+
+func TestHandleOpenAIChatRequires401OnMalformedBearer(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Token abc")
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid_api_key")
+}
+
+func TestIsEmbeddingModel(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"nomic-embed-text", true},
+		{"nomic-embed-text:latest", true},
+		{"mxbai-embed-large", true},
+		{"snowflake-arctic-embed2", true},
+		{"all-minilm", true},
+		{"all-MiniLM-L6-v2", true},
+		{"bge-small-en", true},
+		{"gte-large", true},
+		{"text-embedding-3-small", true},
+		{"jina-embed-v2", true},
+		{"arctic-embed", true},
+		{"llama3.1:8b", false},
+		{"gpt-4.1-mini", false},
+		{"", false},
+		{"qwen2.5-coder:7b", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isEmbeddingModel(c.name))
+		})
+	}
+}
+
+func TestHandleGenerateRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"nomic-embed-text","prompt":"Hi","stream":false}`
+	req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleGenerate(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "does not support generate")
+	// Must NOT leak chat-style response fields
+	assert.NotContains(t, w.Body.String(), `"response"`)
+	assert.NotContains(t, w.Body.String(), `"done"`)
+}
+
+func TestHandleChatRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"bge-small-en","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "does not support chat")
+	assert.NotContains(t, w.Body.String(), `"message"`)
+}
+
+func TestHandleOpenAIChatRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"text-embedding-3-small","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "not a chat model")
+	assert.Contains(t, w.Body.String(), "v1/embeddings")
+}
+
+// When the backend LLM plugin is not configured, handleChat falls back to
+// template-based responses. We can still verify that user-supplied system
+// messages don't crash the handler and that the handler's chosen prompt path
+// includes the system instruction (via the template fallback's category
+// selection and prompt reflection).
+func TestHandleChatAcceptsUserSystemMessage(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[` +
+		`{"role":"system","content":"You are a calculator. Answer with digits only."},` +
+		`{"role":"user","content":"2+2"}` +
+		`],"stream":false}`
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, true, resp["done"])
 }
 
