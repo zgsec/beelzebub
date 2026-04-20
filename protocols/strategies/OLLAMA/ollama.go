@@ -50,6 +50,11 @@ type OllamaStrategy struct {
 	// while a model is resident in VRAM.
 	lastInferenceAt time.Time
 	lastInferenceMu sync.RWMutex
+
+	// popResolver maps client IPs to Cloudflare cf-ray PoP suffixes. Loaded
+	// at Init from a GeoLite2-Country DB if available; falls back to the
+	// IANA /8 heuristic otherwise. See cfpop.go.
+	popResolver *PoPResolver
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -174,6 +179,12 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.promptEvalDelayMs = 200 // default 200ms prompt eval delay
 	}
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Load the GeoIP-backed cf-ray PoP resolver. A DB-less load is
+	// non-fatal — Resolve() falls back to IANA /8 registry heuristic
+	// when no DB is present.
+	s.popResolver = NewPoPResolver()
+	_ = s.popResolver.Load("")
 
 	// Compute stable digests per model (deterministic, same across restarts within a version)
 	s.modelDigests = make(map[string]string)
@@ -465,9 +476,12 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 	//   openai-version:     date-pinned API version (never changes)
 	// Cloudflare-chain headers mirror the production fronting stack.
 	reqID := "req_" + randomHexN(29)
-	s.rngMu.Lock()
-	airport := cfAirportCode(s.rng)
-	s.rngMu.Unlock()
+	// cf-ray PoP suffix is GeoIP-backed and sticky per client IP: the
+	// same client always receives the same PoP (matching real CF Anycast
+	// behavior). Cross-request consistency + plausibility-by-geography
+	// were the two invariants the prior random-per-response design broke.
+	clientIP, _ := s.clientIP(r)
+	airport := s.popResolver.Resolve(clientIP)
 	w.Header().Set("x-request-id", reqID)
 	w.Header().Set("openai-organization", "user-"+randomAlnumN(24))
 	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 300+s.randIntn(2700)))

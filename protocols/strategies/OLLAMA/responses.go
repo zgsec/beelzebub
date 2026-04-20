@@ -645,20 +645,7 @@ func randomAlnumN(n int) string {
 	return string(b)
 }
 
-// cfAirportCodes are the 3-letter IATA-ish suffixes Cloudflare's cf-ray
-// header emits, identifying the edge PoP that served the request. Real
-// OpenAI fronts globally; picking a plausible one per response avoids the
-// trivial "cf-ray with fake suffix" tell.
-var cfAirportCodes = []string{
-	"EWR", "IAD", "LAX", "SJC", "ORD", "DFW", "ATL", "MIA",
-	"SEA", "DEN", "LHR", "CDG", "FRA", "AMS", "ARN", "DUB",
-	"NRT", "HND", "KIX", "SIN", "HKG", "ICN", "SYD", "MEL",
-	"GRU", "SCL", "JNB", "DXB", "MAD", "WAW",
-}
-
-// cfAirportCode returns a random edge PoP suffix for the cf-ray header.
-// Caller must hold no locks on the rng — accepts a *rand.Rand and expects
-// the caller to serialize access.
-func cfAirportCode(r *rand.Rand) string {
-	return cfAirportCodes[r.Intn(len(cfAirportCodes))]
-}
+// cf-ray PoP resolution lives in cfpop.go (GeoIP-backed, deterministic
+// per client IP). The old random-per-response cfAirportCode helper was
+// removed on 2026-04-20 because it broke two real Cloudflare invariants
+// (Anycast stickiness + client-geography correlation).

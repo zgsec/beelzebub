@@ -11,6 +11,7 @@ require (
 	github.com/jarcoal/httpmock v1.4.1
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/melbahja/goph v1.5.0
+	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/sirupsen/logrus v1.9.4
@@ -32,6 +33,7 @@ require (
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/oschwald/maxminddb-golang v1.13.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.10 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
