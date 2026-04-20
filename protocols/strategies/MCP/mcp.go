@@ -143,6 +143,31 @@ func substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
 	}
 }
 
+// bareUUIDSessionIdManager emits session IDs as bare UUIDs (matching
+// reference MCP server implementations) instead of mcp-go's default
+// "mcp-session-<uuid>" form. The prefix is a library tell: reference
+// implementations in Python (modelcontextprotocol/python-sdk) and
+// TypeScript (modelcontextprotocol/servers) emit bare UUIDs, so any
+// client or observer noting the prefix immediately knows we're a
+// mcp-go-based service. Validation accepts any well-formed UUID v4 so
+// session continuity works with clients that have cached the value.
+type bareUUIDSessionIdManager struct{}
+
+func (m *bareUUIDSessionIdManager) Generate() string {
+	return uuid.New().String()
+}
+
+func (m *bareUUIDSessionIdManager) Validate(sessionID string) (bool, error) {
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return false, fmt.Errorf("invalid session id: %s", sessionID)
+	}
+	return false, nil
+}
+
+func (m *bareUUIDSessionIdManager) Terminate(sessionID string) (bool, error) {
+	return false, nil
+}
+
 // seedFromConfig converts parser WorldSeedConfig to MCP WorldSeed.
 func seedFromConfig(cfg parser.WorldSeedConfig) WorldSeed {
 	seed := WorldSeed{
@@ -469,8 +494,17 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	// Create MCP handler (implements http.Handler) — don't call Start(),
 	// we mount it inside our own mux so we can add HTTP fallback routes.
+	//
+	// Session IDs: mcp-go's default StatelessGeneratingSessionIdManager
+	// emits `mcp-session-<uuid>` — that "mcp-session-" prefix is
+	// library-specific and absent from every reference MCP server (Python
+	// SDK and modelcontextprotocol/servers both emit bare UUIDs). A client
+	// that spots the prefix knows we're a Go mcp-go deployment, which
+	// immediately narrows the "real DevOps platform" LARP. bareUUIDSessionIdManager
+	// returns just the UUID and accepts any well-formed UUID as valid.
 	mcpHandler := server.NewStreamableHTTPServer(
 		mcpServer,
+		server.WithSessionIdManager(&bareUUIDSessionIdManager{}),
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			ctx = context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
 			// Compute JA4H from wire-order headers if TeeConn is available

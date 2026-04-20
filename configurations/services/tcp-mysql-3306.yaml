@@ -1,74 +1,42 @@
+# =============================================================================
+# MySQL 8.0 (binary wire protocol) — Port 3306
+# =============================================================================
+#
+# PERSONA: Ubuntu 22.04 MySQL 8.0.32 server, crestfield-prod persona.
+#   `serviceProtocol: mysql-handshake-v10` routes accepted connections to
+#   the binary handshake handler in protocols/strategies/TCP/mysql_handshake.go.
+#
+# LIFECYCLE:
+#   1. Write a real Handshake Packet v10 (protocol=10, real 4-byte payload-
+#      length header, randomized 4-byte thread_id, 20-byte random scramble,
+#      utf8mb4_0900_ai_ci charset, full capability bitmap including
+#      CLIENT_PROTOCOL_41 + CLIENT_PLUGIN_AUTH + CLIENT_CONNECT_ATTRS).
+#   2. Read the client's Handshake Response 41 binary frame.
+#   3. Parse username, capability flags, auth_response (hex), auth_plugin_name,
+#      database, and the connect_attrs map — the _client_name /
+#      _client_version / _pid / program_name attrs are our single richest
+#      intel signal vs a banner-grab. All captured via tracer.Event.
+#   4. Respond with ERR 1045 #28000 "Access denied for user ..." — never
+#      accept auth. Observation only.
+#   5. Close.
+#
+# REPLACES: the old ASCII `banner: "5.7.38...\r\n"` plus line-oriented
+#   command handlers, which failed every real MySQL driver on byte 1 of the
+#   handshake (clients expect a 4-byte little-endian length prefix, got the
+#   ASCII '5' instead).
+#
+# Ref: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_v10.html
+# Related: mariocandela/beelzebub/pull/287 (upstream TCP interactive support)
+# =============================================================================
+
 apiVersion: "v1"
 protocol: "tcp"
 address: ":3306"
-description: "MySQL 8.0.32"
-banner: "5.7.38-0ubuntu0.22.04.2\r\n"
-serverName: "mysql> "
-passwordRegex: ".*"
-deadlineTimeoutSeconds: 300
-# MySQL is binary wire protocol — default line reader truncates handshake
-# bytes. binarySafe: true captures full frames and hex-escapes them so
-# the v2 classifier can detect port-protocol mismatch scans.
-binarySafe: true
-commands:
-  - regex: "^(SHOW DATABASES|show databases)"
-    handler: |
-      +--------------------+
-      | Database           |
-      +--------------------+
-      | information_schema |
-      | mysql              |
-      | performance_schema |
-      | sys                |
-      | app_production     |
-      +--------------------+
-      5 rows in set (0.01 sec)
-  - regex: "^(SHOW TABLES|show tables)"
-    handler: |
-      +--------------------------+
-      | Tables_in_app_production |
-      +--------------------------+
-      | users                    |
-      | sessions                 |
-      | orders                   |
-      | payments                 |
-      | api_keys                 |
-      +--------------------------+
-      5 rows in set (0.00 sec)
-  - regex: "^(SELECT|select).*version"
-    handler: |
-      +-----------+
-      | version() |
-      +-----------+
-      | 8.0.32    |
-      +-----------+
-      1 row in set (0.00 sec)
-  - regex: "^(SELECT|select)"
-    plugin: "LLMHoneypot"
-  - regex: "^(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|GRANT)"
-    handler: "ERROR 1142 (42000): INSERT command denied to user 'app_reader'@'10.0.1.%' for table"
-  - regex: "^(USE|use)\\s+"
-    handler: "Database changed"
-  - regex: "^(status|\\\\s)"
-    handler: |
-      mysql  Ver 8.0.32-0ubuntu0.22.04.2 for Linux on x86_64
-      Connection id:          4819
-      Current database:       app_production
-      Current user:           app_reader@10.0.1.47
-      Server version:         8.0.32-0ubuntu0.22.04.2
-      Uptime:                 47 days 13 hours 22 min 8 sec
-      Threads: 4  Questions: 892341  Slow queries: 12
-  - regex: "^(quit|exit|\\\\q)"
-    name: "quit"
-    handler: "Bye"
-fallbackCommand:
-  handler: "ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use"
-plugin:
-  llmProvider: "openai"
-  llmModel: "gpt-4.1-mini"
-  prompt: |
-    You are a MySQL 8.0.32 server. Respond exactly as MySQL would to SQL commands.
-    The database 'app_production' contains tables: users, orders, payments, sessions, api_keys.
-    Format output as MySQL result tables with row counts and timing.
-    For SELECT queries, return realistic sample data.
-    For unauthorized operations, return ERROR 1142 (access denied).
+description: "MySQL 8.0.32 (Ubuntu)"
+banner: ""
+serverName: ""
+serverVersion: "8.0.32-0ubuntu0.22.04.2"
+deadlineTimeoutSeconds: 30
+
+serviceProtocol: "mysql-handshake-v10"
+mysqlAuthPlugin: "caching_sha2_password"

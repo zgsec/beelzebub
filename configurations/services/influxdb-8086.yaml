@@ -11,7 +11,7 @@
 #
 # CANARY TOKENS:
 #   DNS:      influx-tsdb-01.0fkfxpgwq13esb5yxttzna55d.canarytokens.com (fires on resolution)
-#   Database names: honeypot_sensors, ml_training_metrics (behavioral)
+#   Database names: edge_telemetry, ml_training_metrics (behavioral)
 #   User enumeration: admin, telegraf_writer, grafana_reader (credential reuse)
 #
 # INTELLIGENCE TARGETS:
@@ -20,10 +20,14 @@
 #   - User enumeration for credential attacks
 #   - Infrastructure mapping via database/measurement names
 #
-# NOTE: Beelzebub matches regex against URL path only (not query string).
-#   All /query requests match the generic handler. Differentiation by query
-#   content would require Beelzebub enhancement. The SHOW DIAGNOSTICS response
-#   is used as the default since it's the most commonly observed probe.
+# NOTE: Beelzebub's HTTP strategy actually matches regex against the full
+#   request.RequestURI (path + query). So per-statement dispatch IS
+#   possible. As of 2026-04-20 we split /query by ?q=... so each SHOW
+#   statement returns only its own results[0] entry with statement_id 0 —
+#   matching real InfluxDB, where /query?q=SHOW+DATABASES returns ONE
+#   result, not a compound response spanning databases+diagnostics+stats+
+#   measurements+users. The old compound response was an instant
+#   honeypot tell for any client that iterated results[].
 #
 # Ref: https://docs.influxdata.com/influxdb/v1/tools/api/
 # Added: 2026-02-26
@@ -54,18 +58,106 @@ commands:
       - "X-Influxdb-Version: 1.8.10"
     statusCode: 200
 
-  # Generic /query handler — comprehensive 7-statement compound response
-  # Covers SHOW DATABASES, SHOW DIAGNOSTICS (runtime/network/system), SHOW STATS,
-  # SHOW MEASUREMENTS, SHOW USERS — all in one response since Beelzebub can't
-  # differentiate query strings. Matches what DigitalOcean scanner expects.
-  # Updated: 2026-03-01 — lure-engineer overlay
-  - regex: "^/query"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name"],"values":[["_internal"],["telegraf"],["honeypot_sensors"],["ml_training_metrics"],["kubernetes_monitoring"]]}]},{"statement_id":1,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.0fkfxpgwq13esb5yxttzna55d.canarytokens.com"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-03-01T06:01:12.483Z","2026-01-15T03:22:41.109Z","45d2h38m31s"]]}]},{"statement_id":2,"series":[{"name":"shard","columns":["path","id","database","retention_policy","shard_group","engine"],"values":[["/var/lib/influxdb/data/_internal/monitor/1",1,"_internal","monitor",1,"tsm1"],["/var/lib/influxdb/data/telegraf/autogen/2",2,"telegraf","autogen",2,"tsm1"],["/var/lib/influxdb/data/honeypot_sensors/autogen/3",3,"honeypot_sensors","autogen",3,"tsm1"],["/var/lib/influxdb/data/ml_training_metrics/autogen/4",4,"ml_training_metrics","autogen",4,"tsm1"],["/var/lib/influxdb/data/kubernetes_monitoring/autogen/5",5,"kubernetes_monitoring","autogen",5,"tsm1"]]}]},{"statement_id":3,"series":[{"name":"runtime","columns":["Alloc","Frees","HeapAlloc","HeapIdle","HeapInUse","HeapObjects","HeapReleased","HeapSys","Lookups","Mallocs","NumGC","NumGoroutine","PauseTotalNs","Sys","TotalAlloc"],"values":[[48721920,892714528,48721920,115310592,57671680,284916,79429632,172982272,0,893999444,14827,42,3847291000,256197640,412847291520]]}]},{"statement_id":4,"series":[{"name":"users","columns":["user","admin"],"values":[["admin",true],["telegraf_writer",false],["grafana_reader",false],["ml_service",false]]}]}]}'
+  # -------------------------------------------------------------------------
+  # /query per-statement dispatch (2026-04-20). Each SHOW statement maps to
+  # its own regex so every response carries a SINGLE results[] entry with
+  # statement_id 0 — the shape real InfluxDB emits. Ordering matters: more
+  # specific patterns first, catch-all /query fallback last.
+  # -------------------------------------------------------------------------
+
+  # SHOW DATABASES
+  - regex: "^/query\\?.*q=SHOW\\+DATABASES"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name"],"values":[["_internal"],["telegraf"],["edge_telemetry"],["ml_training_metrics"],["kubernetes_monitoring"]]}]}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
-      - "X-Request-Id: 8c3e5f29-d4a2-4b6f-a071-9c8d3e2f1a4b"
+    statusCode: 200
+
+  # SHOW DIAGNOSTICS — the canary-bearing response (network.hostname field
+  # embeds the canarytokens.com DNS canary that fires on resolution).
+  - regex: "^/query\\?.*q=SHOW\\+DIAGNOSTICS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.0fkfxpgwq13esb5yxttzna55d.canarytokens.com"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-03-01T06:01:12.483Z","2026-01-15T03:22:41.109Z","45d2h38m31s"]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW STATS — runtime memstats
+  - regex: "^/query\\?.*q=SHOW\\+STATS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"runtime","columns":["Alloc","Frees","HeapAlloc","HeapIdle","HeapInUse","HeapObjects","HeapReleased","HeapSys","Lookups","Mallocs","NumGC","NumGoroutine","PauseTotalNs","Sys","TotalAlloc"],"values":[[48721920,892714528,48721920,115310592,57671680,284916,79429632,172982272,0,893999444,14827,42,3847291000,256197640,412847291520]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW SHARDS
+  - regex: "^/query\\?.*q=SHOW\\+SHARDS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"shard","columns":["path","id","database","retention_policy","shard_group","engine"],"values":[["/var/lib/influxdb/data/_internal/monitor/1",1,"_internal","monitor",1,"tsm1"],["/var/lib/influxdb/data/telegraf/autogen/2",2,"telegraf","autogen",2,"tsm1"],["/var/lib/influxdb/data/edge_telemetry/autogen/3",3,"edge_telemetry","autogen",3,"tsm1"],["/var/lib/influxdb/data/ml_training_metrics/autogen/4",4,"ml_training_metrics","autogen",4,"tsm1"],["/var/lib/influxdb/data/kubernetes_monitoring/autogen/5",5,"kubernetes_monitoring","autogen",5,"tsm1"]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW USERS — user-enumeration bait
+  - regex: "^/query\\?.*q=SHOW\\+USERS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"users","columns":["user","admin"],"values":[["admin",true],["telegraf_writer",false],["grafana_reader",false],["ml_service",false]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW MEASUREMENTS
+  - regex: "^/query\\?.*q=SHOW\\+MEASUREMENTS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"],["mem"],["disk"],["diskio"],["net"],["processes"],["kernel"],["system"],["gpu_metrics"],["vllm_requests"],["training_runs"],["sensor_events"]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW RETENTION POLICIES
+  - regex: "^/query\\?.*q=SHOW\\+RETENTION"
+    handler: '{"results":[{"statement_id":0,"series":[{"columns":["name","duration","shardGroupDuration","replicaN","default"],"values":[["autogen","0s","168h0m0s",1,true]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # SHOW SERIES
+  - regex: "^/query\\?.*q=SHOW\\+SERIES"
+    handler: '{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=influx-tsdb-01"],["mem,host=influx-tsdb-01"],["gpu_metrics,host=ml-node-01,gpu=0"],["gpu_metrics,host=ml-node-02,gpu=0"],["vllm_requests,host=ml-node-01,model=llama3.1-8b"],["sensor_events,device=edge-01,type=temperature"]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # Generic SELECT — single-series placeholder so realistic queries don't
+  # 404. Returns a plausible time-value pair.
+  - regex: "^/query\\?.*q=SELECT"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean"],"values":[["2026-04-20T00:00:00Z",4.217],["2026-04-20T00:05:00Z",4.312],["2026-04-20T00:10:00Z",4.183]]}]}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+    statusCode: 200
+
+  # Fallback /query — returns empty results. Real InfluxDB returns
+  # `{"results":[{"statement_id":0,"error":"error parsing query: ..."}]}`
+  # for malformed queries; we approximate with empty (less information
+  # leakage than a syntax-error message that nails our parser).
+  - regex: "^/query"
+    handler: '{"results":[{"statement_id":0}]}'
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
     statusCode: 200
 
   # Write endpoint — accept but discard (captures injection attempts)
@@ -102,7 +194,7 @@ commands:
 
   # /debug/requests — Recent query log
   - regex: "^/debug/requests$"
-    handler: '{"requests":[{"query":"SHOW DIAGNOSTICS","database":"","duration":"1.2ms","status":"ok"},{"query":"SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(5m)","database":"telegraf","duration":"24.8ms","status":"ok"},{"query":"SELECT last(value) FROM sensor_events WHERE time > now() - 15m","database":"honeypot_sensors","duration":"8.1ms","status":"ok"},{"query":"SHOW DATABASES","database":"","duration":"0.4ms","status":"ok"},{"query":"SELECT count(session_id) FROM training_runs WHERE time > now() - 24h","database":"ml_training_metrics","duration":"12.3ms","status":"ok"},{"query":"SELECT last(gpu_utilization), last(vram_used_mb), last(gpu_temp_c) FROM gpu_metrics WHERE time > now() - 5m GROUP BY host","database":"ml_training_metrics","duration":"3.2ms","status":"ok"},{"query":"SELECT mean(inference_latency_ms) FROM vllm_requests WHERE time > now() - 1h GROUP BY time(5m), model","database":"ml_training_metrics","duration":"18.7ms","status":"ok"}]}'
+    handler: '{"requests":[{"query":"SHOW DIAGNOSTICS","database":"","duration":"1.2ms","status":"ok"},{"query":"SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(5m)","database":"telegraf","duration":"24.8ms","status":"ok"},{"query":"SELECT last(value) FROM sensor_events WHERE time > now() - 15m","database":"edge_telemetry","duration":"8.1ms","status":"ok"},{"query":"SHOW DATABASES","database":"","duration":"0.4ms","status":"ok"},{"query":"SELECT count(session_id) FROM training_runs WHERE time > now() - 24h","database":"ml_training_metrics","duration":"12.3ms","status":"ok"},{"query":"SELECT last(gpu_utilization), last(vram_used_mb), last(gpu_temp_c) FROM gpu_metrics WHERE time > now() - 5m GROUP BY host","database":"ml_training_metrics","duration":"3.2ms","status":"ok"},{"query":"SELECT mean(inference_latency_ms) FROM vllm_requests WHERE time > now() - 1h GROUP BY time(5m), model","database":"ml_training_metrics","duration":"18.7ms","status":"ok"}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"

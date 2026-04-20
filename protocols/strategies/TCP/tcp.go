@@ -3,6 +3,7 @@ package TCP
 import (
 	"fmt"
 	"io"
+	mrand "math/rand"
 	"net"
 	"regexp"
 	"strings"
@@ -50,6 +51,19 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					}
 				}()
 				c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
+
+				// serviceProtocol dispatch: purpose-built binary protocol
+				// handlers that own the whole connection lifecycle and
+				// bypass banner / interactive / banner-only entirely.
+				switch servConf.ServiceProtocol {
+				case "mysql-handshake-v10":
+					// Per-connection rng: thread-safe by construction,
+					// cheap to seed, avoids sharing a lock across
+					// concurrent MySQL probes.
+					localRng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+					dispatchMysqlHandshake(c, servConf, tr, localRng)
+					return
+				}
 
 				// Send banner exactly as configured — no appended newline.
 				// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
@@ -225,10 +239,12 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		handlerName := "not_found"
 		matched := false
 		shouldQuit := false
+		var matchedCommand parser.Command
 
 		for _, command := range servConf.Commands {
 			if command.Regex != nil && command.Regex.MatchString(commandInput) {
 				matched = true
+				matchedCommand = command
 				commandOutput = command.Handler
 				handlerName = command.Name
 				if handlerName == "" {
@@ -265,6 +281,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		}
 
 		if !matched {
+			matchedCommand = servConf.FallbackCommand
 			commandOutput = servConf.FallbackCommand.Handler
 			if commandOutput == "" {
 				commandOutput = "ERROR: unknown command"
@@ -279,9 +296,13 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		strategy.Sessions.Append(sessionKey, newEntries...)
 		histories = append(histories, newEntries...)
 
-		// Send response
-		if commandOutput != "" {
-			if _, err := conn.Write([]byte(commandOutput + "\r\n")); err != nil {
+		// Send response — honor matchedCommand.ReplyFormat when set so
+		// wire-protocol lures (Redis RESP2, etc.) can emit schema-correct
+		// bytes from plain YAML authors. Default (empty format) keeps the
+		// legacy behavior: append "\r\n" to handler string.
+		wireBytes := encodeReply(matchedCommand, commandOutput)
+		if len(wireBytes) > 0 {
+			if _, err := conn.Write(wireBytes); err != nil {
 				break
 			}
 		}
@@ -605,4 +626,61 @@ func extractPort(addr string) string {
 		return strings.TrimPrefix(addr, ":")
 	}
 	return port
+}
+
+// encodeReply converts a matched Command's reply into wire bytes. When
+// ReplyFormat is empty the legacy behavior is preserved: `handler + "\r\n"`.
+// When ReplyFormat names a protocol-specific encoding (e.g. "redis-bulk"),
+// this function frames the bytes so the response is schema-correct on the
+// wire — without requiring the YAML author to count RESP length prefixes.
+//
+// Redis RESP2 encodings supported:
+//   redis-simple   "+<value>\r\n"           simple string (e.g. "+PONG")
+//   redis-integer  ":<value>\r\n"           integer (value must be digits)
+//   redis-error    "-<value>\r\n"           error (e.g. "-ERR unknown cmd")
+//   redis-bulk     "$<len>\r\n<value>\r\n"  bulk string; value is raw,
+//                                            CRLF preserved, length auto-
+//                                            computed, UTF-8 safe
+//   redis-nil-bulk "$-1\r\n"                nil bulk; handler ignored
+//   redis-array    "*<n>\r\n" + per-entry   array of bulk strings taken
+//                  bulk encoding             from ReplyBulks
+func encodeReply(cmd parser.Command, value string) []byte {
+	switch cmd.ReplyFormat {
+	case "":
+		// Legacy default: plain text + CRLF
+		if value == "" {
+			return nil
+		}
+		return []byte(value + "\r\n")
+	case "redis-simple":
+		return []byte("+" + value + "\r\n")
+	case "redis-integer":
+		return []byte(":" + value + "\r\n")
+	case "redis-error":
+		return []byte("-" + value + "\r\n")
+	case "redis-bulk":
+		return []byte(fmt.Sprintf("$%d\r\n%s\r\n", len(value), value))
+	case "redis-nil-bulk":
+		return []byte("$-1\r\n")
+	case "redis-raw":
+		// Escape hatch for RESP shapes the typed encoders can't express
+		// (nested arrays, integer elements inside arrays, HELLO's mixed
+		// bulk+integer+array response). The handler string is written
+		// VERBATIM — author must provide the exact RESP bytes including
+		// type markers, length prefixes, and CRLF. YAML double-quoted
+		// strings handle \r\n escapes; block scalars do not.
+		return []byte(value)
+	case "redis-array":
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "*%d\r\n", len(cmd.ReplyBulks))
+		for _, b := range cmd.ReplyBulks {
+			fmt.Fprintf(&buf, "$%d\r\n%s\r\n", len(b), b)
+		}
+		return []byte(buf.String())
+	default:
+		// Unknown format: log once and fall back to plain-text framing so
+		// a typo in a YAML doesn't silently drop all traffic.
+		log.Warnf("tcp.encodeReply: unknown replyFormat %q, falling back to plaintext", cmd.ReplyFormat)
+		return []byte(value + "\r\n")
+	}
 }

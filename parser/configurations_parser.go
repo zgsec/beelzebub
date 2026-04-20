@@ -195,6 +195,22 @@ type BeelzebubServiceConfiguration struct {
 	// `omitempty` keeps the JSON shape identical to pre-change for the
 	// default value, so HashCode() stays stable for all existing configs.
 	BinarySafe bool `yaml:"binarySafe" json:",omitempty"`
+	// ServiceProtocol opts a TCP listener into a purpose-built binary
+	// protocol handler instead of the generic regex/command loop. Known
+	// values:
+	//   "mysql-handshake-v10"  MySQL wire protocol handshake v10 →
+	//                          reads Handshake Response 41 (capturing
+	//                          username, capability flags, connect_attrs),
+	//                          always replies ERR 1045 "Access denied",
+	//                          closes connection.
+	// Empty = generic TCP behavior (default). Safe to leave unset on
+	// any existing TCP config.
+	ServiceProtocol string `yaml:"serviceProtocol,omitempty" json:",omitempty"`
+	// MysqlAuthPlugin overrides the auth plugin advertised in the
+	// handshake greeting. Default "caching_sha2_password" (MySQL 8.0).
+	// Use "mysql_native_password" when impersonating MySQL 5.7 or
+	// MariaDB <=10.3.
+	MysqlAuthPlugin string `yaml:"mysqlAuthPlugin,omitempty" json:",omitempty"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {
@@ -215,6 +231,19 @@ type Command struct {
 	StatusCode int            `yaml:"statusCode"`
 	Plugin     string         `yaml:"plugin"`
 	Name       string         `yaml:"name"`
+	// ReplyFormat switches the TCP strategy's wire encoding for this
+	// command. Empty = plaintext + "\r\n" appended (default, backward-
+	// compatible). Recognized values for Redis RESP2:
+	//   "redis-simple"   → "+<handler>\r\n" (simple string)
+	//   "redis-integer"  → ":<handler>\r\n"
+	//   "redis-error"    → "-<handler>\r\n"
+	//   "redis-bulk"     → "$<len>\r\n<handler>\r\n" (bulk string; CRLF
+	//                      inside handler is preserved verbatim)
+	//   "redis-nil-bulk" → "$-1\r\n"
+	//   "redis-array"    → wraps `ReplyBulks` as a RESP array of bulk
+	//                      strings; `handler` is ignored
+	ReplyFormat string   `yaml:"replyFormat,omitempty" json:",omitempty"`
+	ReplyBulks  []string `yaml:"replyBulks,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot
