@@ -50,11 +50,6 @@ type OllamaStrategy struct {
 	// while a model is resident in VRAM.
 	lastInferenceAt time.Time
 	lastInferenceMu sync.RWMutex
-
-	// popResolver maps client IPs to Cloudflare cf-ray PoP suffixes. Loaded
-	// at Init from a GeoLite2-Country DB if available; falls back to the
-	// IANA /8 heuristic otherwise. See cfpop.go.
-	popResolver *PoPResolver
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -179,12 +174,6 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.promptEvalDelayMs = 200 // default 200ms prompt eval delay
 	}
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	// Load the GeoIP-backed cf-ray PoP resolver. A DB-less load is
-	// non-fatal — Resolve() falls back to IANA /8 registry heuristic
-	// when no DB is present.
-	s.popResolver = NewPoPResolver()
-	_ = s.popResolver.Load("")
 
 	// Compute stable digests per model (deterministic, same across restarts within a version)
 	s.modelDigests = make(map[string]string)
@@ -468,30 +457,24 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 // Also stamps X-Request-ID on every response, matching OpenAI's invariant
 // that every response carries one (covers success and failure paths).
 func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler string, body []byte) bool {
-	// Response headers that appear on EVERY OpenAI-compat response (success
-	// or failure). Lengths / alphabets match real api.openai.com captures:
-	//   x-request-id:       req_ + 29 lowercase hex
-	//   openai-organization: user- + 24 alnum mixed case
-	//   openai-processing-ms: 300-3000ms range (real chat is rarely <300)
-	//   openai-version:     date-pinned API version (never changes)
-	// Cloudflare-chain headers mirror the production fronting stack.
+	// Response header stack for an internal OpenAI-compatible inference
+	// gateway. Deliberately omits Cloudflare edge headers (cf-ray, server:
+	// cloudflare, cf-cache-status, alt-svc) — those only make sense on a
+	// TLS-fronted edge, and our listener is naked HTTP on a raw IP, so
+	// emitting them would be internally inconsistent with the Crestfield
+	// internal-platform persona. Headers kept are the ones that ALSO
+	// appear on real-OpenAI direct-origin probes and match the "internal
+	// platform" scenario (request-id for session tracking, processing-ms
+	// for timing realism, organization for credential-capture bait,
+	// openai-version as a real-API invariant, HSTS as a reasonable
+	// hardening default, content-type-options for XSS-avoidance).
 	reqID := "req_" + randomHexN(29)
-	// cf-ray PoP suffix is GeoIP-backed and sticky per client IP: the
-	// same client always receives the same PoP (matching real CF Anycast
-	// behavior). Cross-request consistency + plausibility-by-geography
-	// were the two invariants the prior random-per-response design broke.
-	clientIP, _ := s.clientIP(r)
-	airport := s.popResolver.Resolve(clientIP)
 	w.Header().Set("x-request-id", reqID)
 	w.Header().Set("openai-organization", "user-"+randomAlnumN(24))
 	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 300+s.randIntn(2700)))
 	w.Header().Set("openai-version", "2020-10-01")
 	w.Header().Set("strict-transport-security", "max-age=15552000; includeSubDomains; preload")
-	w.Header().Set("cf-cache-status", "DYNAMIC")
 	w.Header().Set("x-content-type-options", "nosniff")
-	w.Header().Set("server", "cloudflare")
-	w.Header().Set("cf-ray", fmt.Sprintf("%s-%s", randomHexN(16), airport))
-	w.Header().Set("alt-svc", `h3=":443"; ma=86400`)
 
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if auth == "" {
