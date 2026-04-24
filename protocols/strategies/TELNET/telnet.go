@@ -1,15 +1,18 @@
 package TELNET
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
@@ -35,6 +38,12 @@ type TelnetStrategy struct {
 	Sessions *historystore.HistoryStore
 	Bridge   *bridge.ProtocolBridge
 	Fault    *faults.Injector
+
+	// v8: Agent detection timing (same pattern as TCP handler)
+	agentMu       sync.Mutex
+	agentTimings  map[string][]int64
+	agentLastSeen map[string]time.Time
+	agentPrevCmd  map[string]string
 }
 
 func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -42,6 +51,7 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 		telnetStrategy.Sessions = historystore.NewHistoryStore()
 	}
 	go telnetStrategy.Sessions.HistoryCleaner()
+	go telnetStrategy.cleanAgentState()
 
 	go func() {
 		listener, err := net.Listen("tcp", servConf.Address)
@@ -154,6 +164,11 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	uuidSession := uuid.New()
 	sessionKey := "TELNET" + host + username
 
+	// v8: Wire the bridge — telnet auth was previously invisible to cross-protocol correlation
+	if telnetStrategy.Bridge != nil {
+		telnetStrategy.Bridge.SetFlag(host, "telnet_authenticated")
+	}
+
 	tr.TraceEvent(tracer.Event{
 		Msg:         "New TELNET Terminal Session",
 		Protocol:    tracer.TELNET.String(),
@@ -234,6 +249,9 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					break
 				}
 
+				// v8: Agent classification for telnet commands
+				verdict := telnetStrategy.classifyTelnet(host, commandInput)
+
 				// Trace interaction event
 				tr.TraceEvent(tracer.Event{
 					Msg:           "TELNET Terminal Session Interaction",
@@ -250,6 +268,9 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					Handler:       handlerName,
 					SessionKey:    sessionKey,
 					ServicePort:   destPort,
+					AgentScore:    verdict.Score,
+					AgentCategory: verdict.Category,
+					AgentSignals:  verdict.SignalsString(),
 				})
 
 				break // Found match, exit command loop
@@ -263,6 +284,9 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 			if err != nil {
 				break
 			}
+
+			// v8: Agent classification for unmatched commands too
+			unmatchedVerdict := telnetStrategy.classifyTelnet(host, commandInput)
 
 			// Still trace the interaction even for unmatched commands
 			tr.TraceEvent(tracer.Event{
@@ -280,6 +304,9 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				Handler:       "not_found",
 				SessionKey:    sessionKey,
 				ServicePort:   destPort,
+				AgentScore:    unmatchedVerdict.Score,
+				AgentCategory: unmatchedVerdict.Category,
+				AgentSignals:  unmatchedVerdict.SignalsString(),
 			})
 		}
 	}
@@ -315,17 +342,25 @@ func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, descrip
 		return
 	}
 
+	// v8: Parse subnegotiation data (NAWS, TTYPE, TSPEED) from the same bytes.
+	// This extracts what the original parser skipped inside SB...SE blocks.
+	subneg := parseIACSubnegotiations(buf[:n])
+
 	tr.TraceEvent(tracer.Event{
-		Msg:         "TELNET Client Negotiation",
-		Protocol:    tracer.TELNET.String(),
-		Status:      tracer.Stateless.String(),
-		Command:     summary,
-		SourceIp:    host,
-		SourcePort:  port,
-		RemoteAddr:  net.JoinHostPort(host, port),
-		ID:          uuid.New().String(),
-		Description: description,
-		ServicePort: destPort,
+		Msg:            "TELNET Client Negotiation",
+		Protocol:       tracer.TELNET.String(),
+		Status:         tracer.Stateless.String(),
+		Command:        summary,
+		SourceIp:       host,
+		SourcePort:     port,
+		RemoteAddr:     net.JoinHostPort(host, port),
+		ID:             uuid.New().String(),
+		Description:    description,
+		ServicePort:    destPort,
+		TelnetTermType: subneg.TermType,
+		TelnetWidth:    subneg.WindowWidth,
+		TelnetHeight:   subneg.WindowHeight,
+		TelnetSpeed:    subneg.TermSpeed,
 	})
 }
 
@@ -440,4 +475,136 @@ func readLine(conn net.Conn) (string, error) {
 
 func buildPrompt(user string, serverName string) string {
 	return fmt.Sprintf("%s@%s:~$ ", user, serverName)
+}
+
+// v8: Agent detection for telnet sessions — same pattern as TCP handler.
+func (s *TelnetStrategy) classifyTelnet(ip, cmd string) agentdetect.Verdict {
+	now := time.Now()
+	s.agentMu.Lock()
+	if s.agentTimings == nil {
+		s.agentTimings = make(map[string][]int64)
+		s.agentLastSeen = make(map[string]time.Time)
+		s.agentPrevCmd = make(map[string]string)
+	}
+	if last, ok := s.agentLastSeen[ip]; ok {
+		delta := now.Sub(last).Milliseconds()
+		s.agentTimings[ip] = append(s.agentTimings[ip], delta)
+		if len(s.agentTimings[ip]) > 100 {
+			s.agentTimings[ip] = s.agentTimings[ip][len(s.agentTimings[ip])-100:]
+		}
+	}
+	s.agentLastSeen[ip] = now
+	timings := make([]int64, len(s.agentTimings[ip]))
+	copy(timings, s.agentTimings[ip])
+	prevCmd := s.agentPrevCmd[ip]
+	isRetry := prevCmd != "" && prevCmd == cmd
+	s.agentPrevCmd[ip] = cmd
+	s.agentMu.Unlock()
+
+	sig := agentdetect.Signal{
+		InterEventTimingsMs: timings,
+		HasIdenticalRetries: isRetry,
+	}
+	if s.Bridge != nil {
+		flags := s.Bridge.GetFlags(ip)
+		for _, f := range flags {
+			if f == "mcp_tool_call" || f == "ollama_api_accessed" {
+				sig.HasCrossProtocol = true
+				lastAct := s.Bridge.LastActivity(ip)
+				if !lastAct.IsZero() {
+					sig.CrossProtocolGapMs = now.Sub(lastAct).Milliseconds()
+				}
+				break
+			}
+		}
+	}
+	return agentdetect.IncrementalClassify(sig)
+}
+
+func (s *TelnetStrategy) cleanAgentState() {
+	for {
+		time.Sleep(5 * time.Minute)
+		cutoff := time.Now().Add(-60 * time.Minute)
+		s.agentMu.Lock()
+		if s.agentLastSeen != nil {
+			for ip, last := range s.agentLastSeen {
+				if last.Before(cutoff) {
+					delete(s.agentTimings, ip)
+					delete(s.agentLastSeen, ip)
+					delete(s.agentPrevCmd, ip)
+				}
+			}
+		}
+		s.agentMu.Unlock()
+	}
+}
+
+// TelnetSubneg contains parsed telnet subnegotiation data.
+// These are extracted from IAC SB...SE blocks during the handshake.
+type TelnetSubneg struct {
+	TermType    string // TTYPE (option 24): terminal type string, e.g., "xterm-256color", "VT100"
+	WindowWidth int    // NAWS (option 31): terminal width in columns
+	WindowHeight int   // NAWS (option 31): terminal height in rows
+	TermSpeed   string // TSPEED (option 32): terminal speed, e.g., "38400,38400"
+}
+
+// parseIACSubnegotiations extracts subnegotiation data from raw telnet bytes.
+// Called alongside parseIACOptions to capture the DATA inside SB...SE blocks
+// that the original parser skipped.
+func parseIACSubnegotiations(data []byte) TelnetSubneg {
+	var result TelnetSubneg
+	i := 0
+	for i < len(data)-1 {
+		if data[i] != IAC {
+			i++
+			continue
+		}
+		i++
+		if i >= len(data) {
+			break
+		}
+		if data[i] != SB {
+			i++
+			if i < len(data) { i++ } // skip option byte for WILL/WONT/DO/DONT
+			continue
+		}
+		i++ // past SB
+		if i >= len(data) {
+			break
+		}
+		option := data[i]
+		i++ // past option byte
+
+		// Collect subnegotiation data until IAC SE
+		var subData []byte
+		for i < len(data)-1 {
+			if data[i] == IAC && data[i+1] == SE {
+				i += 2
+				break
+			}
+			subData = append(subData, data[i])
+			i++
+		}
+
+		switch option {
+		case 24: // TTYPE
+			// Format: IAC SB TTYPE IS <type> IAC SE
+			// subData starts after the option byte. First byte is IS (0x00) or SEND (0x01).
+			if len(subData) > 1 && subData[0] == 0x00 { // IS
+				result.TermType = string(subData[1:])
+			}
+		case 31: // NAWS
+			// Format: IAC SB NAWS <width-hi> <width-lo> <height-hi> <height-lo> IAC SE
+			if len(subData) >= 4 {
+				result.WindowWidth = int(binary.BigEndian.Uint16(subData[0:2]))
+				result.WindowHeight = int(binary.BigEndian.Uint16(subData[2:4]))
+			}
+		case 32: // TSPEED
+			// Format: IAC SB TSPEED IS <speed> IAC SE
+			if len(subData) > 1 && subData[0] == 0x00 { // IS
+				result.TermSpeed = string(subData[1:])
+			}
+		}
+	}
+	return result
 }

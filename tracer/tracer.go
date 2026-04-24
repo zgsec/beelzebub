@@ -112,6 +112,14 @@ type Event struct {
 	// v8: JA4 TLS ClientHello fingerprint.
 	JA4 string `json:"JA4,omitempty"`
 
+	// v8: Telnet subnegotiation data from IAC SB...SE blocks.
+	// NAWS = terminal dimensions, TTYPE = terminal software, TSPEED = connection speed.
+	// Strong client fingerprint: real terminals vary, bots use 80x24 or 0x0.
+	TelnetTermType string `json:"TelnetTermType,omitempty"`
+	TelnetWidth    int    `json:"TelnetWidth,omitempty"`
+	TelnetHeight   int    `json:"TelnetHeight,omitempty"`
+	TelnetSpeed    string `json:"TelnetSpeed,omitempty"`
+
 	// v8: SSH public key metadata (structured, not crammed into Command field).
 	// key.Type() + fingerprint was previously stored as Command on Stateless events.
 	// These structured fields enable: key type distribution analysis, RSA exponent
