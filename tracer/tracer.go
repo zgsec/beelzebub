@@ -109,11 +109,20 @@ type Event struct {
 	PTYWidth  int    `json:"PTYWidth,omitempty"`
 	PTYHeight int    `json:"PTYHeight,omitempty"`
 
-	// v8: JA4 TLS ClientHello fingerprint. Computed from Go's tls.ClientHelloInfo
-	// via GetConfigForClient callback — no raw byte parsing needed. Covers the
-	// HTTPS blind spot where HASSH doesn't apply.
-	// Spec: https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md
+	// v8: JA4 TLS ClientHello fingerprint.
 	JA4 string `json:"JA4,omitempty"`
+
+	// v8: SSH public key metadata (structured, not crammed into Command field).
+	// key.Type() + fingerprint was previously stored as Command on Stateless events.
+	// These structured fields enable: key type distribution analysis, RSA exponent
+	// detection (e=37 PuTTYgen vs e=65537 OpenSSH), cross-session key matching.
+	SSHKeyType        string `json:"SSHKeyType,omitempty"`
+	SSHKeyFingerprint string `json:"SSHKeyFingerprint,omitempty"`
+
+	// v8: Per-request response timing — how long the honeypot took to respond.
+	// Critical for: lure effectiveness research, agent timing decontamination,
+	// detecting when our LLM responses are suspiciously slow vs real services.
+	ResponseTimeMs int64 `json:"ResponseTimeMs,omitempty"`
 }
 
 type (

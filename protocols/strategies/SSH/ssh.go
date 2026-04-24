@@ -235,6 +235,8 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					}
 					for _, command := range servConf.Commands {
 						if command.Regex.MatchString(commandInput) {
+							// v8: Measure response generation time for lure effectiveness research
+							responseStart := time.Now()
 							commandOutput := command.Handler
 							if command.Plugin == plugins.LLMPluginName {
 								emHandled := false
@@ -262,6 +264,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 									}
 								}
 							}
+							responseTimeMs := time.Since(responseStart).Milliseconds()
 							var newEntries []plugins.Message
 							newEntries = append(newEntries, plugins.Message{Role: plugins.USER.String(), Content: commandInput})
 							newEntries = append(newEntries, plugins.Message{Role: plugins.ASSISTANT.String(), Content: commandOutput})
@@ -310,6 +313,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyCategory: cmdNoveltyVerdict.Category,
 								NoveltySignals:  cmdNoveltyVerdict.SignalsString(),
 								ServicePort:     destPort,
+								ResponseTimeMs:  responseTimeMs,
 							})
 							break // Inner range over commands.
 						}
@@ -342,18 +346,20 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 				fingerprint := fingerprintKey(key)
 				tr.TraceEvent(tracer.Event{
-					Msg:         "SSH Public Key Offered",
-					Protocol:    tracer.SSH.String(),
-					Status:      tracer.Stateless.String(),
-					User:        ctx.User(),
-					Client:      ctx.ClientVersion(),
-					RemoteAddr:  ctx.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					ID:          uuid.New().String(),
-					Description: servConf.Description,
-					Command:     key.Type() + " " + fingerprint,
-					ServicePort: destPort,
+					Msg:               "SSH Public Key Offered",
+					Protocol:          tracer.SSH.String(),
+					Status:            tracer.Stateless.String(),
+					User:              ctx.User(),
+					Client:            ctx.ClientVersion(),
+					RemoteAddr:        ctx.RemoteAddr().String(),
+					SourceIp:          host,
+					SourcePort:        port,
+					ID:                uuid.New().String(),
+					Description:       servConf.Description,
+					Command:           key.Type() + " " + fingerprint, // backward compat
+					SSHKeyType:        key.Type(),
+					SSHKeyFingerprint: fingerprint,
+					ServicePort:       destPort,
 				})
 				return false // always reject, fall through to password auth
 			},
