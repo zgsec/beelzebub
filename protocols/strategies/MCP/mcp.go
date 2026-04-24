@@ -212,6 +212,8 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		mcpStrategy.noveltyToolSeqs = make(map[string][]string)
 	}
 
+	destPort := tracer.ExtractPort(servConf.Address)
+
 	// Cache LLM instance at init time to avoid per-call allocation and connection churn.
 	if servConf.Plugin.LLMProvider != "" {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
@@ -383,6 +385,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						NoveltyScore:    faultNoveltyVerdict.Score,
 						NoveltyCategory: faultNoveltyVerdict.Category,
 						NoveltySignals:  faultNoveltyVerdict.SignalsString(),
+						ServicePort:     destPort,
 					})
 					return mcp.NewToolResultText(faultResp), nil
 				}
@@ -487,6 +490,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				NoveltyScore:     noveltyVerdict.Score,
 				NoveltyCategory:  noveltyVerdict.Category,
 				NoveltySignals:   noveltyVerdict.SignalsString(),
+				ServicePort:      destPort,
 			})
 			return mcp.NewToolResultText(response), nil
 		})
@@ -983,6 +987,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 
 	// Trace as HTTP event with full request metadata
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
+	destPort := tracer.ExtractPort(servConf.Address)
 	tr.TraceEvent(tracer.Event{
 		Msg:             "HTTP request on MCP port",
 		RequestURI:      r.RequestURI,
@@ -1001,6 +1006,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 		ID:              uuid.New().String(),
 		Description:     servConf.Description,
 		Handler:         matchedCommand.Name,
+		ServicePort:     destPort,
 	})
 
 	// Write response

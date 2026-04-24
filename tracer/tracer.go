@@ -4,6 +4,8 @@ package tracer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +93,10 @@ type Event struct {
 	JA4H        string `json:"JA4H,omitempty"`
 	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
 	HASSH       string `json:"HASSH,omitempty"`
+
+	// v8: Service port extracted from listener address. Replaces the exporter's
+	// DescriptionToPort string-matching which breaks on novel sensor configs.
+	ServicePort string `json:"ServicePort,omitempty"`
 }
 
 type (
@@ -216,6 +222,16 @@ func (tracer *tracer) GetStrategy() Strategy {
 func CorrelationIDFromIP(ip string) string {
 	h := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(h[:8])
+}
+
+// ExtractPort returns the port portion of a listen address.
+// Handles ":22", "0.0.0.0:22", "[::]:3306", and bare ":8000".
+func ExtractPort(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return strings.TrimPrefix(addr, ":")
+	}
+	return port
 }
 
 func (tracer *tracer) TraceEvent(event Event) {

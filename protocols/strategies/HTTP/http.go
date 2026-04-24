@@ -243,6 +243,11 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, responseBody string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
+	// Extract destination port from the listener's local address
+	destPort := ""
+	if laddr, ok := request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		destPort = tracer.ExtractPort(laddr.String())
+	}
 	sessionKey := "HTTP" + host
 
 	// Get or create per-IP session state for agent detection
@@ -331,6 +336,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// for HTTP lures.
 		Command:         fmt.Sprintf("%s %s", request.Method, request.RequestURI),
 		CommandOutput:   responseBody,
+		ServicePort:     destPort,
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

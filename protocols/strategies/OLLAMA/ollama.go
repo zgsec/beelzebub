@@ -316,6 +316,7 @@ func (s *OllamaStrategy) randIntn(n int) int {
 
 func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler, command, commandOutput, body string, responseBytes ...int64) {
 	host, port := s.clientIP(r)
+	destPort := tracer.ExtractPort(servConf.Address)
 	sessionKey := "OLLAMA" + host
 
 	if !s.Sessions.HasKey(sessionKey) {
@@ -444,6 +445,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		ResponseBytes:   respBytes,
 		JA4H:            tracer.ComputeJA4H(r, wireOrder),
 		HeaderOrder:     strings.Join(wireOrder, ","),
+		ServicePort:     destPort,
 	})
 }
 
