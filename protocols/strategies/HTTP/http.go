@@ -205,7 +205,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// which all populate CommandOutput; the HTTP omission was historical and
 	// broke downstream canary/response-correlation analytics.
 	defer func() {
-		traceRequest(request, tr, command, servConf.Description, body, ns, resp.Body)
+		traceRequest(request, tr, command, servConf.Description, body, ns, resp.Body, resp.StatusCode)
 	}()
 
 	if command.Plugin == plugins.LLMPluginName {
@@ -241,7 +241,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, responseBody string) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, responseBody string, responseStatusCode int) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
 	destPort := ""
@@ -335,8 +335,9 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// non-empty, so populating this is what makes ResponseSummary fire
 		// for HTTP lures.
 		Command:         fmt.Sprintf("%s %s", request.Method, request.RequestURI),
-		CommandOutput:   responseBody,
-		ServicePort:     destPort,
+		CommandOutput:      responseBody,
+		ServicePort:        destPort,
+		ResponseStatusCode: responseStatusCode,
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

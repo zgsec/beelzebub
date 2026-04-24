@@ -97,6 +97,17 @@ type Event struct {
 	// v8: Service port extracted from listener address. Replaces the exporter's
 	// DescriptionToPort string-matching which breaks on novel sensor configs.
 	ServicePort string `json:"ServicePort,omitempty"`
+
+	// v8: Raw SSH KEX algorithm lists (preserved alongside the HASSH MD5 hash).
+	// HASSH destroys this information by hashing. The raw lists enable clustering
+	// by SSH library version and detecting algorithm negotiation anomalies.
+	// Format: semicolon-separated "kex;enc_c2s;mac_c2s;comp_c2s"
+	HASSHAlgorithms string `json:"HASSHAlgorithms,omitempty"`
+
+	// v8: HTTP response status code. The honeypot sets this on the response
+	// writer but previously never recorded it. Essential for lure effectiveness
+	// research ("did our deception convince the attacker to continue?").
+	ResponseStatusCode int `json:"ResponseStatusCode,omitempty"`
 }
 
 type (

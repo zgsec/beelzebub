@@ -175,6 +175,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyCategory: rawNoveltyVerdict.Category,
 								NoveltySignals:  rawNoveltyVerdict.SignalsString(),
 								HASSH:           hasshFromContext(sess.Context()),
+								HASSHAlgorithms: hasshAlgorithmsFromContext(sess.Context()),
 								ServicePort:     destPort,
 							})
 							return
@@ -194,8 +195,9 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					User:        sess.User(),
 					Description: servConf.Description,
 					SessionKey:  sessionKey,
-					HASSH:       hasshFromContext(sess.Context()),
-					ServicePort: destPort,
+					HASSH:            hasshFromContext(sess.Context()),
+					HASSHAlgorithms:  hasshAlgorithmsFromContext(sess.Context()),
+					ServicePort:      destPort,
 				})
 
 				// Record SSH authentication in bridge
@@ -370,6 +372,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltyCategory: authNoveltyVerdict.Category,
 					NoveltySignals:  authNoveltyVerdict.SignalsString(),
 					HASSH:           hasshFromContext(ctx),
+					HASSHAlgorithms: hasshAlgorithmsFromContext(ctx),
 					ServicePort:     destPort,
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
@@ -552,6 +555,8 @@ type hasshCtxKey struct{}
 // hasshFromContext extracts the HASSH fingerprint from a session context.
 // Computes from TeeConn on first call, caches the result, and releases the
 // capture buffer to avoid pinning memory for the lifetime of long sessions.
+type hasshAlgosCtxKey struct{} // context key for cached raw algorithm string
+
 func hasshFromContext(ctx interface {
 	Value(any) any
 	SetValue(any, any)
@@ -560,14 +565,26 @@ func hasshFromContext(ctx interface {
 	if cached, ok := ctx.Value(hasshCtxKey{}).(string); ok {
 		return cached
 	}
-	// Compute from TeeConn, cache, and release buffer
+	// Compute from TeeConn using ComputeHASSHFull, cache hash + algorithms, release buffer
 	hassh := ""
 	if tc, ok := ctx.Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
-		hassh = tracer.ComputeHASSH(tc.RawBytes())
+		if result := tracer.ComputeHASSHFull(tc.RawBytes()); result != nil {
+			hassh = result.Hash
+			ctx.SetValue(hasshAlgosCtxKey{}, result.RawInput)
+		}
 		tc.Release()
 	}
 	ctx.SetValue(hasshCtxKey{}, hassh)
 	return hassh
+}
+
+// hasshAlgorithmsFromContext returns the raw KEX algorithm string (cached by hasshFromContext).
+// Must be called AFTER hasshFromContext to ensure computation has happened.
+func hasshAlgorithmsFromContext(ctx interface{ Value(any) any }) string {
+	if cached, ok := ctx.Value(hasshAlgosCtxKey{}).(string); ok {
+		return cached
+	}
+	return ""
 }
 
 // checkCredentialDiscovery scans command output for credential-like content and records via bridge.
