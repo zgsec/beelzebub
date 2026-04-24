@@ -197,7 +197,16 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	if err == nil {
 		body = string(bodyBytes)
 	}
-	traceRequest(request, tr, command, servConf.Description, body, ns)
+
+	// Trace AFTER the response body is finalized (including LLM-plugin generated
+	// content) so tracer.Event.CommandOutput reflects what was actually served
+	// to the attacker. Defer ensures the trace fires on both success and error
+	// return paths. This aligns the HTTP handler with MCP/SSH/TELNET handlers,
+	// which all populate CommandOutput; the HTTP omission was historical and
+	// broke downstream canary/response-correlation analytics.
+	defer func() {
+		traceRequest(request, tr, command, servConf.Description, body, ns, resp.Body)
+	}()
 
 	if command.Plugin == plugins.LLMPluginName {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
@@ -232,7 +241,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, responseBody string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	sessionKey := "HTTP" + host
 
@@ -315,6 +324,13 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		NoveltySignals:  noveltyVerdict.SignalsString(),
 		JA4H:            tracer.ComputeJA4H(request, wireOrder),
 		HeaderOrder:     strings.Join(wireOrder, ","),
+		// Command mirrors the pattern used by SSH/MCP/TELNET handlers: a
+		// short human-readable form of what the attacker sent. Downstream
+		// exporters gate response-summary recording on Command being
+		// non-empty, so populating this is what makes ResponseSummary fire
+		// for HTTP lures.
+		Command:         fmt.Sprintf("%s %s", request.Method, request.RequestURI),
+		CommandOutput:   responseBody,
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {
