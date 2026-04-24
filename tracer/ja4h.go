@@ -24,8 +24,8 @@ func ComputeJA4H(r *http.Request, wireOrder []string) string {
 	// --- Part a: method + version + cookie + referer + count + lang ---
 	method := methodCode(r.Method)
 	version := versionCode(r.Proto)
-	hasCookie := boolFlag(len(r.Cookies()) > 0)
-	hasReferer := boolFlag(r.Referer() != "")
+	hasCookie := boolFlag(len(r.Cookies()) > 0, "c")
+	hasReferer := boolFlag(r.Referer() != "", "r")
 
 	// Filter headers: exclude cookie, referer, pseudo-headers
 	filtered := filterHeaders(wireOrder, r.Header)
@@ -147,9 +147,11 @@ func versionCode(proto string) string {
 	}
 }
 
-func boolFlag(b bool) string {
+// boolFlag returns trueChar if b is true, "n" if false.
+// FoxIO JA4H spec: cookie uses "c", referer uses "r" (NOT both "c").
+func boolFlag(b bool, trueChar string) string {
 	if b {
-		return "c"
+		return trueChar
 	}
 	return "n"
 }
