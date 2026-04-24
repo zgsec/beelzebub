@@ -83,9 +83,10 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	defer conn.Close()
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	destPort := tracer.ExtractPort(servConf.Address)
 
 	// Capture client telnet negotiation as a tracer event
-	captureTelnetHandshake(conn, tr, host, port, servConf.Description)
+	captureTelnetHandshake(conn, tr, host, port, servConf.Description, destPort)
 
 	// Authentication phase
 	_, err := conn.Write([]byte("\r\nlogin: "))
@@ -133,6 +134,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		SourcePort:  port,
 		ID:          uuid.New().String(),
 		Description: servConf.Description,
+		ServicePort: destPort,
 	})
 
 	// Validate password
@@ -163,6 +165,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		User:        username,
 		Description: servConf.Description,
 		SessionKey:  sessionKey,
+		ServicePort: destPort,
 	})
 
 	// Load history for LLM context
@@ -246,6 +249,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					Description:   servConf.Description,
 					Handler:       handlerName,
 					SessionKey:    sessionKey,
+					ServicePort:   destPort,
 				})
 
 				break // Found match, exit command loop
@@ -275,25 +279,27 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				Description:   servConf.Description,
 				Handler:       "not_found",
 				SessionKey:    sessionKey,
+				ServicePort:   destPort,
 			})
 		}
 	}
 
 	// Trace session end
 	tr.TraceEvent(tracer.Event{
-		Msg:        "End TELNET Session",
-		Status:     tracer.End.String(),
-		ID:         uuidSession.String(),
-		Protocol:   tracer.TELNET.String(),
-		SessionKey: sessionKey,
-		SourceIp:   host,
+		Msg:         "End TELNET Session",
+		Status:      tracer.End.String(),
+		ID:          uuidSession.String(),
+		Protocol:    tracer.TELNET.String(),
+		SessionKey:  sessionKey,
+		SourceIp:    host,
+		ServicePort: destPort,
 	})
 }
 
 // captureTelnetHandshake reads the client's initial IAC negotiation and emits
 // it as a tracer event. Different clients negotiate different options — this
 // acts as a client fingerprint (e.g., real terminal vs automated script).
-func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, description string) {
+func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, description, destPort string) {
 	buf := make([]byte, 256)
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	n, _ := conn.Read(buf)
@@ -319,6 +325,7 @@ func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, descrip
 		RemoteAddr:  net.JoinHostPort(host, port),
 		ID:          uuid.New().String(),
 		Description: description,
+		ServicePort: destPort,
 	})
 }
 

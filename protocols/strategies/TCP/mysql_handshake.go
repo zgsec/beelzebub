@@ -424,6 +424,7 @@ func dispatchMysqlHandshake(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	_ = conn.SetDeadline(time.Now().Add(deadline))
 
 	sourceIP, sourcePort, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	destPort := extractPort(servConf.Address)
 	sessionID := uuid.New().String()
 
 	cfg := MysqlHandshakeConfig{
@@ -447,6 +448,7 @@ func dispatchMysqlHandshake(conn net.Conn, servConf parser.BeelzebubServiceConfi
 			SourcePort:  sourcePort,
 			ID:          sessionID,
 			Description: servConf.Description,
+			ServicePort: destPort,
 		})
 		return
 	}
@@ -467,6 +469,7 @@ func dispatchMysqlHandshake(conn net.Conn, servConf parser.BeelzebubServiceConfi
 			ID:          sessionID,
 			Description: servConf.Description,
 			Command:     "greeting-then-no-response",
+			ServicePort: destPort,
 		})
 		return
 	}
@@ -488,17 +491,18 @@ func dispatchMysqlHandshake(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		strings.Join(attrPairs, ","), parsed.AuthResponseHex, parseErr)
 
 	tr.TraceEvent(tracer.Event{
-		Msg:         "MySQL handshake attempt",
-		Protocol:    tracer.TCP.String(),
-		Status:      tracer.Interaction.String(),
-		RemoteAddr:  conn.RemoteAddr().String(),
-		SourceIp:    sourceIP,
-		SourcePort:  sourcePort,
-		ID:          sessionID,
-		User:        parsed.Username,
-		Description: servConf.Description,
-		Handler:     "mysql-handshake-v10",
-		Command:     commandStr,
+		Msg:           "MySQL handshake attempt",
+		Protocol:      tracer.TCP.String(),
+		Status:        tracer.Interaction.String(),
+		RemoteAddr:    conn.RemoteAddr().String(),
+		SourceIp:      sourceIP,
+		SourcePort:    sourcePort,
+		ID:            sessionID,
+		User:          parsed.Username,
+		Description:   servConf.Description,
+		Handler:       "mysql-handshake-v10",
+		Command:       commandStr,
 		CommandOutput: outputStr,
+		ServicePort:   destPort,
 	})
 }

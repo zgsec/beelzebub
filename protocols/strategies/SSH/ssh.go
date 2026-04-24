@@ -73,6 +73,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	}
 	go sshStrategy.Sessions.HistoryCleaner()
 	go func() {
+		destPort := tracer.ExtractPort(servConf.Address)
 		server := &ssh.Server{
 			Addr:        servConf.Address,
 			MaxTimeout:  time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
@@ -174,6 +175,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyCategory: rawNoveltyVerdict.Category,
 								NoveltySignals:  rawNoveltyVerdict.SignalsString(),
 								HASSH:           hasshFromContext(sess.Context()),
+								ServicePort:     destPort,
 							})
 							return
 						}
@@ -181,18 +183,19 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 
 				tr.TraceEvent(tracer.Event{
-					Msg:        "New SSH Terminal Session",
-					Protocol:   tracer.SSH.String(),
-					RemoteAddr: sess.RemoteAddr().String(),
-					SourceIp:   host,
-					SourcePort: port,
-					Status:     tracer.Start.String(),
-					ID:         uuidSession.String(),
-					Environ:    strings.Join(sess.Environ(), ","),
-					User:       sess.User(),
+					Msg:         "New SSH Terminal Session",
+					Protocol:    tracer.SSH.String(),
+					RemoteAddr:  sess.RemoteAddr().String(),
+					SourceIp:    host,
+					SourcePort:  port,
+					Status:      tracer.Start.String(),
+					ID:          uuidSession.String(),
+					Environ:     strings.Join(sess.Environ(), ","),
+					User:        sess.User(),
 					Description: servConf.Description,
-					SessionKey: sessionKey,
-					HASSH:      hasshFromContext(sess.Context()),
+					SessionKey:  sessionKey,
+					HASSH:       hasshFromContext(sess.Context()),
+					ServicePort: destPort,
 				})
 
 				// Record SSH authentication in bridge
@@ -290,6 +293,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyScore:    cmdNoveltyVerdict.Score,
 								NoveltyCategory: cmdNoveltyVerdict.Category,
 								NoveltySignals:  cmdNoveltyVerdict.SignalsString(),
+								ServicePort:     destPort,
 							})
 							break // Inner range over commands.
 						}
@@ -315,6 +319,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltyScore:    endNoveltyVerdict.Score,
 					NoveltyCategory: endNoveltyVerdict.Category,
 					NoveltySignals:  endNoveltyVerdict.SignalsString(),
+					ServicePort:     destPort,
 				})
 			},
 			PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
@@ -332,6 +337,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					ID:          uuid.New().String(),
 					Description: servConf.Description,
 					Command:     key.Type() + " " + fingerprint,
+					ServicePort: destPort,
 				})
 				return false // always reject, fall through to password auth
 			},
@@ -364,6 +370,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltyCategory: authNoveltyVerdict.Category,
 					NoveltySignals:  authNoveltyVerdict.SignalsString(),
 					HASSH:           hasshFromContext(ctx),
+					ServicePort:     destPort,
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 				if err != nil {

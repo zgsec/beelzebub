@@ -102,6 +102,7 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 	}
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	destPort := extractPort(servConf.Address)
 
 	tr.TraceEvent(tracer.Event{
 		Msg:         "New TCP attempt",
@@ -113,6 +114,7 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 		SourcePort:  port,
 		ID:          uuid.New().String(),
 		Description: servConf.Description,
+		ServicePort: destPort,
 	})
 }
 
@@ -155,6 +157,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			SourcePort:  port,
 			ID:          uuid.New().String(),
 			Description: servConf.Description,
+			ServicePort: destPort,
 		})
 
 		matched, err := regexp.MatchString(servConf.PasswordRegex, password)
@@ -183,6 +186,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		User:        username,
 		Description: servConf.Description,
 		SessionKey:  sessionKey,
+		ServicePort: destPort,
 	})
 
 	// Load history for LLM context
@@ -323,6 +327,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			Description:   servConf.Description,
 			Handler:       handlerName,
 			SessionKey:    sessionKey,
+			ServicePort:   destPort,
 		})
 
 		if shouldQuit {
@@ -332,12 +337,13 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Session end
 	tr.TraceEvent(tracer.Event{
-		Msg:        "End TCP Session",
-		Status:     tracer.End.String(),
-		ID:         sessionID,
-		Protocol:   tracer.TCP.String(),
-		SessionKey: sessionKey,
-		SourceIp:   host,
+		Msg:         "End TCP Session",
+		Status:      tracer.End.String(),
+		ID:          sessionID,
+		Protocol:    tracer.TCP.String(),
+		SessionKey:  sessionKey,
+		SourceIp:    host,
+		ServicePort: destPort,
 	})
 }
 
