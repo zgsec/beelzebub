@@ -94,9 +94,14 @@ type Event struct {
 	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
 	HASSH       string `json:"HASSH,omitempty"`
 
-	// v8: Service port extracted from listener address. Replaces the exporter's
-	// DescriptionToPort string-matching which breaks on novel sensor configs.
+	// v8: Service port extracted from listener address.
 	ServicePort string `json:"ServicePort,omitempty"`
+
+	// v8: Canonical service type from sensor config. Describes what the sensor
+	// is pretending to be (e.g., "ollama", "terraform-state", "redis").
+	// Provides context for downstream classification without biasing toward
+	// specific path patterns. Scales to any service type without code changes.
+	ServiceType string `json:"ServiceType,omitempty"`
 
 	// v8: Raw SSH KEX algorithm lists (preserved alongside the HASSH MD5 hash).
 	HASSHAlgorithms string `json:"HASSHAlgorithms,omitempty"`

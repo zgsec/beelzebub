@@ -178,6 +178,13 @@ type BeelzebubServiceConfiguration struct {
 	DeadlineTimeoutSeconds int             `yaml:"deadlineTimeoutSeconds"`
 	PasswordRegex          string          `yaml:"passwordRegex"`
 	Description            string          `yaml:"description"`
+	// v8: Canonical service type tag. Flows through every event to the exporter
+	// and downstream systems. Describes WHAT THIS SENSOR IS PRETENDING TO BE,
+	// not what the attacker is doing (that's behavioral classification).
+	// Examples: "ollama", "terraform-state", "docker-registry", "redis", "mysql".
+	// If empty, the exporter falls back to deriving service type from Description
+	// or port mapping. New deployments should always set this.
+	ServiceType            string          `yaml:"serviceType,omitempty" json:",omitempty"`
 	Banner                 string          `yaml:"banner"`
 	Plugin                 Plugin          `yaml:"plugin"`
 	TLSCertPath            string          `yaml:"tlsCertPath"`
