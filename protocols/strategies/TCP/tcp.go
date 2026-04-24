@@ -7,8 +7,11 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
+	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
@@ -22,6 +25,15 @@ const maxLineLength = 8192 // Prevent unbounded memory growth from binary junk o
 
 type TCPStrategy struct {
 	Sessions *historystore.HistoryStore
+	Bridge   *bridge.ProtocolBridge
+
+	// Per-IP timing accumulation for automation detection.
+	// We collect the data here; the scoring thresholds may need tuning
+	// as we learn what TCP automation looks like vs SSH/HTTP.
+	agentMu       sync.Mutex
+	agentTimings  map[string][]int64
+	agentLastSeen map[string]time.Time
+	agentPrevCmd  map[string]string
 }
 
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -29,6 +41,7 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		tcpStrategy.Sessions = historystore.NewHistoryStore()
 	}
 	go tcpStrategy.Sessions.HistoryCleaner()
+	go tcpStrategy.cleanAgentState()
 
 	listen, err := net.Listen("tcp", servConf.Address)
 	if err != nil {
@@ -311,6 +324,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			}
 		}
 
+		// Agent classification for interactive commands
+		verdict := strategy.classifyTCP(host, commandInput)
+
 		// Trace interaction
 		tr.TraceEvent(tracer.Event{
 			Msg:           "TCP Session Interaction",
@@ -328,6 +344,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			Handler:       handlerName,
 			SessionKey:    sessionKey,
 			ServicePort:   destPort,
+			AgentScore:    verdict.Score,
+			AgentCategory: verdict.Category,
+			AgentSignals:  verdict.SignalsString(),
 		})
 
 		if shouldQuit {
@@ -688,5 +707,78 @@ func encodeReply(cmd parser.Command, value string) []byte {
 		// a typo in a YAML doesn't silently drop all traffic.
 		log.Warnf("tcp.encodeReply: unknown replyFormat %q, falling back to plaintext", cmd.ReplyFormat)
 		return []byte(value + "\r\n")
+	}
+}
+
+// classifyTCP accumulates timing and builds an agent detection verdict for a TCP command.
+// The scoring uses the same agentdetect.IncrementalClassify as SSH/MCP — same signal
+// definitions, same thresholds. Whether those thresholds are well-calibrated for TCP
+// is an open question (Redis scanners may have different timing profiles than SSH bots).
+// We collect the data now; threshold tuning happens after we have labeled TCP sessions.
+func (s *TCPStrategy) classifyTCP(ip, cmd string) agentdetect.Verdict {
+	now := time.Now()
+	s.agentMu.Lock()
+
+	// Lazy init (safe because Init runs before any connections)
+	if s.agentTimings == nil {
+		s.agentTimings = make(map[string][]int64)
+		s.agentLastSeen = make(map[string]time.Time)
+		s.agentPrevCmd = make(map[string]string)
+	}
+
+	// Accumulate timing (ring buffer, max 100 samples per IP)
+	if last, ok := s.agentLastSeen[ip]; ok {
+		delta := now.Sub(last).Milliseconds()
+		s.agentTimings[ip] = append(s.agentTimings[ip], delta)
+		if len(s.agentTimings[ip]) > 100 {
+			s.agentTimings[ip] = s.agentTimings[ip][len(s.agentTimings[ip])-100:]
+		}
+	}
+	s.agentLastSeen[ip] = now
+	timings := make([]int64, len(s.agentTimings[ip]))
+	copy(timings, s.agentTimings[ip])
+
+	// Retry detection: exact same command repeated
+	prevCmd := s.agentPrevCmd[ip]
+	isRetry := prevCmd != "" && prevCmd == cmd
+	s.agentPrevCmd[ip] = cmd
+
+	s.agentMu.Unlock()
+
+	sig := agentdetect.Signal{
+		InterEventTimingsMs: timings,
+		HasIdenticalRetries: isRetry,
+	}
+
+	// Cross-protocol: check bridge for activity from same IP on other protocols
+	if s.Bridge != nil {
+		flags := s.Bridge.GetFlags(ip)
+		for _, f := range flags {
+			if f == "mcp_tool_call" || f == "ollama_api_accessed" {
+				sig.HasCrossProtocol = true
+				break
+			}
+		}
+	}
+
+	return agentdetect.IncrementalClassify(sig)
+}
+
+// cleanAgentState periodically prunes stale entries from the agent detection maps.
+func (s *TCPStrategy) cleanAgentState() {
+	for {
+		time.Sleep(5 * time.Minute)
+		cutoff := time.Now().Add(-60 * time.Minute)
+		s.agentMu.Lock()
+		if s.agentLastSeen != nil {
+			for ip, last := range s.agentLastSeen {
+				if last.Before(cutoff) {
+					delete(s.agentTimings, ip)
+					delete(s.agentLastSeen, ip)
+					delete(s.agentPrevCmd, ip)
+				}
+			}
+		}
+		s.agentMu.Unlock()
 	}
 }

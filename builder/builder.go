@@ -128,7 +128,7 @@ Honeypot Framework, happy hacking!`)
 	// Init Protocol strategies
 	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}
 	hypertextTransferProtocolStrategy := &HTTP.HTTPStrategy{Bridge: protocolBridge}
-	transmissionControlProtocolStrategy := &TCP.TCPStrategy{}
+	transmissionControlProtocolStrategy := &TCP.TCPStrategy{Bridge: protocolBridge}
 	modelContextProtocolStrategy := &MCP.MCPStrategy{Bridge: protocolBridge}
 	telnetStrategy := &TELNET.TelnetStrategy{Bridge: protocolBridge}
 	ollamaStrategy := &OLLAMA.OllamaStrategy{Bridge: protocolBridge}
