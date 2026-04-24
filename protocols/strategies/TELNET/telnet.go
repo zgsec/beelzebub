@@ -96,7 +96,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	destPort := tracer.ExtractPort(servConf.Address)
 
 	// Capture client telnet negotiation as a tracer event
-	captureTelnetHandshake(conn, tr, host, port, servConf.Description, destPort)
+	captureTelnetHandshake(conn, tr, host, port, servConf.Description, servConf.ServiceType, destPort)
 
 	// Authentication phase
 	_, err := conn.Write([]byte("\r\nlogin: "))
@@ -144,6 +144,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		SourcePort:  port,
 		ID:          uuid.New().String(),
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
 		ServicePort: destPort,
 	})
 
@@ -179,6 +180,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 		ID:          uuidSession.String(),
 		User:        username,
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
 		SessionKey:  sessionKey,
 		ServicePort: destPort,
 	})
@@ -265,6 +267,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					Protocol:      tracer.TELNET.String(),
 					User:          username,
 					Description:   servConf.Description,
+					ServiceType:   servConf.ServiceType,
 					Handler:       handlerName,
 					SessionKey:    sessionKey,
 					ServicePort:   destPort,
@@ -301,6 +304,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				Protocol:      tracer.TELNET.String(),
 				User:          username,
 				Description:   servConf.Description,
+				ServiceType:   servConf.ServiceType,
 				Handler:       "not_found",
 				SessionKey:    sessionKey,
 				ServicePort:   destPort,
@@ -326,7 +330,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 // captureTelnetHandshake reads the client's initial IAC negotiation and emits
 // it as a tracer event. Different clients negotiate different options — this
 // acts as a client fingerprint (e.g., real terminal vs automated script).
-func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, description, destPort string) {
+func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, description, serviceType, destPort string) {
 	buf := make([]byte, 256)
 	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	n, _ := conn.Read(buf)
@@ -356,6 +360,7 @@ func captureTelnetHandshake(conn net.Conn, tr tracer.Tracer, host, port, descrip
 		RemoteAddr:     net.JoinHostPort(host, port),
 		ID:             uuid.New().String(),
 		Description:    description,
+		ServiceType:    serviceType,
 		ServicePort:    destPort,
 		TelnetTermType: subneg.TermType,
 		TelnetWidth:    subneg.WindowWidth,

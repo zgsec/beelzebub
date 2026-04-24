@@ -430,6 +430,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		SourcePort:       port,
 		ID:               sessionID,
 		Description:      servConf.Description,
+		ServiceType:      servConf.ServiceType,
 		Command:          command,
 		CommandOutput:    commandOutput,
 		Handler:          handler,

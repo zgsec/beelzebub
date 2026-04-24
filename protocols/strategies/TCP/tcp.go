@@ -127,6 +127,7 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 		SourcePort:  port,
 		ID:          uuid.New().String(),
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
 		ServicePort: destPort,
 	})
 }
@@ -170,6 +171,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			SourcePort:  port,
 			ID:          uuid.New().String(),
 			Description: servConf.Description,
+			ServiceType: servConf.ServiceType,
 			ServicePort: destPort,
 		})
 
@@ -198,6 +200,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		ID:          sessionID,
 		User:        username,
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
 		SessionKey:  sessionKey,
 		ServicePort: destPort,
 	})
@@ -341,6 +344,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			Protocol:      tracer.TCP.String(),
 			User:          username,
 			Description:   servConf.Description,
+			ServiceType:   servConf.ServiceType,
 			Handler:       handlerName,
 			SessionKey:    sessionKey,
 			ServicePort:   destPort,

@@ -370,6 +370,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						SourcePort:      port,
 						ID:              sessionID,
 						Description:     servConf.Description,
+						ServiceType:     servConf.ServiceType,
 						Command:         cmdStr,
 						CommandOutput:   faultResp,
 						SessionKey:      sessionKey,
@@ -472,6 +473,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				SourcePort:       port,
 				ID:               sessionID,
 				Description:      servConf.Description,
+				ServiceType:      servConf.ServiceType,
 				Command:          cmdStr,
 				CommandOutput:    response,
 				SessionKey:       sessionKey,
@@ -1005,6 +1007,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 		SourcePort:      port,
 		ID:              uuid.New().String(),
 		Description:     servConf.Description,
+		ServiceType:     servConf.ServiceType,
 		Handler:         matchedCommand.Name,
 		ServicePort:     destPort,
 	})

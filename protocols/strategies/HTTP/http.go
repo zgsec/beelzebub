@@ -220,7 +220,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// which all populate CommandOutput; the HTTP omission was historical and
 	// broke downstream canary/response-correlation analytics.
 	defer func() {
-		traceRequest(request, tr, command, servConf.Description, body, ns, resp.Body, resp.StatusCode)
+		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType, body, ns, resp.Body, resp.StatusCode)
 	}()
 
 	if command.Plugin == plugins.LLMPluginName {
@@ -256,7 +256,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, ns *noveltydetect.FingerprintStore, responseBody string, responseStatusCode int) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, HoneypotServiceType, body string, ns *noveltydetect.FingerprintStore, responseBody string, responseStatusCode int) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
 	destPort := ""
@@ -338,6 +338,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		SourcePort:      port,
 		ID:              uuid.New().String(),
 		Description:     HoneypotDescription,
+		ServiceType:     HoneypotServiceType,
 		Handler:         command.Name,
 		SessionKey:      sessionKey,
 		Sequence:        seq,
