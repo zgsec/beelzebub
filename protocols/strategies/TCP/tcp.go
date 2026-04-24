@@ -750,12 +750,17 @@ func (s *TCPStrategy) classifyTCP(ip, cmd string) agentdetect.Verdict {
 		HasIdenticalRetries: isRetry,
 	}
 
-	// Cross-protocol: check bridge for activity from same IP on other protocols
+	// Cross-protocol: check bridge for activity from same IP on other protocols.
+	// v8: compute CrossProtocolGapMs from bridge timestamps (was dead code).
 	if s.Bridge != nil {
 		flags := s.Bridge.GetFlags(ip)
 		for _, f := range flags {
 			if f == "mcp_tool_call" || f == "ollama_api_accessed" {
 				sig.HasCrossProtocol = true
+				lastAct := s.Bridge.LastActivity(ip)
+				if !lastAct.IsZero() {
+					sig.CrossProtocolGapMs = now.Sub(lastAct).Milliseconds()
+				}
 				break
 			}
 		}

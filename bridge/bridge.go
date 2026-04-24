@@ -18,15 +18,15 @@ type Credential struct {
 // Credentials or flags set from one protocol handler are visible to others.
 type ProtocolBridge struct {
 	mu              sync.RWMutex
-	discoveredCreds map[string][]Credential    // IP → credentials
-	sessionFlags    map[string]map[string]bool // IP → set of flags
+	discoveredCreds map[string][]Credential         // IP → credentials
+	sessionFlags    map[string]map[string]time.Time  // IP → flag → when set (v8: timestamp for gap computation)
 }
 
 // NewBridge creates an initialized ProtocolBridge.
 func NewBridge() *ProtocolBridge {
 	return &ProtocolBridge{
 		discoveredCreds: make(map[string][]Credential),
-		sessionFlags:    make(map[string]map[string]bool),
+		sessionFlags:    make(map[string]map[string]time.Time),
 	}
 }
 
@@ -66,23 +66,25 @@ func (pb *ProtocolBridge) GetDiscoveries(ip string) []Credential {
 }
 
 // SetFlag marks that an IP has achieved something (e.g., "ssh_authenticated").
+// Stores the timestamp for cross-protocol gap computation.
 func (pb *ProtocolBridge) SetFlag(ip, flag string) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 	if pb.sessionFlags[ip] == nil {
-		pb.sessionFlags[ip] = make(map[string]bool)
+		pb.sessionFlags[ip] = make(map[string]time.Time)
 	}
-	pb.sessionFlags[ip][flag] = true
+	pb.sessionFlags[ip][flag] = time.Now()
 }
 
 // HasFlag checks if an IP has a specific flag.
 func (pb *ProtocolBridge) HasFlag(ip, flag string) bool {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
-	return pb.sessionFlags[ip][flag]
+	_, ok := pb.sessionFlags[ip][flag]
+	return ok
 }
 
-// GetFlags returns all flags for an IP.
+// GetFlags returns all flag names for an IP.
 func (pb *ProtocolBridge) GetFlags(ip string) []string {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
@@ -93,8 +95,28 @@ func (pb *ProtocolBridge) GetFlags(ip string) []string {
 	return flags
 }
 
+// LastActivity returns the most recent flag-set or credential-discovery timestamp
+// for an IP. Returns zero time if no activity recorded. Used by agent detection
+// to compute CrossProtocolGapMs — the time between activity on one protocol and
+// the first event on another.
+func (pb *ProtocolBridge) LastActivity(ip string) time.Time {
+	pb.mu.RLock()
+	defer pb.mu.RUnlock()
+	var latest time.Time
+	for _, t := range pb.sessionFlags[ip] {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	for _, c := range pb.discoveredCreds[ip] {
+		if c.FoundAt.After(latest) {
+			latest = c.FoundAt
+		}
+	}
+	return latest
+}
+
 // Clean removes all state for IPs not seen since maxAge.
-// This is a simple implementation; callers can run it periodically.
 func (pb *ProtocolBridge) Clean(maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
 	pb.mu.Lock()
