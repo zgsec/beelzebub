@@ -2,6 +2,7 @@ package HTTP
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -34,6 +35,7 @@ type httpSessionState struct {
 var (
 	httpSessions     sync.Map // IP → *httpSessionState
 	httpCleanupOnce  sync.Once
+	httpJA4Cache     sync.Map // remoteAddr → JA4 string (per-TLS-connection, cleared on disconnect)
 )
 
 // startHTTPSessionCleanup launches a goroutine that prunes stale sessions every 5 minutes.
@@ -167,6 +169,19 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		}
 		var err error
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
+			// v8: JA4 TLS ClientHello fingerprinting via GetConfigForClient.
+			// Go's stdlib parses the ClientHello and gives us the fields directly —
+			// no raw byte capture needed. We store the JA4 per-IP for lookup
+			// when tracing the request.
+			srv.TLSConfig = &tls.Config{
+				GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+					ja4 := tracer.ComputeJA4FromClientHello(hello)
+					if ja4 != "" {
+						httpJA4Cache.Store(hello.Conn.RemoteAddr().String(), ja4)
+					}
+					return nil, nil // use default config
+				},
+			}
 			err = srv.ServeTLS(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc), servConf.TLSCertPath, servConf.TLSKeyPath)
 		} else {
 			err = srv.Serve(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc))
@@ -247,6 +262,11 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 	destPort := ""
 	if laddr, ok := request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
 		destPort = tracer.ExtractPort(laddr.String())
+	}
+	// v8: JA4 TLS fingerprint from GetConfigForClient cache
+	var ja4 string
+	if v, ok := httpJA4Cache.Load(request.RemoteAddr); ok {
+		ja4 = v.(string)
 	}
 	sessionKey := "HTTP" + host
 
@@ -338,6 +358,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		CommandOutput:      responseBody,
 		ServicePort:        destPort,
 		ResponseStatusCode: responseStatusCode,
+		JA4:                ja4,
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

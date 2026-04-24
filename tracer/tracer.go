@@ -104,11 +104,16 @@ type Event struct {
 	// v8: HTTP response status code for lure effectiveness research.
 	ResponseStatusCode int `json:"ResponseStatusCode,omitempty"`
 
-	// v8: SSH terminal metadata — terminal type and dimensions from the PTY request.
-	// Distinguishes real terminals ("xterm-256color", 120x40) from bots ("vt100", 80x24 or 0x0).
+	// v8: SSH terminal metadata from PTY request.
 	PTYTerm   string `json:"PTYTerm,omitempty"`
 	PTYWidth  int    `json:"PTYWidth,omitempty"`
 	PTYHeight int    `json:"PTYHeight,omitempty"`
+
+	// v8: JA4 TLS ClientHello fingerprint. Computed from Go's tls.ClientHelloInfo
+	// via GetConfigForClient callback — no raw byte parsing needed. Covers the
+	// HTTPS blind spot where HASSH doesn't apply.
+	// Spec: https://github.com/FoxIO-LLC/ja4/blob/main/technical_details/JA4.md
+	JA4 string `json:"JA4,omitempty"`
 }
 
 type (
