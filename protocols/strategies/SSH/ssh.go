@@ -183,6 +183,17 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					}
 				}
 
+				// Capture PTY metadata — terminal type and dimensions.
+				// Real humans use "xterm-256color" with varied dimensions.
+				// Bots typically use "vt100" or 80x24, or skip PTY entirely.
+				var ptyTerm string
+				var ptyWidth, ptyHeight int
+				if pty, _, hasPty := sess.Pty(); hasPty {
+					ptyTerm = pty.Term
+					ptyWidth = pty.Window.Width
+					ptyHeight = pty.Window.Height
+				}
+
 				tr.TraceEvent(tracer.Event{
 					Msg:         "New SSH Terminal Session",
 					Protocol:    tracer.SSH.String(),
@@ -198,6 +209,9 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					HASSH:            hasshFromContext(sess.Context()),
 					HASSHAlgorithms:  hasshAlgorithmsFromContext(sess.Context()),
 					ServicePort:      destPort,
+					PTYTerm:          ptyTerm,
+					PTYWidth:         ptyWidth,
+					PTYHeight:        ptyHeight,
 				})
 
 				// Record SSH authentication in bridge

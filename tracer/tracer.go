@@ -99,15 +99,16 @@ type Event struct {
 	ServicePort string `json:"ServicePort,omitempty"`
 
 	// v8: Raw SSH KEX algorithm lists (preserved alongside the HASSH MD5 hash).
-	// HASSH destroys this information by hashing. The raw lists enable clustering
-	// by SSH library version and detecting algorithm negotiation anomalies.
-	// Format: semicolon-separated "kex;enc_c2s;mac_c2s;comp_c2s"
 	HASSHAlgorithms string `json:"HASSHAlgorithms,omitempty"`
 
-	// v8: HTTP response status code. The honeypot sets this on the response
-	// writer but previously never recorded it. Essential for lure effectiveness
-	// research ("did our deception convince the attacker to continue?").
+	// v8: HTTP response status code for lure effectiveness research.
 	ResponseStatusCode int `json:"ResponseStatusCode,omitempty"`
+
+	// v8: SSH terminal metadata — terminal type and dimensions from the PTY request.
+	// Distinguishes real terminals ("xterm-256color", 120x40) from bots ("vt100", 80x24 or 0x0).
+	PTYTerm   string `json:"PTYTerm,omitempty"`
+	PTYWidth  int    `json:"PTYWidth,omitempty"`
+	PTYHeight int    `json:"PTYHeight,omitempty"`
 }
 
 type (

@@ -152,8 +152,8 @@ func TestParseHeaderOrder_CookieRefererFiltered(t *testing.T) {
 	ja4h := ComputeJA4H(r, order)
 	parts := strings.Split(ja4h, "_")
 	// Header count should be 2 (host + accept, excluding cookie + referer)
-	// Cookie + Referer present → flags are "cc", count excludes them → "02" (host + accept)
-	if !strings.Contains(parts[0], "cc02") {
-		t.Errorf("expected cc02 in part_a (cookie+referer present, 2 remaining headers), got part_a=%s", parts[0])
+	// Cookie present → 'c', Referer present → 'r' (per FoxIO spec), count "02"
+	if !strings.Contains(parts[0], "cr02") {
+		t.Errorf("expected cr02 in part_a (cookie=c, referer=r, 2 remaining headers), got part_a=%s", parts[0])
 	}
 }
