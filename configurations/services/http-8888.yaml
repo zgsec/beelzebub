@@ -20,6 +20,14 @@ apiVersion: "v1"
 protocol: "http"
 address: ":8888"
 description: "Open WebUI AI chat interface"
+# v8 Phase 0: capture response body in tracer events for canary attribution.
+# This lure embeds ${HTTP_CANARY_AWS_KEY} in /.env, /docker-compose, etc.;
+# without response capture the AKIA never lands in sessions.akia_observed
+# and the canary_trails matview cannot join fires to harvester sessions.
+# Token values are scrubbed at ingest by api/canary_extractor.redact_known_tokens
+# and at the public API by api/public._scrub_response_text — see plan §1.5-A.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
 commands:
   # 1. GET / — Open WebUI SPA shell
   - regex: "^/$"

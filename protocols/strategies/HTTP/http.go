@@ -200,6 +200,10 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 }
 
 func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore) (httpResponse, error) {
+	// v8: response timing — measure from buildHTTPResponse entry through
+	// deferred trace fire (covers static-handler + LLM plugin paths uniformly).
+	startedAt := time.Now()
+
 	resp := httpResponse{
 		Body:       command.Handler,
 		Headers:    command.Headers,
@@ -219,8 +223,15 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// return paths. This aligns the HTTP handler with MCP/SSH/TELNET handlers,
 	// which all populate CommandOutput; the HTTP omission was historical and
 	// broke downstream canary/response-correlation analytics.
+	//
+	// v8 Phase 0 additions: ResponseBody (opt-in), ResponseHeaders (opt-in),
+	// ResponseBytes (always), ResponseTimeMs (always). Gated by
+	// servConf.CaptureResponseBody to keep storage cost opt-in.
 	defer func() {
-		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType, body, ns, resp.Body, resp.StatusCode)
+		responseTimeMs := time.Since(startedAt).Milliseconds()
+		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType,
+			body, ns, resp.Body, resp.StatusCode, strings.Join(resp.Headers, ", "),
+			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs)
 	}()
 
 	if command.Plugin == plugins.LLMPluginName {
@@ -256,7 +267,17 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, HoneypotServiceType, body string, ns *noveltydetect.FingerprintStore, responseBody string, responseStatusCode int) {
+// defaultResponseBodyMaxBytes is the truncation cap when a service config
+// leaves ResponseBodyMaxBytes unset (zero). 64 KiB matches the existing
+// 1 MiB request-body cap order-of-magnitude while keeping storage bounded
+// for high-volume lures.
+const defaultResponseBodyMaxBytes = 64 * 1024
+
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command,
+	HoneypotDescription, HoneypotServiceType, body string,
+	ns *noveltydetect.FingerprintStore,
+	responseBody string, responseStatusCode int, responseHeaders string,
+	captureResponseBody bool, responseBodyMaxBytes int, responseTimeMs int64) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
 	destPort := ""
@@ -360,6 +381,25 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		ServicePort:        destPort,
 		ResponseStatusCode: responseStatusCode,
 		JA4:                ja4,
+		// v8 Phase 0: response-side capture.
+		// ResponseBytes is the byte count, ALWAYS set (cheap, useful for everyone).
+		// ResponseTimeMs is the handler duration, ALWAYS set.
+		// ResponseBody / ResponseHeaders gated by captureResponseBody flag — only
+		// captured when the operator opts in for this service.
+		ResponseBytes:   int64(len(responseBody)),
+		ResponseTimeMs:  responseTimeMs,
+	}
+	if captureResponseBody {
+		maxBytes := responseBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultResponseBodyMaxBytes
+		}
+		if len(responseBody) > maxBytes {
+			event.ResponseBody = responseBody[:maxBytes]
+		} else {
+			event.ResponseBody = responseBody
+		}
+		event.ResponseHeaders = responseHeaders
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

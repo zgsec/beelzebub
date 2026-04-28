@@ -136,6 +136,20 @@ type Event struct {
 	// Critical for: lure effectiveness research, agent timing decontamination,
 	// detecting when our LLM responses are suspiciously slow vs real services.
 	ResponseTimeMs int64 `json:"ResponseTimeMs,omitempty"`
+
+	// v8: HTTP response body bytes served to the attacker. Opt-in per service
+	// via parser.BeelzebubServiceConfiguration.CaptureResponseBody. Truncated
+	// to ResponseBodyMaxBytes (default 64 KiB) to bound storage. Empty when
+	// flag is off; ResponseBytes (count) is still populated regardless.
+	// Required for: AKIA canary attribution (token embedded in response, not
+	// request), honeypot-detection probe verification, lure quality A/B,
+	// LLM-side prompt-injection detection.
+	ResponseBody string `json:"ResponseBody,omitempty"`
+
+	// v8: HTTP response headers served, comma-separated "Name: value" pairs.
+	// Captured alongside ResponseBody under the same opt-in flag. Detects
+	// honeypot fingerprinting via static header sets.
+	ResponseHeaders string `json:"ResponseHeaders,omitempty"`
 }
 
 type (

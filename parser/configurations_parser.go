@@ -202,6 +202,19 @@ type BeelzebubServiceConfiguration struct {
 	// `omitempty` keeps the JSON shape identical to pre-change for the
 	// default value, so HashCode() stays stable for all existing configs.
 	BinarySafe bool `yaml:"binarySafe" json:",omitempty"`
+	// CaptureResponseBody, when true, includes the response body in every
+	// HTTP tracer.Event for this service (truncated to ResponseBodyMaxBytes).
+	// Default false to preserve backward-compat AND avoid logging decoy
+	// credentials embedded in lure responses without operator intent.
+	// Operators opt in per-service in YAML when they want canary attribution,
+	// honeypot-cover analysis, or LLM-lure quality measurement.
+	// `omitempty` keeps default-value HashCode() stable.
+	CaptureResponseBody bool `yaml:"captureResponseBody" json:",omitempty"`
+	// ResponseBodyMaxBytes truncates captured response bodies to this size.
+	// Zero (default) means the runtime default (64 KiB). Set explicitly to
+	// raise/lower per service. Truncation is plain byte-cutoff (no UTF-8
+	// boundary preservation) — receivers must tolerate truncation.
+	ResponseBodyMaxBytes int `yaml:"responseBodyMaxBytes" json:",omitempty"`
 	// ServiceProtocol opts a TCP listener into a purpose-built binary
 	// protocol handler instead of the generic regex/command loop. Known
 	// values:

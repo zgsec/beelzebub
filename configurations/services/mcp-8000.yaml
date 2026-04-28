@@ -2,6 +2,15 @@ apiVersion: "v1"
 protocol: "mcp"
 address: ":8000"
 description: "Crestfield Platform"
+# v8 Phase 0: declares response capture intent for this service.
+# The MCP plugin already populates tracer.Event.CommandOutput with the
+# JSON-RPC response body, so the operator-facing data flow is unchanged
+# today. The flag documents intent and lets future Phase work wire MCP
+# response_body without a config change. Token scrubbing applies via
+# api/canary_extractor.redact_known_tokens at ingest regardless of
+# protocol — see plan §1.5-A.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
 
 # === STATEFUL WORLD MODEL ===
 # Each connecting IP gets a fresh copy of this state.
