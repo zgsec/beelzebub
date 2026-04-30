@@ -330,7 +330,8 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		for key, pat := range command.SessionCapture {
 			re, compileErr := regexp.Compile(pat)
 			if compileErr != nil {
-				continue // skip malformed patterns silently
+				log.Warnf("SessionCapture: invalid regex for key %q: %v", key, compileErr)
+				continue
 			}
 			m := re.FindSubmatch(bodyBytes)
 			if len(m) >= 2 {
@@ -359,6 +360,10 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		if len(short) > 8 {
 			short = short[:8]
 		}
+		// Variable substitution. ${session.cookie} and ${session.short} are not
+		// HTML-escaped because the cookie is strictly hex ([0-9a-f], 64 chars)
+		// from historystore's crypto/rand + hex.EncodeToString — no XSS surface.
+		// Captured values come from attacker request bodies, so they ARE escaped.
 		pairs := []string{
 			"${session.cookie}", sctx.sess.Cookie,
 			"${session.short}", short,
