@@ -74,7 +74,7 @@ func TestTraceRequest_ResponseBodyCapturedWhenFlagOn(t *testing.T) {
 		"" /* request body */, nil /* novelty store */,
 		respBody, 200, respHeaders,
 		true /* captureResponseBody */, 0 /* default 64KiB */, 42 /* responseTimeMs */,
-		nil /* captured */, "" /* sessionKeyOverride */)
+		nil /* captured */, "" /* sessionKeyOverride */, "" /* handlerOverride */)
 
 	got := tt.last()
 	if got.ResponseBody != respBody {
@@ -107,7 +107,7 @@ func TestTraceRequest_ResponseBodyOmittedWhenFlagOff(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "Content-Type: text/plain",
 		false /* captureResponseBody OFF */, 0, 5,
-		nil, "")
+		nil, "", "")
 
 	got := tt.last()
 	if got.ResponseBody != "" {
@@ -138,7 +138,7 @@ func TestTraceRequest_ResponseBodyTruncatedAtMax(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "Content-Type: text/plain",
 		true, maxBytes, 1,
-		nil, "")
+		nil, "", "")
 
 	got := tt.last()
 	if len(got.ResponseBody) != maxBytes {
@@ -163,7 +163,7 @@ func TestTraceRequest_DefaultMaxAppliedWhenZero(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "",
 		true, 0 /* zero → use default 64 KiB */, 1,
-		nil, "")
+		nil, "", "")
 
 	got := tt.last()
 	if len(got.ResponseBody) != defaultResponseBodyMaxBytes {
@@ -186,7 +186,7 @@ func TestTraceRequest_ResponseTimeAlwaysPopulated(t *testing.T) {
 	for _, capture := range []bool{true, false} {
 		traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 			"x", 200, "", capture, 64*1024, 7,
-			nil, "")
+			nil, "", "")
 		got := tt.last()
 		if got.ResponseTimeMs != 7 {
 			t.Errorf("captureResponseBody=%v: ResponseTimeMs not populated (got %d)",
@@ -383,5 +383,157 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 	binPath := strings.Join([]string{dir, sha + ".bin"}, string(os.PathSeparator))
 	if _, statErr := os.Stat(binPath); statErr != nil {
 		t.Fatalf("artifact .bin file not found at %s: %v", binPath, statErr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1 framework additions: Features #6, #7, #8
+// ---------------------------------------------------------------------------
+
+// TestHTTP_RawBodyFirst8KB verifies that bodies larger than RawBodyCapBytes
+// are truncated to exactly 8192 bytes, and that smaller bodies are captured
+// verbatim, under the <svc>.raw_body_first_8kb key.
+func TestHTTP_RawBodyFirst8KB(t *testing.T) {
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+	sctx := &sessionContext{cookieStore: cookieStore, cookieName: ".X", ttlSeconds: 1800}
+
+	body := strings.Repeat("A", 10000) // 10 KB body
+	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.1:1234"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:8042"}))
+	req = req.WithContext(ctx)
+
+	cmd := parser.Command{Name: "svc/handler"}
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{
+		ServiceType: "svc",
+		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
+	}
+	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+		t.Fatal(err)
+	}
+	got := tt.last()
+	raw, ok := got.Captured["svc.raw_body_first_8kb"]
+	if !ok {
+		t.Fatalf("svc.raw_body_first_8kb not in Captured: %+v", got.Captured)
+	}
+	if len(raw) != 8192 {
+		t.Errorf("raw body should be capped at 8192 bytes, got %d", len(raw))
+	}
+	if raw != strings.Repeat("A", 8192) {
+		t.Error("raw body content mismatch (truncation produced wrong bytes)")
+	}
+}
+
+// TestHTTP_HeaderCaptures verifies that Referer, X-Forwarded-For, and
+// User-Agent headers are captured under <svc>-namespaced keys when sctx != nil.
+func TestHTTP_HeaderCaptures(t *testing.T) {
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+	sctx := &sessionContext{cookieStore: cookieStore, cookieName: ".X", ttlSeconds: 1800}
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.RemoteAddr = "203.0.113.1:1234"
+	req.Header.Set("Referer", "https://example.com/path")
+	req.Header.Set("X-Forwarded-For", "10.0.0.1, 192.168.1.1")
+	req.Header.Set("User-Agent", "Nuclei - Open-source project (github.com/projectdiscovery/nuclei)")
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:8042"}))
+	req = req.WithContext(ctx)
+
+	cmd := parser.Command{Name: "svc/recon"}
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{
+		ServiceType: "svc",
+		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
+	}
+	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+		t.Fatal(err)
+	}
+	got := tt.last()
+	if got.Captured["svc.referer"] != "https://example.com/path" {
+		t.Errorf("svc.referer mismatch: %q", got.Captured["svc.referer"])
+	}
+	if got.Captured["svc.xff"] != "10.0.0.1, 192.168.1.1" {
+		t.Errorf("svc.xff mismatch: %q", got.Captured["svc.xff"])
+	}
+	if !strings.Contains(got.Captured["svc.user_agent_full"], "Nuclei") {
+		t.Errorf("svc.user_agent_full missing Nuclei: %q", got.Captured["svc.user_agent_full"])
+	}
+}
+
+// TestHTTP_CookieForgery_JWT verifies that when sctx carries a forged cookie
+// classified as "jwt", the tracer event carries the correct Captured keys and
+// the Handler is overridden to "<svc>/cookie_forgery".
+func TestHTTP_CookieForgery_JWT(t *testing.T) {
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+
+	// Forgery detection happens in the Init handler closure, not
+	// buildHTTPResponse. Construct sctx with forgedShape pre-populated to
+	// simulate what the handler closure would do.
+	sctx := &sessionContext{
+		cookieStore: cookieStore,
+		cookieName:  ".X",
+		ttlSeconds:  1800,
+		forgedShape: "jwt",
+		forgedValue: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.signature",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/Host", nil)
+	req.RemoteAddr = "203.0.113.1:1234"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:8042"}))
+	req = req.WithContext(ctx)
+
+	cmd := parser.Command{Name: "screenconnect/enum", SessionAction: "require"}
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{
+		ServiceType: "screenconnect",
+		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
+	}
+	// Even though sessionAction is require and sess is nil (so we 401),
+	// the forgery info must still appear in Captured.
+	resp, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 401 {
+		t.Errorf("expected 401 on require + no live session, got %d", resp.StatusCode)
+	}
+	got := tt.last()
+	if got.Captured["screenconnect.forged_cookie_shape"] != "jwt" {
+		t.Errorf("forged_cookie_shape: %q", got.Captured["screenconnect.forged_cookie_shape"])
+	}
+	if !strings.HasPrefix(got.Captured["screenconnect.forged_cookie_value"], "eyJhbGc") {
+		t.Errorf("forged_cookie_value: %q", got.Captured["screenconnect.forged_cookie_value"])
+	}
+	// Handler must be overridden to <svc>/cookie_forgery.
+	if got.Handler != "screenconnect/cookie_forgery" {
+		t.Errorf("Handler should be overridden to screenconnect/cookie_forgery, got %q", got.Handler)
+	}
+}
+
+// TestHTTP_CookieForgery_Classifier exercises classifyForgedCookie across a
+// representative set of inputs covering all shape branches and edge cases.
+func TestHTTP_CookieForgery_Classifier(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"x", ""},                                               // too short
+		{"admin", "literal"},
+		{"administrator", "literal"},
+		{"shortgarbage_mixX!", ""},                              // 18 chars, underscore+bang disqualify all shapes
+		{"deadbeefdeadbeefdeadbeef", "hex"},                     // 24-char hex (legit cookie is 64)
+		{"eyJhbGc.eyJzdWI.signaturepart", "jwt"},                // 3 dots, base64url
+		{"VGVzdEFkbWluUGFzc3dvcmQ=", "base64"},
+	}
+	for _, c := range cases {
+		if got := classifyForgedCookie(c.in); got != c.want {
+			t.Errorf("classifyForgedCookie(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

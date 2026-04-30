@@ -118,6 +118,15 @@ type sessionContext struct {
 	artifactStore *artifactstore.Store             // nil when ArtifactPath not configured
 	cookieName    string                           // value of servConf.State.CookieName
 	ttlSeconds    int                              // value of servConf.State.TTLSeconds
+
+	// Cookie forgery: when the request presented a cookie that didn't
+	// resolve to a live session AND the value matches a structural
+	// forgery shape (JWT, hex, base64, common literal), forgedShape
+	// and forgedValue carry the evidence. Both empty when no forgery
+	// signal. Surfaces in trace events as Captured[svc.forged_cookie_*]
+	// and overrides Handler to "<svc>/cookie_forgery".
+	forgedShape string
+	forgedValue string
 }
 
 type httpResponse struct {
@@ -168,6 +177,14 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 			if c, err := request.Cookie(servConf.State.CookieName); err == nil {
 				if cs, ok := httpStrategy.cookieStore.Get(c.Value); ok {
 					sctx.sess = cs
+				} else if shape := classifyForgedCookie(c.Value); shape != "" {
+					sctx.forgedShape = shape
+					// Truncate to 256 chars to bound capture cost.
+					v := c.Value
+					if len(v) > 256 {
+						v = v[:256]
+					}
+					sctx.forgedValue = v
 				}
 			}
 		}
@@ -309,6 +326,38 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			eventCaptured["artifact_sha256"] = artifactSHA
 		}
 
+		// Feature #6: Raw body first 8KB — captures attacker POST bodies verbatim
+		// for stateful services. Gated on sctx != nil (stateless services unaffected).
+		if sctx != nil && len(bodyBytes) > 0 && servConf.ServiceType != "" {
+			n := len(bodyBytes)
+			if n > RawBodyCapBytes {
+				n = RawBodyCapBytes
+			}
+			eventCaptured[servConf.ServiceType+".raw_body_first_8kb"] = string(bodyBytes[:n])
+		}
+
+		// Feature #7: Referer / X-Forwarded-For / User-Agent header captures.
+		// Only emit if the header is non-empty; keeps the Captured map lean for
+		// stateless/uninteresting requests.
+		if sctx != nil && servConf.ServiceType != "" {
+			if v := request.Header.Get("Referer"); v != "" {
+				eventCaptured[servConf.ServiceType+".referer"] = v
+			}
+			if v := request.Header.Get("X-Forwarded-For"); v != "" {
+				eventCaptured[servConf.ServiceType+".xff"] = v
+			}
+			if v := request.UserAgent(); v != "" {
+				eventCaptured[servConf.ServiceType+".user_agent_full"] = v
+			}
+		}
+
+		// Feature #8: Cookie forgery — emit shape + truncated value when the
+		// handler closure detected a structurally suspicious unresolved cookie.
+		if sctx != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
+			eventCaptured[servConf.ServiceType+".forged_cookie_shape"] = sctx.forgedShape
+			eventCaptured[servConf.ServiceType+".forged_cookie_value"] = sctx.forgedValue
+		}
+
 		// Determine SessionKey override: stateful sessions use cookie[:16] for
 		// cross-event correlation; stateless services keep the legacy "HTTP"+host key.
 		sessionKeyOverride := ""
@@ -316,10 +365,17 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			sessionKeyOverride = sctx.sess.SessionKey
 		}
 
+		// Feature #8: Handler override — when forgery is detected, override the
+		// tracer event's Handler to "<svc>/cookie_forgery" for downstream filtering.
+		handlerOverride := ""
+		if sctx != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
+			handlerOverride = servConf.ServiceType + "/cookie_forgery"
+		}
+
 		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType,
 			body, ns, resp.Body, resp.StatusCode, strings.Join(resp.Headers, ", "),
 			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs,
-			nilIfEmpty(eventCaptured), sessionKeyOverride)
+			nilIfEmpty(eventCaptured), sessionKeyOverride, handlerOverride)
 	}()
 
 	// -------------------------------------------------------------------------
@@ -446,12 +502,56 @@ func nilIfEmpty(m map[string]string) map[string]string {
 // for high-volume lures.
 const defaultResponseBodyMaxBytes = 64 * 1024
 
+// RawBodyCapBytes is the maximum number of request-body bytes captured
+// verbatim into the tracer event for stateful services (Feature #6).
+// 8 KiB covers the vast majority of attacker payloads without blowing
+// up storage for high-volume lures.
+const RawBodyCapBytes = 8192
+
+var (
+	jwtRe    = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
+	hexRe    = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+	base64Re = regexp.MustCompile(`^[A-Za-z0-9+/]+=*$`)
+)
+
+// classifyForgedCookie returns a non-empty shape name for cookie values
+// that look like exploit-dev forgery attempts. Empty = not suspicious.
+// Used for operator profiling — distinguishing curl-with-junk vs.
+// someone who built an exploit module that mints a cookie payload.
+func classifyForgedCookie(value string) string {
+	if value == "" {
+		return ""
+	}
+	// Common literal bypass attempts (checked before length gate).
+	switch strings.ToLower(value) {
+	case "admin", "true", "1", "test", "administrator", "root":
+		return "literal"
+	}
+	if len(value) < 16 {
+		// Too short to be a plausible forgery; ignore (probably a typo/garbage).
+		return ""
+	}
+	// JWT shape: 3 base64url segments separated by dots.
+	if jwtRe.MatchString(value) {
+		return "jwt"
+	}
+	// All-hex: operator tried hex encoding but length doesn't match a real cookie.
+	if hexRe.MatchString(value) {
+		return "hex"
+	}
+	// Base64 shape (with optional padding).
+	if base64Re.MatchString(value) {
+		return "base64"
+	}
+	return ""
+}
+
 func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command,
 	HoneypotDescription, HoneypotServiceType, body string,
 	ns *noveltydetect.FingerprintStore,
 	responseBody string, responseStatusCode int, responseHeaders string,
 	captureResponseBody bool, responseBodyMaxBytes int, responseTimeMs int64,
-	captured map[string]string, sessionKeyOverride string) {
+	captured map[string]string, sessionKeyOverride string, handlerOverride string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
 	destPort := ""
@@ -572,6 +672,12 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// v8 Phase 5: session capture metadata — nil when stateless (omitempty).
 		Captured:        captured,
 	}
+	// Feature #8: Handler override — cookie_forgery events get a dedicated
+	// handler label for downstream filtering / alerting.
+	if handlerOverride != "" {
+		event.Handler = handlerOverride
+	}
+
 	if captureResponseBody {
 		maxBytes := responseBodyMaxBytes
 		if maxBytes <= 0 {
