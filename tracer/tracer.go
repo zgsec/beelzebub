@@ -150,6 +150,13 @@ type Event struct {
 	// Captured alongside ResponseBody under the same opt-in flag. Detects
 	// honeypot fingerprinting via static header sets.
 	ResponseHeaders string `json:"ResponseHeaders,omitempty"`
+
+	// Captured carries lure-namespaced session metadata extracted by
+	// HTTP strategy's stateful handlers (sessionCapture) plus the
+	// artifact_sha256 when an artifact was written. Keys MUST be
+	// dot-namespaced by service to avoid collision: "screenconnect.operator_user".
+	// Propagates through to research-1's deception_metadata JSONB column.
+	Captured map[string]string `json:"Captured,omitempty"`
 }
 
 type (

@@ -1,7 +1,9 @@
 package tracer
 
 import (
+	"encoding/json"
 	"github.com/prometheus/client_golang/prometheus"
+	"strings"
 	"sync"
 	"testing"
 
@@ -157,4 +159,29 @@ func TestSetGetStrategyConcurrency(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestEvent_CapturedFieldOmitsWhenNil(t *testing.T) {
+	e := Event{Protocol: "HTTP"}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"Captured"`) {
+		t.Fatalf("nil Captured should be omitted: %s", b)
+	}
+}
+
+func TestEvent_CapturedFieldSerializes(t *testing.T) {
+	e := Event{
+		Protocol: "HTTP",
+		Captured: map[string]string{"screenconnect.operator_user": "pwn"},
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"screenconnect.operator_user":"pwn"`) {
+		t.Fatalf("Captured not serialized: %s", b)
+	}
 }
