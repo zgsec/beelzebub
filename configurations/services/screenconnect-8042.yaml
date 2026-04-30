@@ -1,0 +1,153 @@
+apiVersion: "v1"
+protocol: "http"
+address: ":8042"
+description: "ScreenConnect Remote Support — Crestfield Data GmbH"
+serviceType: "screenconnect"
+
+state:
+  cookieName: ".ASPXAUTH"
+  ttlSeconds: 1800
+  artifactPath: "/var/lib/beelzebub/artifacts/screenconnect"
+  artifactMaxBytes: 52428800  # 50 MiB
+
+commands:
+  # ---- recon ------------------------------------------------------------
+
+  - regex: "^/$"
+    method: "GET"
+    statusCode: 302
+    name: "screenconnect/recon"
+    headers:
+      - "Location: /Login.aspx"
+      - "Server: Microsoft-HTTPAPI/2.0"
+    handler: ""
+
+  - regex: "^/Login\\.aspx$"
+    method: "GET"
+    statusCode: 200
+    name: "screenconnect/recon"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "X-Powered-By: ASP.NET"
+      - "Content-Type: text/html"
+    handler: |
+      <!DOCTYPE html><html lang="en"><head>
+      <meta charset="utf-8"><title>ScreenConnect</title></head>
+      <body><div class="login-box"><div class="brand">ScreenConnect</div>
+      <form id="login" method="post" action="/Login">
+      <input type="text" name="username" placeholder="Username">
+      <input type="password" name="password" placeholder="Password">
+      <button type="submit">Login</button></form>
+      <div class="footer">ScreenConnect 23.9.7 &middot; Crestfield Data GmbH</div>
+      </div></body></html>
+
+  - regex: "^/SetupWizard\\.aspx\\?Action=NormalSetup$"
+    method: "GET"
+    statusCode: 200
+    name: "screenconnect/recon"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+    handler: "<html><body><h2>ScreenConnect Setup</h2><p>Setup is complete.</p></body></html>"
+
+  # ---- auth_bypass (CVE-2024-1709) -------------------------------------
+
+  - regex: "^/SetupWizard\\.aspx$"
+    method: "POST"
+    statusCode: 302
+    name: "screenconnect/auth_bypass"
+    sessionAction: "create"
+    sessionCapture:
+      "screenconnect.operator_user": '<Username>([^<]+)</Username>'
+      "screenconnect.operator_pass": '<Password>([^<]+)</Password>'
+      "screenconnect.operator_role": '<Role>([^<]+)</Role>'
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Location: /Host"
+    handler: ""
+
+  # ---- enum -------------------------------------------------------------
+
+  - regex: "^/Host$"
+    method: "GET"
+    statusCode: 200
+    name: "screenconnect/enum"
+    sessionAction: "require"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: text/html"
+    handler: |
+      <!DOCTYPE html><html><head><title>ScreenConnect — Host</title></head>
+      <body><div class="top">ScreenConnect &middot; All Machines</div>
+      <iframe src="/Account/Sessions"></iframe></body></html>
+
+  - regex: "^/Account/Sessions$"
+    method: "GET"
+    statusCode: 200
+    name: "screenconnect/enum"
+    sessionAction: "require"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: application/json"
+    handler: |
+      [{"guid":"a1b2c3d4-0001-4000-8000-000000000001","hostname":"CFD-OPS-JUMP01","os":"Windows Server 2022","org":"Crestfield Data GmbH (internal ops)"},
+       {"guid":"a1b2c3d4-0002-4000-8000-000000000002","hostname":"CFD-FIN-DBSRV","os":"Windows Server 2019","org":"Crestfield Data GmbH (finance)"},
+       {"guid":"a1b2c3d4-0003-4000-8000-000000000003","hostname":"MULLER-DC01","os":"Windows Server 2022","org":"Müller Fertigung GmbH"},
+       {"guid":"a1b2c3d4-0004-4000-8000-000000000004","hostname":"WEBER-PLM","os":"Windows Server 2019","org":"Weber Engineering"},
+       {"guid":"a1b2c3d4-0005-4000-8000-000000000005","hostname":"NORDBANK-RDP-A2","os":"Windows Server 2022","org":"Nordbank AG"},
+       {"guid":"a1b2c3d4-0006-4000-8000-000000000006","hostname":"SCHMIDT-AUTO-FILESRV","os":"Windows Server 2019","org":"Schmidt Automotive"}]
+
+  # ---- agent_view -------------------------------------------------------
+
+  - regex: "^/Services/PageService\\.ashx/GetSessionDetails$"
+    method: "POST"
+    statusCode: 200
+    name: "screenconnect/agent_view"
+    sessionAction: "require"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: application/json"
+    handler: |
+      {"SessionID":"a1b2c3d4-0003-4000-8000-000000000003","Hostname":"MULLER-DC01","OS":"Windows Server 2022","Organization":"Müller Fertigung GmbH","Online":true,"ConnectedSince":"2026-04-30T10:00:00Z"}
+
+  # ---- extension_upload (CVE-2024-1708) — the prize --------------------
+
+  - regex: "^/Services/PageService\\.ashx/AddExtension$"
+    method: "POST"
+    statusCode: 200
+    name: "screenconnect/extension_upload"
+    sessionAction: "require"
+    artifactCapture: true
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: application/json"
+    handler: '{"Success":true,"ExtensionID":"ext-${session.short}"}'
+
+  # ---- run_command ------------------------------------------------------
+
+  - regex: "^/Services/PageService\\.ashx/RunCommand$"
+    method: "POST"
+    statusCode: 200
+    name: "screenconnect/run_command"
+    sessionAction: "require"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: application/json"
+    handler: '{"Status":"Queued","CommandID":"cmd-${session.short}"}'
+
+  # ---- misc -------------------------------------------------------------
+
+  - regex: "^/Configure/Extensions$"
+    method: "GET"
+    statusCode: 200
+    name: "screenconnect/enum"
+    sessionAction: "require"
+    headers:
+      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Content-Type: application/json"
+    handler: '{"extensions":[]}'
+
+fallbackCommand:
+  statusCode: 404
+  headers:
+    - "Server: Microsoft-HTTPAPI/2.0"
+  handler: "Not Found"

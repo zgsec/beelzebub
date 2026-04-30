@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func mockReadfilebytesConfigurationsCore(filePath string) ([]byte, error) {
@@ -579,5 +580,54 @@ func TestStateField_PopulatedHashChanges(t *testing.T) {
 	h2, _ := cfg.HashCode()
 	if h1 == h2 {
 		t.Fatal("populated State did not change hash")
+	}
+}
+
+func TestScreenConnectYAML_Parses(t *testing.T) {
+	data, err := os.ReadFile("../configurations/services/screenconnect-8042.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if cfg.Address != ":8042" {
+		t.Errorf("address: want :8042, got %q", cfg.Address)
+	}
+	if cfg.State == nil {
+		t.Fatal("State is nil — config did not bind state: block")
+	}
+	if cfg.State.CookieName != ".ASPXAUTH" {
+		t.Errorf("cookieName: want .ASPXAUTH, got %q", cfg.State.CookieName)
+	}
+	if cfg.State.TTLSeconds != 1800 {
+		t.Errorf("ttlSeconds: want 1800, got %d", cfg.State.TTLSeconds)
+	}
+	if cfg.State.ArtifactPath == "" {
+		t.Error("artifactPath unset")
+	}
+	if len(cfg.Commands) != 10 {
+		t.Errorf("commands: want 10, got %d", len(cfg.Commands))
+	}
+	// Verify all three stateful field flags are present across the command set
+	var foundCreate, foundRequire, foundArtifact bool
+	for _, c := range cfg.Commands {
+		if c.SessionAction == "create" {
+			foundCreate = true
+			if len(c.SessionCapture) != 3 {
+				t.Errorf("create cmd should have 3 captures, got %d", len(c.SessionCapture))
+			}
+		}
+		if c.SessionAction == "require" {
+			foundRequire = true
+		}
+		if c.ArtifactCapture {
+			foundArtifact = true
+		}
+	}
+	if !foundCreate || !foundRequire || !foundArtifact {
+		t.Errorf("missing field flags: create=%v require=%v artifact=%v",
+			foundCreate, foundRequire, foundArtifact)
 	}
 }
