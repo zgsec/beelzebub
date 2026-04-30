@@ -177,8 +177,18 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		var err error
 		for _, command := range servConf.Commands {
 			var err error
-			matched = command.Regex.MatchString(request.RequestURI)
-			if matched {
+			// URI regex must match. Method, when set, must also match
+			// (case-insensitive). Empty Method = method-agnostic (legacy
+			// behavior; existing configs that don't set Method are
+			// unaffected).
+			if !command.Regex.MatchString(request.RequestURI) {
+				continue
+			}
+			if command.Method != "" && !strings.EqualFold(command.Method, request.Method) {
+				continue
+			}
+			matched = true
+			{
 				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)

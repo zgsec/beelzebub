@@ -630,4 +630,24 @@ func TestScreenConnectYAML_Parses(t *testing.T) {
 		t.Errorf("missing field flags: create=%v require=%v artifact=%v",
 			foundCreate, foundRequire, foundArtifact)
 	}
+
+	// Method field must round-trip — the auth_bypass command (POST
+	// /SetupWizard.aspx) must have Method="POST" so the HTTP strategy
+	// filters out GET probes that would otherwise falsely match the
+	// regex and trigger sessionAction:create.
+	var foundPost, foundGet bool
+	for _, c := range cfg.Commands {
+		if c.Method == "POST" {
+			foundPost = true
+		}
+		if c.Method == "GET" {
+			foundGet = true
+		}
+	}
+	if !foundPost {
+		t.Error("no POST methods round-tripped from YAML — method filter would be a no-op")
+	}
+	if !foundGet {
+		t.Error("no GET methods round-tripped from YAML")
+	}
 }

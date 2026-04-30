@@ -287,6 +287,17 @@ type Command struct {
 	//                      strings; `handler` is ignored
 	ReplyFormat string   `yaml:"replyFormat,omitempty" json:",omitempty"`
 	ReplyBulks  []string `yaml:"replyBulks,omitempty" json:",omitempty"`
+
+	// Method (HTTP only) — when set, only requests using this method
+	// (GET, POST, PUT, etc.) match this command. Empty = method-agnostic
+	// (the prior default; preserves backwards compatibility with all
+	// existing service configs that don't set this field). Stateful HTTP
+	// CVE lures need this to differentiate `GET /SetupWizard.aspx` (recon
+	// page) from `POST /SetupWizard.aspx` (auth-bypass exploit) — without
+	// it, a probe scanner that GETs every URL would falsely trip
+	// `sessionAction: create` handlers and pollute the cookie store.
+	Method string `yaml:"method,omitempty" json:",omitempty"`
+
 	// SessionAction (HTTP only) — "create" generates a fresh cookie and
 	// emits Set-Cookie; "require" demands a valid cookie or 401.
 	// Empty = stateless (no session interaction).
