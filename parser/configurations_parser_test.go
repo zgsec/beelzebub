@@ -607,16 +607,16 @@ func TestScreenConnectYAML_Parses(t *testing.T) {
 	if cfg.State.ArtifactPath == "" {
 		t.Error("artifactPath unset")
 	}
-	if len(cfg.Commands) != 10 {
-		t.Errorf("commands: want 10, got %d", len(cfg.Commands))
+	if len(cfg.Commands) != 11 {
+		t.Errorf("commands: want 11, got %d", len(cfg.Commands))
 	}
 	// Verify all three stateful field flags are present across the command set
 	var foundCreate, foundRequire, foundArtifact bool
 	for _, c := range cfg.Commands {
 		if c.SessionAction == "create" {
 			foundCreate = true
-			if len(c.SessionCapture) != 3 {
-				t.Errorf("create cmd should have 3 captures, got %d", len(c.SessionCapture))
+			if len(c.SessionCapture) != 2 {
+				t.Errorf("create cmd should have 2 captures, got %d", len(c.SessionCapture))
 			}
 		}
 		if c.SessionAction == "require" {

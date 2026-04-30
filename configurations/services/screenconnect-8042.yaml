@@ -19,7 +19,7 @@ commands:
     name: "screenconnect/recon"
     headers:
       - "Location: /Login.aspx"
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
     handler: ""
 
   - regex: "^/Login\\.aspx$"
@@ -27,42 +27,66 @@ commands:
     statusCode: 200
     name: "screenconnect/recon"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
       - "X-Powered-By: ASP.NET"
-      - "Content-Type: text/html"
+      - "Content-Type: text/html; charset=utf-8"
     handler: |
       <!DOCTYPE html><html lang="en"><head>
-      <meta charset="utf-8"><title>ScreenConnect</title></head>
-      <body><div class="login-box"><div class="brand">ScreenConnect</div>
-      <form id="login" method="post" action="/Login">
-      <input type="text" name="username" placeholder="Username">
-      <input type="password" name="password" placeholder="Password">
-      <button type="submit">Login</button></form>
+      <meta charset="utf-8"><title>ScreenConnect Login</title></head>
+      <body><form method="post" action="Login.aspx" id="form1">
+      <input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwUKMTQ2NTExNjI1Mg9kFgJmD2QWAgIBD2QWAgIBD2QWAmYPZBYCAgEPZBYCAgEPZBYWNg==" />
+      <input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="CA0B0334" />
+      <input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEdAAUw" />
+      <div class="login-box"><div class="brand">ScreenConnect</div>
+      <input type="text" name="ctl00$Main$loginPanel$userNameBox" placeholder="Username">
+      <input type="password" name="ctl00$Main$loginPanel$passwordBox" placeholder="Password">
+      <input type="submit" name="ctl00$Main$loginPanel$loginButton" value="Login">
       <div class="footer">ScreenConnect 23.9.7 &middot; Crestfield Data GmbH</div>
-      </div></body></html>
+      </div></form></body></html>
 
-  - regex: "^/SetupWizard\\.aspx\\?Action=NormalSetup$"
+  - regex: "^/SetupWizard\\.aspx/?$"
     method: "GET"
     statusCode: 200
     name: "screenconnect/recon"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
-    handler: "<html><body><h2>ScreenConnect Setup</h2><p>Setup is complete.</p></body></html>"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
+      - "Content-Type: text/html; charset=utf-8"
+    handler: |
+      <!DOCTYPE html><html lang="en"><head>
+      <meta charset="utf-8"><title>Welcome - ScreenConnect</title></head>
+      <body><form method="post" action="SetupWizard.aspx" id="form1">
+      <input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwUKMTQ2NTExNjI1Mg9kFgJmD2QWAgIBD2QWAgIBD2QWAmYPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYCAgEPZBYWNg==" />
+      <input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="CA0B0334" />
+      <input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEdAAUw" />
+      <h1>Welcome to ScreenConnect Setup</h1>
+      <p>Configure your administrator account.</p>
+      <input type="text" name="ctl00$Main$wizard$userNameBox" placeholder="Username" />
+      <input type="password" name="ctl00$Main$wizard$passwordBox" placeholder="Password" />
+      <input type="password" name="ctl00$Main$wizard$verifyPasswordBox" placeholder="Verify Password" />
+      <input type="email" name="ctl00$Main$wizard$emailBox" placeholder="Email" />
+      <input type="submit" name="ctl00$Main$wizard$nextButton" value="Next" />
+      </form>
+      <div class="footer">ScreenConnect 23.9.7 &middot; Crestfield Data GmbH</div>
+      </body></html>
 
   # ---- auth_bypass (CVE-2024-1709) -------------------------------------
 
-  - regex: "^/SetupWizard\\.aspx$"
+  - regex: "^/SetupWizard\\.aspx/.*$"
     method: "POST"
     statusCode: 302
     name: "screenconnect/auth_bypass"
     sessionAction: "create"
     sessionCapture:
-      "screenconnect.operator_user": '<Username>([^<]+)</Username>'
-      "screenconnect.operator_pass": '<Password>([^<]+)</Password>'
-      "screenconnect.operator_role": '<Role>([^<]+)</Role>'
+      # ASP.NET WebForms postback field names from real CVE-2024-1709 exploits.
+      # Operators send application/x-www-form-urlencoded with these field names
+      # (Metasploit + jhonnybonny + W01fh4cker PoCs all use this exact form).
+      "screenconnect.operator_user": 'userNameBox=([^&]+)'
+      "screenconnect.operator_pass": 'passwordBox=([^&]+)'
+      # Drop operator_role — real exploit form has no Role field.
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
-      - "Location: /Host"
+      - "Server: ScreenConnect/23.9.7"
+      - "Location: /Host#"
     handler: ""
 
   # ---- enum -------------------------------------------------------------
@@ -73,28 +97,27 @@ commands:
     name: "screenconnect/enum"
     sessionAction: "require"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
-      - "Content-Type: text/html"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
+      - "Content-Type: text/html; charset=utf-8"
     handler: |
       <!DOCTYPE html><html><head><title>ScreenConnect — Host</title></head>
       <body><div class="top">ScreenConnect &middot; All Machines</div>
-      <iframe src="/Account/Sessions"></iframe></body></html>
+      <iframe src="/Configure"></iframe></body></html>
 
-  - regex: "^/Account/Sessions$"
+  - regex: "^/Administration$"
     method: "GET"
     statusCode: 200
-    name: "screenconnect/enum"
+    name: "screenconnect/admin_panel"
     sessionAction: "require"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
-      - "Content-Type: application/json"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
+      - "Content-Type: text/html; charset=utf-8"
     handler: |
-      [{"guid":"a1b2c3d4-0001-4000-8000-000000000001","hostname":"CFD-OPS-JUMP01","os":"Windows Server 2022","org":"Crestfield Data GmbH (internal ops)"},
-       {"guid":"a1b2c3d4-0002-4000-8000-000000000002","hostname":"CFD-FIN-DBSRV","os":"Windows Server 2019","org":"Crestfield Data GmbH (finance)"},
-       {"guid":"a1b2c3d4-0003-4000-8000-000000000003","hostname":"MULLER-DC01","os":"Windows Server 2022","org":"Müller Fertigung GmbH"},
-       {"guid":"a1b2c3d4-0004-4000-8000-000000000004","hostname":"WEBER-PLM","os":"Windows Server 2019","org":"Weber Engineering"},
-       {"guid":"a1b2c3d4-0005-4000-8000-000000000005","hostname":"NORDBANK-RDP-A2","os":"Windows Server 2022","org":"Nordbank AG"},
-       {"guid":"a1b2c3d4-0006-4000-8000-000000000006","hostname":"SCHMIDT-AUTO-FILESRV","os":"Windows Server 2019","org":"Schmidt Automotive"}]
+      <!DOCTYPE html><html><head><title>Administration - ScreenConnect</title></head>
+      <body><div class="top">ScreenConnect &middot; Administration</div>
+      <iframe src="/Configure"></iframe></body></html>
 
   # ---- agent_view -------------------------------------------------------
 
@@ -104,23 +127,36 @@ commands:
     name: "screenconnect/agent_view"
     sessionAction: "require"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
       - "Content-Type: application/json"
     handler: |
       {"SessionID":"a1b2c3d4-0003-4000-8000-000000000003","Hostname":"MULLER-DC01","OS":"Windows Server 2022","Organization":"Müller Fertigung GmbH","Online":true,"ConnectedSince":"2026-04-30T10:00:00Z"}
 
   # ---- extension_upload (CVE-2024-1708) — the prize --------------------
 
-  - regex: "^/Services/PageService\\.ashx/AddExtension$"
+  - regex: "^/Services/ExtensionService\\.ashx/InstallExtension$"
     method: "POST"
     statusCode: 200
     name: "screenconnect/extension_upload"
     sessionAction: "require"
     artifactCapture: true
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
       - "Content-Type: application/json"
     handler: '{"Success":true,"ExtensionID":"ext-${session.short}"}'
+
+  - regex: "^/Services/ExtensionService\\.ashx/UninstallExtension$"
+    method: "POST"
+    statusCode: 200
+    name: "screenconnect/extension_cleanup"
+    sessionAction: "require"
+    headers:
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
+      - "Content-Type: application/json"
+    handler: '{"Success":true}'
 
   # ---- run_command ------------------------------------------------------
 
@@ -130,7 +166,8 @@ commands:
     name: "screenconnect/run_command"
     sessionAction: "require"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
       - "Content-Type: application/json"
     handler: '{"Status":"Queued","CommandID":"cmd-${session.short}"}'
 
@@ -142,12 +179,13 @@ commands:
     name: "screenconnect/enum"
     sessionAction: "require"
     headers:
-      - "Server: Microsoft-HTTPAPI/2.0"
+      - "Server: ScreenConnect/23.9.7"
+      - "X-Powered-By: ASP.NET"
       - "Content-Type: application/json"
     handler: '{"extensions":[]}'
 
 fallbackCommand:
   statusCode: 404
   headers:
-    - "Server: Microsoft-HTTPAPI/2.0"
+    - "Server: ScreenConnect/23.9.7"
   handler: "Not Found"
