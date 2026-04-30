@@ -4,16 +4,20 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mariocandela/beelzebub/v3/agentdetect"
+	"github.com/mariocandela/beelzebub/v3/artifactstore"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
+	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
@@ -100,6 +104,20 @@ type HTTPStrategy struct {
 	// Novelty detection (optional, nil when disabled)
 	noveltyStore      *noveltydetect.FingerprintStore
 	noveltyWindowDays int
+
+	// Stateful HTTP session correlation (nil when servConf.State == nil or CookieName == "")
+	cookieStore   *historystore.CookieSessionStore
+	artifactStore *artifactstore.Store
+}
+
+// sessionContext bundles per-request stateful HTTP context so it can be
+// threaded through buildHTTPResponse without additional globals.
+type sessionContext struct {
+	sess          *historystore.CookieSession      // nil if no live session for this request
+	cookieStore   *historystore.CookieSessionStore // always non-nil when sctx != nil
+	artifactStore *artifactstore.Store             // nil when ArtifactPath not configured
+	cookieName    string                           // value of servConf.State.CookieName
+	ttlSeconds    int                              // value of servConf.State.TTLSeconds
 }
 
 type httpResponse struct {
@@ -117,11 +135,43 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 			httpStrategy.noveltyWindowDays = 7
 		}
 	}
+
+	// Stateful HTTP: create cookie + artifact stores when configured.
+	if servConf.State != nil && servConf.State.CookieName != "" {
+		ttl := time.Duration(servConf.State.TTLSeconds) * time.Second
+		if ttl == 0 {
+			ttl = 30 * time.Minute
+		}
+		httpStrategy.cookieStore = historystore.NewCookieSessionStore(ttl)
+		if servConf.State.ArtifactPath != "" {
+			httpStrategy.artifactStore = artifactstore.New(
+				servConf.State.ArtifactPath,
+				servConf.State.ArtifactMaxBytes,
+			)
+		}
+	}
+
 	startHTTPSessionCleanup()
 	startHTTPNoveltyCleanup(httpStrategy.noveltyStore, httpStrategy.noveltyWindowDays)
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
+		// Build per-request session context when stateful mode is active.
+		var sctx *sessionContext
+		if httpStrategy.cookieStore != nil {
+			sctx = &sessionContext{
+				cookieStore:   httpStrategy.cookieStore,
+				artifactStore: httpStrategy.artifactStore,
+				cookieName:    servConf.State.CookieName,
+				ttlSeconds:    servConf.State.TTLSeconds,
+			}
+			if c, err := request.Cookie(servConf.State.CookieName); err == nil {
+				if cs, ok := httpStrategy.cookieStore.Get(c.Value); ok {
+					sctx.sess = cs
+				}
+			}
+		}
+
 		var matched bool
 		var resp httpResponse
 		var err error
@@ -129,7 +179,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 			var err error
 			matched = command.Regex.MatchString(request.RequestURI)
 			if matched {
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -143,7 +193,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore)
+				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					resp.StatusCode = 500
@@ -199,7 +249,7 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 	return nil
 }
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore) (httpResponse, error) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext) (httpResponse, error) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// deferred trace fire (covers static-handler + LLM plugin paths uniformly).
 	startedAt := time.Now()
@@ -210,12 +260,15 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		StatusCode: command.StatusCode,
 	}
 
-	// Limit body read to 1MB to prevent DoS attacks
+	// Limit body read to 1MB to prevent DoS attacks.
+	// bodyBytes is reused for sessionCapture regex and artifactCapture — read only once.
 	bodyBytes, err := io.ReadAll(io.LimitReader(request.Body, 1024*1024))
 	body := ""
 	if err == nil {
 		body = string(bodyBytes)
 	}
+
+	var artifactSHA string
 
 	// Trace AFTER the response body is finalized (including LLM-plugin generated
 	// content) so tracer.Event.CommandOutput reflects what was actually served
@@ -227,12 +280,108 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// v8 Phase 0 additions: ResponseBody (opt-in), ResponseHeaders (opt-in),
 	// ResponseBytes (always), ResponseTimeMs (always). Gated by
 	// servConf.CaptureResponseBody to keep storage cost opt-in.
+	//
+	// v8 Phase 5 additions: Captured map + SessionKey override for stateful services.
 	defer func() {
 		responseTimeMs := time.Since(startedAt).Milliseconds()
+
+		// Build the captured metadata map for the tracer event.
+		eventCaptured := map[string]string{}
+		if sctx != nil && sctx.sess != nil {
+			for k, v := range sctx.sess.Captured {
+				eventCaptured[k] = v
+			}
+			if len(sctx.sess.Cookie) >= 8 {
+				eventCaptured["session.cookie_short"] = sctx.sess.Cookie[:8]
+			}
+		}
+		if artifactSHA != "" {
+			eventCaptured["artifact_sha256"] = artifactSHA
+		}
+
+		// Determine SessionKey override: stateful sessions use cookie[:16] for
+		// cross-event correlation; stateless services keep the legacy "HTTP"+host key.
+		sessionKeyOverride := ""
+		if sctx != nil && sctx.sess != nil {
+			sessionKeyOverride = sctx.sess.SessionKey
+		}
+
 		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType,
 			body, ns, resp.Body, resp.StatusCode, strings.Join(resp.Headers, ", "),
-			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs)
+			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs,
+			nilIfEmpty(eventCaptured), sessionKeyOverride)
 	}()
+
+	// -------------------------------------------------------------------------
+	// Stateful session logic
+	// -------------------------------------------------------------------------
+
+	// a. Enforce sessionAction:require — reject requests without a live session.
+	if command.SessionAction == "require" && (sctx == nil || sctx.sess == nil) {
+		resp.StatusCode = http.StatusUnauthorized
+		resp.Body = "Unauthorized"
+		resp.Headers = nil
+		return resp, nil
+	}
+
+	// b. sessionAction:create — extract captures from request body + issue cookie.
+	if command.SessionAction == "create" && sctx != nil {
+		captured := make(map[string]string, len(command.SessionCapture))
+		for key, pat := range command.SessionCapture {
+			re, compileErr := regexp.Compile(pat)
+			if compileErr != nil {
+				continue // skip malformed patterns silently
+			}
+			m := re.FindSubmatch(bodyBytes)
+			if len(m) >= 2 {
+				captured[key] = string(m[1])
+			} else {
+				captured[key] = "<missing>"
+			}
+		}
+
+		host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+		if splitErr != nil {
+			host = request.RemoteAddr
+		}
+
+		sctx.sess = sctx.cookieStore.Create(host, request.Header.Get("X-JA4H"), captured)
+
+		// Inject Set-Cookie into the response headers so setResponseHeaders picks it up.
+		setCookie := fmt.Sprintf("Set-Cookie: %s=%s; HttpOnly; SameSite=Lax; Max-Age=%d",
+			sctx.cookieName, sctx.sess.Cookie, sctx.ttlSeconds)
+		resp.Headers = append(resp.Headers, setCookie)
+	}
+
+	// c. Variable substitution on resp.Body using session data.
+	if sctx != nil && sctx.sess != nil {
+		short := sctx.sess.Cookie
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		pairs := []string{
+			"${session.cookie}", sctx.sess.Cookie,
+			"${session.short}", short,
+		}
+		for k, v := range sctx.sess.Captured {
+			pairs = append(pairs, "${captured."+k+"}", html.EscapeString(v))
+		}
+		resp.Body = strings.NewReplacer(pairs...).Replace(resp.Body)
+	}
+
+	// d. Artifact capture — write request body + session metadata to disk.
+	if command.ArtifactCapture && sctx != nil && sctx.artifactStore != nil {
+		caps := map[string]any{}
+		if sctx.sess != nil {
+			caps["session_key"] = sctx.sess.SessionKey
+			for k, v := range sctx.sess.Captured {
+				caps[k] = v
+			}
+		}
+		if a, writeErr := sctx.artifactStore.Write(bodyBytes, caps); writeErr == nil {
+			artifactSHA = a.SHA256
+		}
+	}
 
 	if command.Plugin == plugins.LLMPluginName {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
@@ -267,6 +416,15 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
+// nilIfEmpty returns nil if the map is empty, preserving omitempty behaviour
+// on tracer.Event.Captured.
+func nilIfEmpty(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
 // defaultResponseBodyMaxBytes is the truncation cap when a service config
 // leaves ResponseBodyMaxBytes unset (zero). 64 KiB matches the existing
 // 1 MiB request-body cap order-of-magnitude while keeping storage bounded
@@ -277,7 +435,8 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 	HoneypotDescription, HoneypotServiceType, body string,
 	ns *noveltydetect.FingerprintStore,
 	responseBody string, responseStatusCode int, responseHeaders string,
-	captureResponseBody bool, responseBodyMaxBytes int, responseTimeMs int64) {
+	captureResponseBody bool, responseBodyMaxBytes int, responseTimeMs int64,
+	captured map[string]string, sessionKeyOverride string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
 	destPort := ""
@@ -342,6 +501,13 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		tc.Release()
 	}
 
+	// Override SessionKey for stateful services: cookie[:16] enables cross-event
+	// correlation across the cookie-session lifetime. Stateless services keep
+	// the legacy "HTTP"+host key, which groups by source IP.
+	if sessionKeyOverride != "" {
+		sessionKey = sessionKeyOverride
+	}
+
 	event := tracer.Event{
 		Msg:             "HTTP New request",
 		RequestURI:      request.RequestURI,
@@ -388,6 +554,8 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// captured when the operator opts in for this service.
 		ResponseBytes:   int64(len(responseBody)),
 		ResponseTimeMs:  responseTimeMs,
+		// v8 Phase 5: session capture metadata — nil when stateless (omitempty).
+		Captured:        captured,
 	}
 	if captureResponseBody {
 		maxBytes := responseBodyMaxBytes
