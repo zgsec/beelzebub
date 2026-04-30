@@ -75,3 +75,22 @@ func TestStore_ExtractsURLs(t *testing.T) {
 		t.Fatalf("expected 2 urls, got %v", urls)
 	}
 }
+
+func TestStore_DoesNotMutateCallerCaptures(t *testing.T) {
+	s := New(t.TempDir(), 1024)
+	captures := map[string]any{"operator_user": "pwn"}
+	_, err := s.Write([]byte("body"), captures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Caller's map must be unchanged.
+	if len(captures) != 1 {
+		t.Fatalf("caller captures was mutated: %v", captures)
+	}
+	if _, ok := captures["sha256"]; ok {
+		t.Fatal("sha256 leaked into caller map")
+	}
+	if _, ok := captures["embedded_urls"]; ok {
+		t.Fatal("embedded_urls leaked into caller map")
+	}
+}

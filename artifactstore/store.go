@@ -72,15 +72,16 @@ func (s *Store) Write(body []byte, captures map[string]any) (Artifact, error) {
 
 	// Always (re)write meta.json — captures may differ across calls.
 	urls := extractURLs(body)
-	if captures == nil {
-		captures = map[string]any{}
+	enriched := make(map[string]any, len(captures)+5)
+	for k, v := range captures {
+		enriched[k] = v
 	}
-	captures["embedded_urls"] = urls
-	captures["schema_version"] = SchemaVersion
-	captures["sha256"] = sha
-	captures["captured_at"] = now.Format(time.RFC3339Nano)
-	captures["size_bytes"] = len(body)
-	metaBytes, err := json.MarshalIndent(captures, "", "  ")
+	enriched["embedded_urls"] = urls
+	enriched["schema_version"] = SchemaVersion
+	enriched["sha256"] = sha
+	enriched["captured_at"] = now.Format(time.RFC3339Nano)
+	enriched["size_bytes"] = len(body)
+	metaBytes, err := json.MarshalIndent(enriched, "", "  ")
 	if err != nil {
 		return Artifact{}, fmt.Errorf("meta marshal: %w", err)
 	}
@@ -90,14 +91,28 @@ func (s *Store) Write(body []byte, captures map[string]any) (Artifact, error) {
 	return Artifact{
 		SHA256:    sha,
 		Captured:  now,
-		Captures:  captures,
+		Captures:  enriched,
 		SizeBytes: len(body),
 	}, nil
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".artifact-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // cleanup if rename never happens
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
