@@ -7,6 +7,7 @@ import (
 
 func TestCookieSession_CreateAndGet(t *testing.T) {
 	s := NewCookieSessionStore(30 * time.Minute)
+	defer s.Stop()
 	cs := s.Create("203.0.113.1", "ja4h-x", map[string]string{
 		"operator_user": "pwn3d",
 		"operator_role": "Administrator",
@@ -25,6 +26,7 @@ func TestCookieSession_CreateAndGet(t *testing.T) {
 
 func TestCookieSession_TTLExpiry(t *testing.T) {
 	s := NewCookieSessionStore(10 * time.Millisecond)
+	defer s.Stop()
 	cs := s.Create("1.1.1.1", "x", nil)
 	time.Sleep(20 * time.Millisecond)
 	if _, ok := s.Get(cs.Cookie); ok {
@@ -34,6 +36,7 @@ func TestCookieSession_TTLExpiry(t *testing.T) {
 
 func TestCookieSession_UnknownCookie(t *testing.T) {
 	s := NewCookieSessionStore(time.Hour)
+	defer s.Stop()
 	if _, ok := s.Get("nonexistent"); ok {
 		t.Fatal("unknown cookie returned ok")
 	}
@@ -41,6 +44,7 @@ func TestCookieSession_UnknownCookie(t *testing.T) {
 
 func TestCookieSession_TouchUpdatesLastSeen(t *testing.T) {
 	s := NewCookieSessionStore(time.Hour)
+	defer s.Stop()
 	cs := s.Create("1.1.1.1", "x", nil)
 	first := cs.LastSeen
 	time.Sleep(2 * time.Millisecond)

@@ -24,6 +24,9 @@ type CookieSession struct {
 	Captured   map[string]string
 	Stage      string
 	CreatedAt  time.Time
+	// LastSeen is updated on every Get() but does NOT influence expiry.
+	// TTL is anchored to CreatedAt (absolute lifetime), not to LastSeen
+	// (no sliding window). LastSeen exists for downstream observability.
 	LastSeen   time.Time
 }
 
@@ -56,7 +59,7 @@ func (s *CookieSessionStore) Create(srcIP, ja4h string, captured map[string]stri
 	now := time.Now().UTC()
 	cs := &CookieSession{
 		Cookie:     cookie,
-		SessionKey: hashCookie(cookie),
+		SessionKey: truncateCookie(cookie),
 		SrcIP:      srcIP,
 		JA4H:       ja4h,
 		Captured:   copyMap(captured),
@@ -132,10 +135,12 @@ func newCookie() string {
 	return hex.EncodeToString(b)
 }
 
-func hashCookie(cookie string) string {
-	// Use a fast non-crypto hash if perf matters; for now sha256[:16].
-	// Matches the SessionKey convention used by MCP elsewhere.
-	return cookie[:16] // first 16 hex chars are unique-enough for keying
+// truncateCookie returns the first 16 hex chars of the random cookie.
+// This is the SessionKey: 64 bits of entropy (the cookie is 256 bits of
+// crypto/rand), sufficient for in-process keying and small enough to
+// keep tracer events readable. Not a hash — just a prefix slice.
+func truncateCookie(cookie string) string {
+	return cookie[:16]
 }
 
 func copyMap(m map[string]string) map[string]string {
