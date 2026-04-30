@@ -165,6 +165,23 @@ type NoveltyDetection struct {
 	VariantThreshold int  `yaml:"variantThreshold"`
 }
 
+// State is the per-service stateful-HTTP configuration. Empty struct = stateless.
+//
+// Non-empty CookieName turns the service stateful: the HTTP strategy
+// generates a cookie on `sessionAction: create` handlers, validates it
+// on `sessionAction: require` handlers, and persists short-lived per-
+// session captures (operator user, role, etc.) for the duration of TTLSeconds.
+//
+// ArtifactPath, when non-empty, enables the artifact store for this service:
+// per-command `artifactCapture: true` directs request bodies into the store,
+// SHA-named, with an idempotent meta.json sibling per artifact.
+type State struct {
+	CookieName       string `yaml:"cookieName,omitempty"  json:",omitempty"`
+	TTLSeconds       int    `yaml:"ttlSeconds,omitempty"  json:",omitempty"`
+	ArtifactPath     string `yaml:"artifactPath,omitempty" json:",omitempty"`
+	ArtifactMaxBytes int    `yaml:"artifactMaxBytes,omitempty" json:",omitempty"`
+}
+
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
 	ApiVersion             string          `yaml:"apiVersion"`
@@ -231,6 +248,12 @@ type BeelzebubServiceConfiguration struct {
 	// Use "mysql_native_password" when impersonating MySQL 5.7 or
 	// MariaDB <=10.3.
 	MysqlAuthPlugin string `yaml:"mysqlAuthPlugin,omitempty" json:",omitempty"`
+	// State enables HTTP cookie-keyed session correlation + the artifact
+	// store. Nil (default) = stateless. Pointer so json omitempty skips
+	// the field entirely when nil, keeping HashCode() stable for existing
+	// services that don't use the stateful-HTTP feature.
+	// Spec: docs/superpowers/specs/2026-04-30-stateful-http-cve-lure-framework-design.md.
+	State *State `yaml:"state,omitempty" json:",omitempty"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {
@@ -264,6 +287,22 @@ type Command struct {
 	//                      strings; `handler` is ignored
 	ReplyFormat string   `yaml:"replyFormat,omitempty" json:",omitempty"`
 	ReplyBulks  []string `yaml:"replyBulks,omitempty" json:",omitempty"`
+	// SessionAction (HTTP only) — "create" generates a fresh cookie and
+	// emits Set-Cookie; "require" demands a valid cookie or 401.
+	// Empty = stateless (no session interaction).
+	SessionAction string `yaml:"sessionAction,omitempty" json:",omitempty"`
+
+	// SessionCapture (HTTP only) — map of session-metadata key → regex
+	// applied to the raw request body. Captures land in the cookie
+	// session's Captured map and propagate to tracer.Event.Captured
+	// for downstream ingest.
+	SessionCapture map[string]string `yaml:"sessionCapture,omitempty" json:",omitempty"`
+
+	// ArtifactCapture (HTTP only) — when true, the request body is
+	// written to the service's artifact store; the artifact SHA-256
+	// is added to tracer.Event.Captured under "artifact_sha256".
+	// Requires service-level State.ArtifactPath to be set.
+	ArtifactCapture bool `yaml:"artifactCapture,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot

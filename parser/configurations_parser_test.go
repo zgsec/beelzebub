@@ -541,3 +541,43 @@ func TestToolAnnotationsHashCodeStability(t *testing.T) {
 	assert.Nil(t, errHashCode)
 	assert.Equal(t, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c", hashCode)
 }
+
+func TestStateField_OmittedHashCodeStable(t *testing.T) {
+	// A pre-State-feature service must hash to the same value with the
+	// State pointer present-but-nil as without it. This is the
+	// backwards-compat invariant that lets Beelzebub Cloud track
+	// existing services across the framework upgrade.
+	// State is *State (pointer) so that json omitempty truly omits the
+	// field when nil — a zero-value struct would still serialize as "{}".
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.State = nil // nil pointer — must be omitted by json encoder
+	h2, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatalf("HashCode changed by setting nil State: %s != %s", h1, h2)
+	}
+}
+
+func TestStateField_PopulatedHashChanges(t *testing.T) {
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, _ := cfg.HashCode()
+	cfg.State = &State{CookieName: ".ASPXAUTH", TTLSeconds: 1800}
+	h2, _ := cfg.HashCode()
+	if h1 == h2 {
+		t.Fatal("populated State did not change hash")
+	}
+}
