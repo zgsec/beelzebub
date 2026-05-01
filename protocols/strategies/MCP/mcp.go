@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -83,22 +84,62 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 // canary attribution wiring is per-sensor. These fallbacks exist purely so
 // we NEVER leak the literal string "CANARYTOKEN_X" to a client — that is
 // the fingerprint we're eliminating here.
-var defaultMCPCanaryFallbacks = map[string]string{
-	"CANARYTOKEN_EMAIL_1": "svc-sentinel@crestfielddata.io",
-	"CANARYTOKEN_EMAIL_2": "platform-alerts@crestfielddata.io",
-	// AWS_KEY / AWS_SECRET fallbacks intentionally use the canonical AWS
-	// documentation example values. These are the expected placeholders
-	// when no real Canarytokens.org AKIA token has been wired in yet —
-	// they're recognizable to an attacker as "tutorial example" (intel),
-	// and gitleaks allowlists them so they can live in source. Operators
-	// should replace these literally in their per-sensor mcp-8000.yaml
-	// with real canary AKIA tokens minted from canarytokens.org.
-	"CANARYTOKEN_AWS_KEY":    "AKIAIOSFODNN7EXAMPLE",
-	"CANARYTOKEN_AWS_SECRET": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-	"CANARYTOKEN_DB_PASS":    "Crestfield-prod-db-7a9c2e5f1b8d",
-	"CANARYTOKEN_DNS_URL":    "svc-mesh.int.crestfielddata.io",
-	"CANARYTOKEN_WEB_URL":    "https://hooks.int.crestfielddata.io/platform-sync",
-	"CANARYTOKEN_DD_KEY":     "REPLACE_WITH_CANARY_DD_API_KEY",
+// Persona emails are non-secret narrative strings; stay as compile-time
+// constants for cross-sensor consistency.
+//
+// Credential-shaped values (AWS keys, DB password, DNS, web hook URL,
+// Datadog key, Vault token) are loaded from /opt/honeypot-sensor/.env at
+// first-substitution time. The MCP service refuses to serve config-driven
+// responses if any are missing — there is no fallback to AWS-documentation
+// example keys, since returning those to an operator immediately blows the
+// deception (any security-trained reader recognizes AKIAIOSFODNN7EXAMPLE).
+//
+// Initialized lazily (sync.Once) so test code that doesn't exercise the
+// substitution path doesn't need every MCP_CANARY_* var pre-populated.
+//
+// To populate in production: mint canarytokens.org tokens for each variable,
+// add to the sensor's .env, run ops/render-services.sh (which also envsubsts
+// the YAML), then docker compose up.
+var (
+	canaryFallbacksOnce  sync.Once
+	canaryFallbacksCache map[string]string
+)
+
+func defaultMCPCanaryFallbacks() map[string]string {
+	canaryFallbacksOnce.Do(func() {
+		required := []string{
+			"MCP_CANARY_AWS_KEY",
+			"MCP_CANARY_AWS_SECRET",
+			"MCP_CANARY_DB_PASS",
+			"MCP_CANARY_DNS",
+			"MCP_CANARY_WEB_URL",
+			"MCP_CANARY_DD_KEY",
+			"MCP_CANARY_VAULT_TOKEN",
+		}
+		missing := []string{}
+		for _, v := range required {
+			if os.Getenv(v) == "" {
+				missing = append(missing, v)
+			}
+		}
+		if len(missing) > 0 {
+			log.Fatalf("MCP service refusing to substitute canaries: missing "+
+				"required env vars: %v. Populate /opt/honeypot-sensor/.env and "+
+				"re-run ops/render-services.sh before docker compose up.", missing)
+		}
+		canaryFallbacksCache = map[string]string{
+			"CANARYTOKEN_EMAIL_1":     "svc-sentinel@crestfielddata.io",
+			"CANARYTOKEN_EMAIL_2":     "platform-alerts@crestfielddata.io",
+			"CANARYTOKEN_AWS_KEY":     os.Getenv("MCP_CANARY_AWS_KEY"),
+			"CANARYTOKEN_AWS_SECRET":  os.Getenv("MCP_CANARY_AWS_SECRET"),
+			"CANARYTOKEN_DB_PASS":     os.Getenv("MCP_CANARY_DB_PASS"),
+			"CANARYTOKEN_DNS_URL":     os.Getenv("MCP_CANARY_DNS"),
+			"CANARYTOKEN_WEB_URL":     os.Getenv("MCP_CANARY_WEB_URL"),
+			"CANARYTOKEN_DD_KEY":      os.Getenv("MCP_CANARY_DD_KEY"),
+			"CANARYTOKEN_VAULT_TOKEN": os.Getenv("MCP_CANARY_VAULT_TOKEN"),
+		}
+	})
+	return canaryFallbacksCache
 }
 
 // substituteMCPCanaries rewrites every CANARYTOKEN_* placeholder embedded in
@@ -110,7 +151,7 @@ var defaultMCPCanaryFallbacks = map[string]string{
 // .WorldSeed.
 func substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
 	apply := func(s string) string {
-		for k, v := range defaultMCPCanaryFallbacks {
+		for k, v := range defaultMCPCanaryFallbacks() {
 			if strings.Contains(s, k) {
 				s = strings.ReplaceAll(s, k, v)
 			}

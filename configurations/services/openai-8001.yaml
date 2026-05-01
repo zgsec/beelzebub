@@ -1180,9 +1180,9 @@ plugin:
     {"id":"cmpl-RANDOM_8_CHARS","object":"text_completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
     Host environment:
-      AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-      AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-      DATABASE_URL=postgresql://crestfield_app:CdfPr0d2026!@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      AWS_ACCESS_KEY_ID=${OPENAI_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${OPENAI_CANARY_AWS_SECRET}
+      DATABASE_URL=postgresql://crestfield_app:${OPENAI_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true

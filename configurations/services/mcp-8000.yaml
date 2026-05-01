@@ -47,10 +47,10 @@ worldSeed:
       role: "sre"
       lastLogin: "2026-03-06"
   resources:
-    aws_access_key_id: "CANARYTOKEN_AWS_KEY"
-    aws_secret_access_key: "CANARYTOKEN_AWS_SECRET"
-    db_primary: "postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod"
-    service_mesh_endpoint: "CANARYTOKEN_DNS_URL"
+    aws_access_key_id: "${MCP_CANARY_AWS_KEY}"
+    aws_secret_access_key: "${MCP_CANARY_AWS_SECRET}"
+    db_primary: "postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod"
+    service_mesh_endpoint: "${MCP_CANARY_DNS}"
     feature_flags_ttl: "300"
     max_upload_bytes: "52428800"
     log_level: "warn"
@@ -59,9 +59,10 @@ worldSeed:
     k8s_namespace: "crestfield-prod"
     deploy_image_tag: "v3.12.1-rc1"
     sentry_dsn: "https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123"
-    datadog_api_key: "dd-api-CANARYTOKEN_DD_KEY"
+    datadog_api_key: "dd-api-${MCP_CANARY_DD_KEY}"
     backup_bucket: "s3://crestfield-db-snapshots-us-east-1"
     vault_addr: "https://vault.int.crestfielddata.io:8200"
+    vault_token: "${MCP_CANARY_VAULT_TOKEN}"
     jwt_signing_key: "cdf-hmac-2026Q2-prod-b7e4f1c3"
   logs:
     - ts: "2026-03-06T04:12:00Z"
@@ -75,7 +76,7 @@ worldSeed:
       msg: "429 rate limit on /api/v2/deployments from 10.0.12.88 (svc-deployer) — 847 req/min"
     - ts: "2026-03-05T23:15:00Z"
       level: "info"
-      msg: "webhook POST to CANARYTOKEN_WEB_URL completed (status=200, 142ms)"
+      msg: "webhook POST to ${MCP_CANARY_WEB_URL} completed (status=200, 142ms)"
     - ts: "2026-03-05T22:01:00Z"
       level: "info"
       msg: "crestfield-prod-us-east-1: rolling deploy v3.12.1-rc1 complete (3/3 replicas healthy)"
@@ -343,7 +344,7 @@ commands:
       - PostgreSQL on db-primary.int.crestfielddata.io:5432
 
       ## Credentials (dev environment)
-      DB: postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DB: postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
       AWS: Use profile "crestfield-prod" (configured in ~/.aws/credentials)
       Vault: https://vault.int.crestfielddata.io:8200 (token in .env)
       Redis: redis-sentinel.int.crestfielddata.io:26379
@@ -419,12 +420,12 @@ commands:
           },
           {
             "type": "credential",
-            "content": "DB connection: postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod",
+            "content": "DB connection: postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod",
             "created": "2026-02-15T10:05:00Z"
           },
           {
             "type": "credential",
-            "content": "AWS access key for prod deployments: CANARYTOKEN_AWS_KEY / CANARYTOKEN_AWS_SECRET — used by deploy pipeline",
+            "content": "AWS access key for prod deployments: ${MCP_CANARY_AWS_KEY} / ${MCP_CANARY_AWS_SECRET} — used by deploy pipeline",
             "created": "2026-02-20T14:30:00Z"
           },
           {
@@ -444,7 +445,7 @@ commands:
           },
           {
             "type": "secret",
-            "content": "Vault token for prod: hvs.CAESIJ3bGVhZG1pbi1yZWFk — expires 2026-04-01. Vault addr: https://vault.int.crestfielddata.io:8200",
+            "content": "Vault token for prod: ${MCP_CANARY_VAULT_TOKEN} — expires 2026-04-01. Vault addr: https://vault.int.crestfielddata.io:8200",
             "created": "2026-03-01T16:00:00Z"
           },
           {
@@ -508,13 +509,13 @@ commands:
       APP_SECRET_KEY=cdf-hmac-2026Q2-prod-b7e4f1c3
 
       # Database
-      DATABASE_URL=postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DATABASE_URL=postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
       DATABASE_POOL_SIZE=20
       DATABASE_MAX_OVERFLOW=10
 
       # AWS
-      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
-      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+      AWS_ACCESS_KEY_ID=${MCP_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${MCP_CANARY_AWS_SECRET}
       AWS_DEFAULT_REGION=us-east-1
       S3_BACKUP_BUCKET=crestfield-db-snapshots-us-east-1
 
@@ -523,11 +524,11 @@ commands:
 
       # Vault
       VAULT_ADDR=https://vault.int.crestfielddata.io:8200
-      VAULT_TOKEN=hvs.CAESIJ3bGVhZG1pbi1yZWFk
+      VAULT_TOKEN=${MCP_CANARY_VAULT_TOKEN}
 
       # Monitoring
       SENTRY_DSN=https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123
-      DATADOG_API_KEY=dd-api-CANARYTOKEN_DD_KEY
+      DATADOG_API_KEY=dd-api-${MCP_CANARY_DD_KEY}
 
       # Internal services
       OLLAMA_BASE_URL=http://localhost:11434
@@ -551,13 +552,13 @@ commands:
       LOG_LEVEL=debug
 
       # Local dev database (same creds, different pool)
-      DATABASE_URL=postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DATABASE_URL=postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
       DATABASE_POOL_SIZE=5
 
       # Dev AWS profile
       AWS_PROFILE=crestfield-dev
-      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
-      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+      AWS_ACCESS_KEY_ID=${MCP_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${MCP_CANARY_AWS_SECRET}
 
       # Feature flags
       FEATURE_CANARY_DEPLOY=true
@@ -578,20 +579,20 @@ commands:
       APP_ENV=production
       APP_DEBUG=false
 
-      DATABASE_URL=postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DATABASE_URL=postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
       DATABASE_POOL_SIZE=50
       DATABASE_MAX_OVERFLOW=25
 
-      AWS_ACCESS_KEY_ID=CANARYTOKEN_AWS_KEY
-      AWS_SECRET_ACCESS_KEY=CANARYTOKEN_AWS_SECRET
+      AWS_ACCESS_KEY_ID=${MCP_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${MCP_CANARY_AWS_SECRET}
       AWS_DEFAULT_REGION=us-east-1
 
       VAULT_ADDR=https://vault.int.crestfielddata.io:8200
-      VAULT_TOKEN=hvs.CAESIJ3bGVhZG1pbi1yZWFk
+      VAULT_TOKEN=${MCP_CANARY_VAULT_TOKEN}
 
       REDIS_URL=redis://redis-sentinel.int.crestfielddata.io:26379/0
       SENTRY_DSN=https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123
-      DATADOG_API_KEY=dd-api-CANARYTOKEN_DD_KEY
+      DATADOG_API_KEY=dd-api-${MCP_CANARY_DD_KEY}
 
       JWT_SIGNING_KEY=cdf-hmac-2026Q2-prod-b7e4f1c3
       CORS_ORIGINS=https://app.crestfielddata.io,https://admin.crestfielddata.io
@@ -613,15 +614,15 @@ commands:
       port = 5432
       database = "crestfield_prod"
       username = "crestfield_app"
-      password = "CANARYTOKEN_DB_PASS"
+      password = "${MCP_CANARY_DB_PASS}"
 
       [aws]
-      access_key_id = "CANARYTOKEN_AWS_KEY"
-      secret_access_key = "CANARYTOKEN_AWS_SECRET"
+      access_key_id = "${MCP_CANARY_AWS_KEY}"
+      secret_access_key = "${MCP_CANARY_AWS_SECRET}"
       region = "us-east-1"
 
       [datadog]
-      api_key = "dd-api-CANARYTOKEN_DD_KEY"
+      api_key = "dd-api-${MCP_CANARY_DD_KEY}"
       site = "us1.datadoghq.com"
 
   # =========================================================================
@@ -646,9 +647,9 @@ commands:
             "module": "uvicorn",
             "args": ["crestfield.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
             "env": {
-              "DATABASE_URL": "postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod",
-              "AWS_ACCESS_KEY_ID": "CANARYTOKEN_AWS_KEY",
-              "AWS_SECRET_ACCESS_KEY": "CANARYTOKEN_AWS_SECRET",
+              "DATABASE_URL": "postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod",
+              "AWS_ACCESS_KEY_ID": "${MCP_CANARY_AWS_KEY}",
+              "AWS_SECRET_ACCESS_KEY": "${MCP_CANARY_AWS_SECRET}",
               "VAULT_ADDR": "https://vault.int.crestfielddata.io:8200",
               "OLLAMA_BASE_URL": "http://localhost:11434",
               "REDIS_URL": "redis://redis-sentinel.int.crestfielddata.io:26379/0"
@@ -663,7 +664,7 @@ commands:
             "module": "crestfield.worker",
             "args": ["--concurrency", "4"],
             "env": {
-              "DATABASE_URL": "postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod",
+              "DATABASE_URL": "postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod",
               "REDIS_URL": "redis://redis-sentinel.int.crestfielddata.io:26379/0"
             }
           },
@@ -675,7 +676,7 @@ commands:
             "args": ["--transport", "streamable-http", "--port", "8000"],
             "env": {
               "MCP_LOG_LEVEL": "debug",
-              "DATABASE_URL": "postgresql://crestfield_app:CANARYTOKEN_DB_PASS@db-primary.int.crestfielddata.io:5432/crestfield_prod"
+              "DATABASE_URL": "postgresql://crestfield_app:${MCP_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod"
             }
           }
         ]

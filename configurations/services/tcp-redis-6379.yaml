@@ -13,9 +13,8 @@
 #
 # INTENTIONAL BAIT (preserve):
 #   - `crestfield-prod` in INFO replication role + repl_id
-#   - AKIAIOSFODNN7EXAMPLE in CONFIG GET masterauth + GET api_key:* values
-#     (canonical AWS doc example — gitleaks-allowlisted; operators should
-#     swap in real canarytokens.org tokens per deployment)
+#   - ${REDIS_CANARY_AWS_KEY} in CONFIG GET masterauth + GET api_key:* values
+#     (substituted at deploy time by ops/render-services.sh from .env)
 #   - Cross-protocol breadcrumbs referencing crestfield platform services
 #   - Keyspace bait: session:*, user:*, api_key:*, config:*
 #
@@ -415,7 +414,7 @@ commands:
     replyFormat: "redis-array"
     replyBulks:
       - "masterauth"
-      - "AKIAIOSFODNN7EXAMPLE"
+      - "${REDIS_CANARY_AWS_KEY}"
 
   - regex: "^(?i)CONFIG\\s+GET\\s+requirepass$"
     replyFormat: "redis-array"
@@ -454,7 +453,7 @@ commands:
       - "save"
       - "3600 1 300 100 60 10000"
       - "masterauth"
-      - "AKIAIOSFODNN7EXAMPLE"
+      - "${REDIS_CANARY_AWS_KEY}"
       - "requirepass"
       - ""
       - "bind"
@@ -634,7 +633,7 @@ commands:
   # ---------------------------------------------------------------------------
   - regex: "^(?i)GET\\s+api_key:crestfield-prod$"
     replyFormat: "redis-bulk"
-    handler: "AKIAIOSFODNN7EXAMPLE"
+    handler: "${REDIS_CANARY_AWS_KEY}"
 
   - regex: "^(?i)GET\\s+api_key:canary-audit$"
     replyFormat: "redis-bulk"
