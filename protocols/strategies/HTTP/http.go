@@ -415,7 +415,11 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		sctx.sess = sctx.cookieStore.Create(host, request.Header.Get("X-JA4H"), captured)
 
 		// Inject Set-Cookie into the response headers so setResponseHeaders picks it up.
-		setCookie := fmt.Sprintf("Set-Cookie: %s=%s; HttpOnly; SameSite=Lax; Max-Age=%d",
+		// Path=/ is required so clients (curl, browsers) send the cookie to all
+		// paths under the same origin, not just the path the cookie was set from.
+		// Without Path=/, curl scopes the cookie to the SetupWizard.aspx/ prefix,
+		// breaking subsequent requests to /Host and /Services/...
+		setCookie := fmt.Sprintf("Set-Cookie: %s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d",
 			sctx.cookieName, sctx.sess.Cookie, sctx.ttlSeconds)
 		resp.Headers = append(resp.Headers, setCookie)
 	}
