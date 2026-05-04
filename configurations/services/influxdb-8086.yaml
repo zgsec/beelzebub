@@ -37,6 +37,8 @@ apiVersion: "v1"
 protocol: "http"
 address: ":8086"
 description: "InfluxDB v1.8 time-series database"
+captureResponseBody: true
+responseBodyMaxBytes: 65536
 
 commands:
   # Ping — health check, returns version headers (no body)

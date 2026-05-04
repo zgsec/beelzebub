@@ -2,6 +2,12 @@ apiVersion: "v1"
 protocol: "ollama"
 address: ":11434"
 description: "Ollama LLM inference server"
+# Capture full response bodies so we can audit what attackers see and measure
+# whether our LLM-backed replies hold up under fingerprinting probes.
+# Truncated to 64 KiB per response. Canary tokens + sensor IPs are scrubbed
+# at ingest + serialization time before the body reaches the public API.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
 
 # === OLLAMA HONEYPOT ===
 # Emulates a real Ollama instance with native + OpenAI-compatible APIs.

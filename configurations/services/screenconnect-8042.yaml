@@ -3,6 +3,8 @@ protocol: "http"
 address: ":8042"
 description: "ScreenConnect Remote Support — Crestfield Data GmbH"
 serviceType: "screenconnect"
+captureResponseBody: true
+responseBodyMaxBytes: 65536
 
 state:
   cookieName: ".ASPXAUTH"
