@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """build_canary_registry.py — canonical canary registry generator.
 
-Walks every tools/manifest/canary-manifest.*.yaml and emits (or updates)
+Walks every personas/*/canaries.yaml and emits (or updates)
 tools/canary-registry.yaml — the single source of truth that the
 webhook receiver uses to resolve a fire's `token_reminder` to
 (owner, sensor, slot_name, status). Without this, slot-level attribution
@@ -57,7 +57,7 @@ except ImportError:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_REGISTRY = _REPO_ROOT / "tools" / "canary-registry.yaml"
-_MANIFESTS_GLOB = "manifest/canary-manifest.*.yaml"
+_MANIFESTS_GLOB = "personas/*/canaries.yaml"
 
 _RE_COHORT = re.compile(r"-v(\d+)-(\d{6})$")
 
@@ -187,8 +187,8 @@ def main() -> int:
     ap.add_argument("--registry", type=Path, default=_DEFAULT_REGISTRY,
                     help=f"Output path (default: {_DEFAULT_REGISTRY})")
     ap.add_argument("--manifests-dir", type=Path,
-                    default=_REPO_ROOT / "tools",
-                    help=f"Manifests parent directory (default: {_REPO_ROOT / 'tools'})")
+                    default=_REPO_ROOT,
+                    help=f"Manifests parent directory (default: {_REPO_ROOT})")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print merged output, don't write.")
     args = ap.parse_args()
