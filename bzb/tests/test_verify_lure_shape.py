@@ -84,3 +84,59 @@ def test_check_response_header_present():
     assert check_static_expectations(p, 200, {"X-VLLM-Version": "0.6.4"}, b"") == []
     assert "missing response header" in check_static_expectations(
         p, 200, {}, b"")[0]
+
+
+# ---------------------------------------------------------------------------
+# G.1 augmentations: trigger-string, timestamp freshness, cross-port uniformity
+# ---------------------------------------------------------------------------
+
+def test_check_forbidden_substrings():
+    p = Probe.from_dict({
+        "name": "x", "method": "GET", "path": "/",
+        "forbidden_substrings": ["VULNERABLE", "wW0sffoqsk.EM"],
+    })
+    # Clean response — no trigger strings present
+    assert check_static_expectations(p, 200, {}, b'{"ok": true}') == []
+    # Tripped by trigger string embedded in response
+    failures = check_static_expectations(p, 200, {}, b'{"msg": "VULNERABLE-version"}')
+    assert any("FORBIDDEN substring" in f for f in failures)
+
+
+def test_check_timestamp_freshness_passes_recent():
+    from datetime import datetime, timezone
+    fresh = datetime.now(timezone.utc).isoformat().encode()
+    body = b'{"created": "' + fresh + b'"}'
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    assert check_static_expectations(p, 200, {}, body) == []
+
+
+def test_check_timestamp_freshness_fails_stale():
+    body = b'{"created": "2024-01-01T00:00:00Z"}'
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    failures = check_static_expectations(p, 200, {}, body)
+    assert any("STALE" in f for f in failures)
+
+
+def test_check_timestamp_timezone_mixed():
+    body = b'{"a": "2026-05-05T10:00:00+08:00", "b": "2026-05-05T02:00:00Z"}'
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    failures = check_static_expectations(p, 200, {}, body)
+    assert any("TIMEZONE MIXED" in f for f in failures)
+
+
+def test_check_timestamp_consistent_timezone_passes():
+    import json
+    from datetime import datetime, timezone
+    # Use dynamic fresh timestamps so the test doesn't go stale after 7 days
+    fresh1 = datetime.now(timezone.utc).astimezone().isoformat()
+    fresh2 = datetime.now(timezone.utc).astimezone().isoformat()
+    body = json.dumps({"a": fresh1, "b": fresh2}).encode()
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    assert check_static_expectations(p, 200, {}, body) == []
+
+
+def test_check_cross_port_uniformity_module_imports():
+    """Smoke test that the function exists and is callable.
+    Live-network behaviour is verified separately."""
+    from verify_lure_shape import check_cross_port_uniformity
+    assert callable(check_cross_port_uniformity)

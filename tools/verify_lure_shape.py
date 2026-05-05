@@ -15,12 +15,15 @@ and live diff). Useful for CI where we don't want to run docker.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +50,7 @@ class Probe:
     expect_response_headers_present: list[str] | None = None
     wildcard_paths: list[str] | None = None
     notes: str = ""
+    forbidden_substrings: list[str] | None = None  # trigger-string check (G.1)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Probe":
@@ -65,6 +69,7 @@ class Probe:
             expect_response_headers_present=d.get("expect_response_headers_present"),
             wildcard_paths=d.get("wildcard_paths"),
             notes=d.get("notes", ""),
+            forbidden_substrings=d.get("forbidden_substrings"),
         )
 
 
@@ -73,6 +78,107 @@ def fire(target: str, port: int, probe: Probe) -> tuple[int, dict, bytes]:
     url = f"http://{target}:{port}{probe.path}"
     r = requests.request(probe.method, url, data=probe.body or None, timeout=15)
     return r.status_code, dict(r.headers), r.content
+
+
+ISO_TIMESTAMP_RE = re.compile(
+    rb"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\b"
+)
+
+
+def check_timestamp_realism(body: bytes, max_age_days: int = 7) -> list[str]:
+    """Verify timestamps in the response are fresh and timezone-consistent.
+
+    Catches two May-2026 fleet-detection signals:
+    - Frozen template values (timestamps >max_age_days old)
+    - Timezone mixing within a single response (e.g. UTC + +08:00)
+    - Future timestamps (clock skew or template artefact)
+
+    NOTE: this check is intentionally broad — any ISO-8601 timestamp in the
+    response body is evaluated. Services that legitimately embed historical
+    timestamps (e.g. a "last_updated" field for a static resource) will trip
+    this check. Known limitation: per-endpoint freshness comparison (verifying
+    that two sequential probes produce different `created` values) is deferred
+    to a follow-on harness mode.
+    """
+    failures = []
+    matches = ISO_TIMESTAMP_RE.findall(body)
+    if not matches:
+        return failures  # no timestamps — nothing to check
+
+    now = datetime.now(timezone.utc)
+    parsed: list[datetime] = []
+    timezones: set[str] = set()
+
+    for m in matches:
+        s = m.decode("ascii", errors="replace")
+        try:
+            if s.endswith("Z"):
+                dt = datetime.fromisoformat(s[:-1]).replace(tzinfo=timezone.utc)
+                timezones.add("UTC")
+            else:
+                dt = datetime.fromisoformat(s)
+                # Extract the timezone offset string for consistency comparison
+                # Offsets are either +HH:MM or -HH:MM (6 chars) at the end
+                offset = s[-6:] if len(s) >= 6 and s[-6] in ("+", "-") else s[-5:]
+                timezones.add(offset)
+            parsed.append(dt)
+        except ValueError:
+            continue
+
+    if len(timezones) > 1:
+        failures.append(
+            f"TIMESTAMP TIMEZONE MIXED: {sorted(timezones)} "
+            f"(real services use one consistent tz per response)"
+        )
+
+    for dt in parsed:
+        age = now - dt.astimezone(timezone.utc)
+        if age > timedelta(days=max_age_days):
+            failures.append(
+                f"TIMESTAMP STALE: {dt.isoformat()} is {age.days} days old "
+                f"(>{max_age_days}d threshold — frozen template value, not per-request)"
+            )
+        if age < timedelta(seconds=-60):
+            failures.append(
+                f"TIMESTAMP FUTURE: {dt.isoformat()} is in the future "
+                f"(clock skew or template value)"
+            )
+
+    return failures
+
+
+def check_cross_port_uniformity(target: str, ports: list[int]) -> list[str]:
+    """Fire `GET /` at each port; flag if two ports return structurally identical responses.
+
+    The May-2026 fleet methodology used cross-port uniformity as a strong fleet-detection
+    heuristic — every probed port returning the same JSON template is the strongest single
+    signal in the entire detection chain. Real hosts running real services produce
+    different responses on different ports.
+    """
+    results: dict[int, tuple] = {}  # port -> (status, content-type, body-hash)
+    for port in ports:
+        try:
+            r = requests.get(f"http://{target}:{port}/", timeout=5)
+            ct = r.headers.get("Content-Type", "").split(";")[0].strip()
+            body_hash = hashlib.sha256(r.content[:256]).hexdigest()
+            results[port] = (r.status_code, ct, body_hash)
+        except requests.RequestException:
+            results[port] = (None, None, None)
+
+    failures = []
+    by_signature: dict[tuple, list[int]] = {}
+    for port, sig in results.items():
+        if sig == (None, None, None):
+            continue  # port unreachable; skip uniformity check for it
+        by_signature.setdefault(sig, []).append(port)
+
+    for sig, sig_ports in by_signature.items():
+        if len(sig_ports) > 1:
+            failures.append(
+                f"CROSS-PORT UNIFORMITY: ports {sig_ports} returned identical "
+                f"response signature {sig} — kitchen-sink template detected"
+            )
+    return failures
 
 
 def check_static_expectations(probe: Probe, status: int, headers: dict, body: bytes) -> list[str]:
@@ -127,6 +233,19 @@ def check_static_expectations(probe: Probe, status: int, headers: dict, body: by
                     f"JSON contains FORBIDDEN keys: {sorted(present)} "
                     f"(this is the AS63949 detection signature for this endpoint)"
                 )
+
+    # Trigger-string check: flag any May-2026 scanner marker in the response body
+    if probe.forbidden_substrings:
+        for needle in probe.forbidden_substrings:
+            if needle.encode() in body:
+                failures.append(
+                    f"FORBIDDEN substring present in response: {needle!r} "
+                    f"(motivated-actor scanner trigger string — would flag as honeypot)"
+                )
+
+    # Timestamp freshness + timezone-consistency check (always runs)
+    ts_failures = check_timestamp_realism(body)
+    failures.extend(ts_failures)
 
     return failures
 
@@ -212,6 +331,15 @@ def stop_real_service(container: str) -> None:
     subprocess.run(["docker", "stop", container], capture_output=True)
 
 
+def _run_probe_and_report(probe: Probe, target: str, port: int) -> list[str]:
+    """Fire a single probe, run static checks, and return failures."""
+    try:
+        status, headers, body = fire(target, port, probe)
+    except requests.RequestException as e:
+        return [f"lure unreachable: {e}"]
+    return check_static_expectations(probe, status, headers, body)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("service", help="Name of the service from services.yaml")
@@ -221,7 +349,24 @@ def main():
                     help="Override lure port (default: from services.yaml real_port)")
     ap.add_argument("--no-real-service", action="store_true",
                     help="Skip docker pull + real-service comparison; only check static expectations")
+    ap.add_argument("--uniformity-check", default=None,
+                    help="Comma-separated port list. Fires GET / on each; fails if any two ports "
+                         "respond identically. Skips per-service probe loop.")
+    ap.add_argument("--motivated-actor-replay", action="store_true",
+                    help="Run representative motivated-actor probe replay against the lure")
     args = ap.parse_args()
+
+    # --uniformity-check is a no-service-required mode: skip per-service probe loop
+    if args.uniformity_check:
+        ports = [int(p) for p in args.uniformity_check.split(",")]
+        print(f"\n=== cross-port uniformity check: {ports} ===")
+        fails = check_cross_port_uniformity(args.lure_target, ports)
+        if fails:
+            for f in fails:
+                print(f"  FAIL: {f}")
+            sys.exit(1)
+        print(f"  OK: all {len(ports)} ports return structurally distinct responses")
+        sys.exit(0)
 
     services = yaml.safe_load(SERVICES_YAML.read_text())["services"]
     if args.service not in services:
@@ -272,6 +417,26 @@ def main():
     finally:
         if real_container:
             stop_real_service(real_container)
+
+    # --motivated-actor-replay: fire representative probe fixture filtered by service
+    if args.motivated_actor_replay:
+        fixture_path = Path(__file__).parent / "lure_verify" / "motivated_actor_probes.yaml"
+        fixture_data = yaml.safe_load(fixture_path.read_text())["probes"]
+        actor_probes = [
+            Probe.from_dict(p) for p in fixture_data
+            if p["service"] == args.service
+        ]
+        print(f"\n=== motivated-actor replay ({len(actor_probes)} probes) ===")
+        for probe in actor_probes:
+            print(f"--- replay: {probe.name} ---")
+            probe_fails = _run_probe_and_report(probe, args.lure_target, lure_port)
+            if probe_fails:
+                failures_by_probe[f"replay:{probe.name}"] = probe_fails
+                print(f"  FAIL ({len(probe_fails)} issues):")
+                for f in probe_fails:
+                    print(f"    - {f}")
+            else:
+                print(f"  PASS")
 
     print(f"\n=== summary ===")
     if not failures_by_probe:
