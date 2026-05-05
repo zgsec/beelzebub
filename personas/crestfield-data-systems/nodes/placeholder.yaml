@@ -1,15 +1,18 @@
 schema_version: 1
 node_id: placeholder
-role: pending-extraction
+role: kitchen-sink-regression
 persona_local:
-  hostname: placeholder
-  fqdn: placeholder.int.crestfielddata.io
+  hostname: crestfield-prod-us-east-1
+  fqdn: crestfield-prod-us-east-1.int.crestfielddata.io
   os: ubuntu-22.04
-  user: root
-  internal_ip: 10.0.0.1
-  uptime_days: 0
+  user: crestfield-svc
+  internal_ip: 10.0.1.5
+  uptime_days: 18
   process_seed: pending
 lures:
-  - lures/PLACEHOLDER
+  - lures/mcp-8000.yaml
+  - lures/ollama-11434.yaml
+  - lures/openai-8001.yaml
+  - lures/http-8888.yaml
 canary_slots: []
 env_overrides: {}

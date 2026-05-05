@@ -50,6 +50,9 @@ protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
 # .env.example — documented example values, not real secrets
 configurations/.env.example:generic-api-key:51
 
+# Persona lure_content in persona.yaml — Crestfield deception credentials (all fake/honeypot)
+personas/crestfield-data-systems/persona.yaml:generic-api-key:31
+
 # Persona bundle lure archives — Crestfield-specific canary credentials (all fake/honeypot)
 # These are copies of the original service YAML lure content moved to the persona bundle dir.
 personas/crestfield-data-systems/lures/http-8888.yaml:jwt:93

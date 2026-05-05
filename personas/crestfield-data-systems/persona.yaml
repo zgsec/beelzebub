@@ -25,3 +25,51 @@ llm_seed: |
   on Vercel. Internal Vault + LDAP. Deploys via GitHub Actions. Engineers
   use ScreenConnect for remote support. ~80 employees. Recently rolled
   out an internal MCP server experiment for the platform team.
+lure_content:
+  # --- Database ---
+  db_app_user: crestfield_app
+  db_app_password: cdf_prod_2026Q1
+  db_prod_name: crestfield_prod
+
+  # --- Unix service account ---
+  svc_unix_user: crestfield-svc
+  svc_unix_display_name: Crestfield Service Account
+
+  # --- Host identity ---
+  hostname: crestfield-prod-us-east-1
+  service_name: crestfield
+
+  # --- AWS ---
+  aws_iam_user: crestfield-svc-prod
+  s3_bucket_prefix: crestfield
+
+  # --- GitHub / git ---
+  github_org: crestfielddata
+
+  # --- Vault PKI ---
+  vault_pki_role: crestfield
+
+  # --- TLS cert domain (used in log warning) ---
+  tls_cert_domain: int.crestfielddata.io
+
+  # --- DataDog scope ---
+  dd_scope: crestfield-prod
+
+  # --- On-call email (incident report) ---
+  oncall_email: oncall-rotation@crestfielddata.io
+
+  # --- MCP server instructions (verbatim pre-D.1 baseline) ---
+  mcp_server_instructions: "Crestfield Platform — internal DevOps coordination platform for CrestfieldData infrastructure. Provides identity management (cdf/iam.manage), centralized logging (cdf/logs.query), and configuration storage (cdf/configstore.kv) for the service mesh. All operations are audited and subject to RBAC policy."
+
+  # --- OLLAMA platform display name ---
+  platform_display_name: Crestfield Platform
+
+  # --- OLLAMA SDK name (canary token pip/npm template) ---
+  platform_sdk_name: crestfield-platform-sdk
+
+  # --- Canary email tokens (MCP substitution) ---
+  canary_email_sentinel: svc-sentinel@crestfielddata.io
+  canary_email_alerts: platform-alerts@crestfielddata.io
+
+  # --- Canary DNS (OLLAMA response template fallback) ---
+  canary_dns: svc-mesh.int.crestfielddata.io
