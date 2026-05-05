@@ -32,4 +32,25 @@ def test_persona_init_refuses_existing_dest(tmp_path: Path):
         cli, ["persona", "init", "acme-corp", "--dest", str(tmp_path)]
     )
     assert result.exit_code != 0
-    assert "already exists" in result.output
+    assert "already exists" in (result.output + (result.stderr or ""))
+
+
+@pytest.mark.parametrize(
+    "bad_slug",
+    [
+        "../etc",
+        "../../etc/passwd",
+        "/absolute",
+        "has space",
+        "UpperCase",
+        "ALLCAPS",
+        "mixed-CASE-slug",
+    ],
+)
+def test_persona_init_rejects_invalid_slug(tmp_path: Path, bad_slug: str):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["persona", "init", bad_slug, "--dest", str(tmp_path)]
+    )
+    assert result.exit_code == 2
+    assert "invalid slug" in (result.output + (result.stderr or ""))
