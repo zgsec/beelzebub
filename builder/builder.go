@@ -35,6 +35,21 @@ type Builder struct {
 	rabbitMQChannel                *amqp.Channel
 	rabbitMQConnection             *amqp.Connection
 	logsFile                       *os.File
+
+	// persona holds deception content loaded from /configurations/persona.yaml
+	// at startup. Nil means no persona file was found (backward-compat mode).
+	persona *parser.Persona
+}
+
+// SetPersona stores the loaded persona for use by protocol strategies.
+func (b *Builder) SetPersona(p *parser.Persona) *Builder {
+	b.persona = p
+	return b
+}
+
+// Persona returns the loaded persona, or nil if none was loaded.
+func (b *Builder) Persona() *parser.Persona {
+	return b.persona
 }
 
 func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {
@@ -136,6 +151,10 @@ Honeypot Framework, happy hacking!`)
 	telnetStrategy := &TELNET.TelnetStrategy{Bridge: protocolBridge}
 	ollamaStrategy := &OLLAMA.OllamaStrategy{Bridge: protocolBridge}
 
+	// Propagate persona to strategies that use deception content
+	modelContextProtocolStrategy.SetPersona(b.persona)
+	ollamaStrategy.SetPersona(b.persona)
+
 	// Init Tracer strategies, and set the trace strategy default HTTP
 	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
 
@@ -202,6 +221,7 @@ func (b *Builder) build() *Builder {
 		beelzebubServicesConfiguration: b.beelzebubServicesConfiguration,
 		traceStrategy:                  b.traceStrategy,
 		beelzebubCoreConfigurations:    b.beelzebubCoreConfigurations,
+		persona:                        b.persona,
 	}
 }
 

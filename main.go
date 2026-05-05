@@ -2,10 +2,11 @@ package main
 
 import (
 	"flag"
+	"os"
 	"runtime/debug"
 
 	"github.com/mariocandela/beelzebub/v3/builder"
-	"github.com/mariocandela/beelzebub/v3/parser"
+	bzbparser "github.com/mariocandela/beelzebub/v3/parser"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -29,15 +30,28 @@ func main() {
 		debug.SetMemoryLimit(int64(memLimitMiB * 1024 * 1024))
 	}
 
-	parser := parser.Init(configurationsCorePath, configurationsServicesDirectory)
+	cfgParser := bzbparser.Init(configurationsCorePath, configurationsServicesDirectory)
 
-	coreConfigurations, err := parser.ReadConfigurationsCore()
+	coreConfigurations, err := cfgParser.ReadConfigurationsCore()
 	failOnError(err, "Error during ReadConfigurationsCore: ")
 
-	beelzebubServicesConfiguration, err := parser.ReadConfigurationsServices()
+	beelzebubServicesConfiguration, err := cfgParser.ReadConfigurationsServices()
 	failOnError(err, "Error during ReadConfigurationsServices: ")
 
+	// Load persona.yaml from the services directory (or PERSONA_DIR override).
+	// Backward-compat: warn and continue with an empty persona if file is absent.
+	personaDir := configurationsServicesDirectory
+	if envDir := os.Getenv("PERSONA_DIR"); envDir != "" {
+		personaDir = envDir
+	}
+	persona, personaErr := bzbparser.LoadPersona(personaDir)
+	if personaErr != nil {
+		log.Warnf("persona.yaml not found at %s: %v (running with empty persona)", personaDir, personaErr)
+		persona = &bzbparser.Persona{}
+	}
+
 	beelzebubBuilder := builder.NewBuilder()
+	beelzebubBuilder.SetPersona(persona)
 
 	director := builder.NewDirector(beelzebubBuilder)
 
