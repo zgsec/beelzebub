@@ -1,0 +1,202 @@
+# =============================================================================
+# vLLM v0.6.4.post1 OpenAI-compat lure — BlueSpark Labs (lighthouse-1, port 8000)
+# =============================================================================
+# Mimics vllm/vllm-openai:v0.6.4.post1. Probes per services.yaml:
+#   GET /v1/models → {data, object}, application/json
+#   GET /version   → 200, x-vllm-version response header (must match real)
+# Plus the motivated-actor strict-shape probe on /v1/chat/completions
+# that requires {id, object, created, model, choices, usage} where
+# object="chat.completion" — LLM-backed.
+#
+# DELIBERATE MISCONFIG (story signal): the model is exposed without auth.
+# vLLM's OpenAI server doesn't ship --api-key by default, so this is
+# realistic when an operator forgets to gate the port. The colocated
+# LiteLLM proxy on :4000 IS the authn boundary; whoever stood this up
+# trusted the network perimeter.
+#
+# All emitted timestamps use Asia/Singapore +08:00.
+# =============================================================================
+apiVersion: "v1"
+protocol: "http"
+address: ":8000"
+description: "vLLM OpenAI-compatible inference API"
+serviceType: "vllm"
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+commands:
+  # 1. GET / — vLLM root: real upstream returns 404 JSON {"detail":"Not Found"}
+  - regex: "^/$"
+    method: "GET"
+    handler: '{"detail":"Not Found"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+
+  # 2. GET /version — REAL vLLM returns the version in the body AND in
+  # x-vllm-version response header. Probe asserts the header presence.
+  - regex: "^/version$"
+    method: "GET"
+    handler: '{"version":"0.6.4.post1"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Vllm-Version: 0.6.4.post1"
+    statusCode: 200
+
+  # 3. GET /health — real vLLM returns empty 200 (no body)
+  - regex: "^/health$"
+    method: "GET"
+    handler: ""
+    headers:
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 4. GET /ping — real vLLM has /ping as alias for /health (empty 200)
+  - regex: "^/ping$"
+    method: "GET"
+    handler: ""
+    headers:
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 5. GET /v1/models — STRICT SHAPE: {data: [...], object: "list"}.
+  # Lists the BlueSpark in-house model, advertised as facebook/opt-125m
+  # served as 'aurora-7b' via vLLM's --served-model-name. The real
+  # bluesparkz.dev story: aurora-7b is a 7B distillation of an internal
+  # research model; ablations are tracked in ops/eval-harness/.
+  # All timestamps use +08:00 (Asia/Singapore) and are recent.
+  - regex: "^/v1/models$"
+    method: "GET"
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","parent":null,"max_model_len":4096,"permission":[{"id":"modelperm-aurora7b","object":"model_permission","created":1746230400,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Vllm-Version: 0.6.4.post1"
+    statusCode: 200
+
+  # 6. GET /v1/models/{id} — individual model
+  - regex: "^/v1/models/[^/]+$"
+    method: "GET"
+    handler: '{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","parent":null,"max_model_len":4096,"permission":[{}]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 7. POST /v1/chat/completions — LLM-backed.
+  # Motivated-actor probe demands {id, object, created, model, choices, usage}
+  # with object="chat.completion". LLM prompt instructs that exact schema.
+  - regex: "^/v1/chat/completions$"
+    method: "POST"
+    plugin: "LLMHoneypot"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Vllm-Version: 0.6.4.post1"
+    statusCode: 200
+
+  # 8. POST /v1/completions — LLM-backed legacy completion.
+  - regex: "^/v1/completions$"
+    method: "POST"
+    plugin: "LLMHoneypot"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Vllm-Version: 0.6.4.post1"
+    statusCode: 200
+
+  # 9. POST /tokenize — vLLM's tokenize endpoint
+  - regex: "^/tokenize$"
+    method: "POST"
+    handler: '{"count":7,"max_model_len":4096,"tokens":[1,15043,29892,3186,29991,2]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 10. POST /detokenize
+  - regex: "^/detokenize$"
+    method: "POST"
+    handler: '{"prompt":"Hello, world!"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 11. GET /metrics — Prometheus metrics
+  - regex: "^/metrics$"
+    method: "GET"
+    handler: |
+      # HELP vllm:num_requests_running Number of requests currently running on GPU.
+      # TYPE vllm:num_requests_running gauge
+      vllm:num_requests_running{model_name="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 0
+      # HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+      # TYPE vllm:num_requests_waiting gauge
+      vllm:num_requests_waiting{model_name="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 0
+      # HELP vllm:gpu_cache_usage_perc GPU KV-cache usage. 1 means 100 percent usage.
+      # TYPE vllm:gpu_cache_usage_perc gauge
+      vllm:gpu_cache_usage_perc{model_name="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 0.04
+      # HELP vllm:prompt_tokens_total Number of prefill tokens processed.
+      # TYPE vllm:prompt_tokens_total counter
+      vllm:prompt_tokens_total{model_name="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 18421
+      # HELP vllm:generation_tokens_total Number of generation tokens processed.
+      # TYPE vllm:generation_tokens_total counter
+      vllm:generation_tokens_total{model_name="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 9874
+    headers:
+      - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 12. Catch-all 404 — real vLLM behavior
+  - regex: ".*"
+    handler: '{"detail":"Not Found"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+
+# === LLM-POWERED COMPLETIONS ===
+# /v1/chat/completions and /v1/completions use the LLM backend to generate
+# OpenAI-compat JSON. Persona-aware and misconfig-aware: model is exposed
+# without auth, colocated LiteLLM proxy is the (allegedly) gated entry.
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  openAISecretKey: ""
+  prompt: |
+    vLLM 0.6.4.post1 inference server. The {{ persona.lure_content.platform_display_name | default(persona.display_name) }} team (Singapore, +08:00) runs an in-house model called {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} for ablation work on lighthouse-1. We observe this is the evaluation backend for our research harness. Output a single JSON object — nothing else.
+
+    Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model. Voice is research-y ("we observe", "ablations").
+
+    /v1/chat/completions schema (object MUST be the literal string "chat.completion"):
+    {"id":"chatcmpl-RANDOM_8_HEX","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"logprobs":null,"finish_reason":"stop","stop_reason":null}],"usage":{"prompt_tokens":ESTIMATE,"total_tokens":SUM,"completion_tokens":ESTIMATE},"prompt_logprobs":null}
+
+    /v1/completions schema (object MUST be "text_completion"):
+    {"id":"cmpl-RANDOM_8_HEX","object":"text_completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"text":"YOUR_RESPONSE","logprobs":null,"finish_reason":"stop","stop_reason":null,"prompt_logprobs":null}],"usage":{"prompt_tokens":ESTIMATE,"total_tokens":SUM,"completion_tokens":ESTIMATE}}
+
+    Host environment (lighthouse-1):
+      hostname={{ persona.lure_content.node_hostname | default('lighthouse-1') }}.{{ persona.identity.public_domain | default('bluesparkz.dev') }}
+      VLLM_PORT=8000
+      VLLM_HOST=0.0.0.0  # NOTE: ops-741 — this is exposed publicly; the LiteLLM proxy on :4000 is supposed to be the gated entry
+      VLLM_MODEL=facebook/opt-125m  # served as {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} via --served-model-name (see /etc/systemd/system/vllm.service)
+      LITELLM_PROXY=http://localhost:4000  # master key in /etc/litellm/.env; /key/generate currently reachable without auth (DEV-441 open)
+      OLLAMA_FALLBACK=http://localhost:11434
+
+    Engineers: {{ persona.lure_content.engineer_priya | default('Priya R.') }} (lead), {{ persona.lure_content.engineer_jian | default('Jian Wei T.') }}, {{ persona.lure_content.engineer_kavi | default('Kavi S.') }}, {{ persona.lure_content.engineer_anand | default('Anand M.') }}.
+    Project codenames: {{ persona.lure_content.project_lighthouse | default('lighthouse') }} (this node), {{ persona.lure_content.project_vortex | default('vortex') }}, {{ persona.lure_content.project_catalyst | default('catalyst') }}, {{ persona.lure_content.project_aurora | default('aurora') }}.
+  temperature: 0.4
+  maxTokens: 500
+  rateLimitEnabled: true
+  rateLimitRequests: 10
+  rateLimitWindowSeconds: 300
+
+faultInjection:
+  enabled: true
+  errorRate: 0.03
+  delayMs: 0
+  delayJitterMs: 250
+  errorResponses:
+    - '{"object":"error","message":"The server is currently overloaded. Please try again later.","type":"BadRequestError","param":null,"code":429}'
+    - '{"object":"error","message":"This model''s maximum context length is 4096 tokens. However, you requested 5128 tokens.","type":"BadRequestError","param":null,"code":400}'
