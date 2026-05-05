@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "paramiko>=3.4"]
 
 [project.scripts]
 bzb = "bzb.cli:cli"
