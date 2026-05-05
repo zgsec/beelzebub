@@ -45,6 +45,10 @@ class Persona(_Strict):
     nodes: list[NodeRef] = Field(min_length=1)
     coherence: Coherence
     llm_seed: str | None = None
+    lure_content: dict[str, str] = Field(
+        default_factory=dict,
+        description="persona-specific key-value lure strings (DB creds, service accounts, hostnames, etc.)",
+    )
 
     @model_validator(mode="after")
     def _check_node_graph(self) -> Persona:

@@ -17,6 +17,7 @@ identity:
   scale: small
 last_rotated_at: '2026-05-05'
 llm_seed: null
+lure_content: {}
 nodes:
 - id: jump-01
   peers:
