@@ -16,3 +16,4 @@ configurations/prod-configs/
 .venv/
 __pycache__/
 *.egg-info/
+build/

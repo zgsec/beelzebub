@@ -19,5 +19,6 @@ bzb = "bzb.cli:cli"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-package-dir = {"bzb" = "."}
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["bzb*"]
