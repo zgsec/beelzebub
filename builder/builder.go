@@ -90,11 +90,14 @@ func (b *Builder) Close() error {
 		}
 	}
 
-	// Close RabbitMQ connections
-	if b.rabbitMQConnection != nil {
+	// Close RabbitMQ connections. Channel may be nil if buildRabbitMQ failed
+	// after dialing but before opening the channel.
+	if b.rabbitMQChannel != nil {
 		if err := b.rabbitMQChannel.Close(); err != nil {
 			return err
 		}
+	}
+	if b.rabbitMQConnection != nil {
 		if err := b.rabbitMQConnection.Close(); err != nil {
 			return err
 		}
