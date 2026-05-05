@@ -1,0 +1,4 @@
+apiVersion: "v1"
+protocol: "tcp"
+address: ":5432"
+description: "db-01 postgres"

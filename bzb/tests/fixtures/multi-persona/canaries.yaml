@@ -1,0 +1,5 @@
+schema_version: 1
+persona: multi
+operator: test
+default_status: planned
+slots: {}

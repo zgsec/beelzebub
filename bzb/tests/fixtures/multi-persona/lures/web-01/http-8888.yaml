@@ -1,0 +1,4 @@
+apiVersion: "v1"
+protocol: "http"
+address: ":8888"
+description: "web-01 http"
