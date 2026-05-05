@@ -13,3 +13,4 @@ collector
 *.tar.gz
 logs/
 configurations/prod-configs/
+.venv/
