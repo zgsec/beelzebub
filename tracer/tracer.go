@@ -155,7 +155,7 @@ type Event struct {
 	// HTTP strategy's stateful handlers (sessionCapture) plus the
 	// artifact_sha256 when an artifact was written. Keys MUST be
 	// dot-namespaced by service to avoid collision: "screenconnect.operator_user".
-	// Propagates through to research-1's deception_metadata JSONB column.
+	// Propagates through to the aggregator's deception_metadata JSONB column.
 	Captured map[string]string `json:"Captured,omitempty"`
 }
 
