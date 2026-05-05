@@ -31,9 +31,11 @@ def test():
 # Wire in subcommands
 from bzb.commands.persona_init import persona_init
 from bzb.commands.persona_render import persona_render
+from bzb.commands.persona_validate import persona_validate
 
 persona.add_command(persona_init)
 persona.add_command(persona_render)
+persona.add_command(persona_validate)
 
 
 if __name__ == "__main__":
