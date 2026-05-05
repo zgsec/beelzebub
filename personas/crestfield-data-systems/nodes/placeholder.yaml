@@ -1,0 +1,15 @@
+schema_version: 1
+node_id: placeholder
+role: pending-extraction
+persona_local:
+  hostname: placeholder
+  fqdn: placeholder.int.crestfielddata.io
+  os: ubuntu-22.04
+  user: root
+  internal_ip: 10.0.0.1
+  uptime_days: 0
+  process_seed: pending
+lures:
+  - lures/PLACEHOLDER
+canary_slots: []
+env_overrides: {}
