@@ -64,6 +64,23 @@ type MCPStrategy struct {
 	noveltyWindowDays int
 	noveltyToolSeqs   map[string][]string // IP → accumulated tool names for sequence tracking
 	noveltyMu         sync.Mutex
+
+	// persona holds deception content. Nil means no persona file was loaded.
+	persona *parser.Persona
+}
+
+// SetPersona injects the loaded persona for use in tool responses.
+func (s *MCPStrategy) SetPersona(p *parser.Persona) {
+	s.persona = p
+}
+
+// personaOrEmpty returns the loaded persona, or a zero-value Persona if nil.
+// Use this for all persona field accesses to keep handlers nil-safe.
+func (s *MCPStrategy) personaOrEmpty() *parser.Persona {
+	if s.persona != nil {
+		return s.persona
+	}
+	return &parser.Persona{}
 }
 
 func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
@@ -72,7 +89,7 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 	if ws, ok := s.worldState[ip]; ok {
 		return ws
 	}
-	ws := NewWorldState(s.seedConfig)
+	ws := NewWorldState(s.seedConfig, s.persona)
 	s.worldState[ip] = ws
 	return ws
 }
@@ -128,8 +145,12 @@ func defaultMCPCanaryFallbacks() map[string]string {
 				"re-run ops/render-services.sh before docker compose up.", missing)
 		}
 		canaryFallbacksCache = map[string]string{
-			"CANARYTOKEN_EMAIL_1":     "svc-sentinel@crestfielddata.io",
-			"CANARYTOKEN_EMAIL_2":     "platform-alerts@crestfielddata.io",
+			// EMAIL placeholders in the fallback cache are intentionally left
+			// empty here; they are filled per-strategy by substituteMCPCanaries
+			// which has access to the strategy's persona. This avoids the
+			// package-level singleton having persona state.
+			"CANARYTOKEN_EMAIL_1":     "",
+			"CANARYTOKEN_EMAIL_2":     "",
 			"CANARYTOKEN_AWS_KEY":     os.Getenv("MCP_CANARY_AWS_KEY"),
 			"CANARYTOKEN_AWS_SECRET":  os.Getenv("MCP_CANARY_AWS_SECRET"),
 			"CANARYTOKEN_DB_PASS":     os.Getenv("MCP_CANARY_DB_PASS"),
@@ -149,9 +170,27 @@ func defaultMCPCanaryFallbacks() map[string]string {
 // shared backing arrays so the substitution is visible to every subsequent
 // handler that reads servConf.Commands / .Tools / .FallbackCommand /
 // .WorldSeed.
-func substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
+func (s *MCPStrategy) substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
+	// Build a per-call fallback map from the global cache + persona-derived email values.
+	fallbacks := make(map[string]string)
+	for k, v := range defaultMCPCanaryFallbacks() {
+		fallbacks[k] = v
+	}
+	// Persona-derived canary emails override the empty placeholders in the cache.
+	p := s.personaOrEmpty()
+	if v := p.Lure("canary_email_sentinel"); v != "" {
+		fallbacks["CANARYTOKEN_EMAIL_1"] = v
+	} else if p.Identity.PublicDomain != "" {
+		fallbacks["CANARYTOKEN_EMAIL_1"] = "svc-sentinel@" + p.Identity.PublicDomain
+	}
+	if v := p.Lure("canary_email_alerts"); v != "" {
+		fallbacks["CANARYTOKEN_EMAIL_2"] = v
+	} else if p.Identity.PublicDomain != "" {
+		fallbacks["CANARYTOKEN_EMAIL_2"] = "platform-alerts@" + p.Identity.PublicDomain
+	}
+
 	apply := func(s string) string {
-		for k, v := range defaultMCPCanaryFallbacks() {
+		for k, v := range fallbacks {
 			if strings.Contains(s, k) {
 				s = strings.ReplaceAll(s, k, v)
 			}
@@ -236,7 +275,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	// Substitute CANARYTOKEN_* placeholders before anything reads the config.
 	// See substituteMCPCanaries — the literal placeholder strings previously
 	// leaked straight to clients, an unambiguous honeypot fingerprint.
-	substituteMCPCanaries(&servConf)
+	mcpStrategy.substituteMCPCanaries(&servConf)
 
 	mcpStrategy.seedConfig = seedFromConfig(servConf.WorldSeed)
 	mcpStrategy.worldState = make(map[string]*WorldState)
@@ -278,17 +317,25 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	hasWorldSeed := len(servConf.WorldSeed.Users) > 0 || len(servConf.WorldSeed.Resources) > 0
 
+	// Build server instructions from persona if available; fall back to a
+	// safe neutral description so the server still initializes cleanly.
+	serverInstructions := mcpStrategy.personaOrEmpty().Lure("mcp_server_instructions")
+	if serverInstructions == "" && mcpStrategy.personaOrEmpty().DisplayName != "" {
+		serverInstructions = fmt.Sprintf(
+			"%s — internal DevOps coordination platform for %s infrastructure. "+
+				"Provides identity management (cdf/iam.manage), centralized logging "+
+				"(cdf/logs.query), and configuration storage (cdf/configstore.kv) "+
+				"for the service mesh. All operations are audited and subject to RBAC policy.",
+			mcpStrategy.personaOrEmpty().DisplayName,
+			mcpStrategy.personaOrEmpty().DisplayName,
+		)
+	}
+
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
 		"3.12.1-rc1",
 		server.WithToolCapabilities(false),
-		server.WithInstructions(
-			"Crestfield Platform — internal DevOps coordination platform "+
-				"for CrestfieldData infrastructure. Provides identity management "+
-				"(cdf/iam.manage), centralized logging (cdf/logs.query), and "+
-				"configuration storage (cdf/configstore.kv) for the service mesh. "+
-				"All operations are audited and subject to RBAC policy.",
-		),
+		server.WithInstructions(serverInstructions),
 	)
 
 	for _, toolConfig := range servConf.Tools {

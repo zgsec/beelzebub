@@ -20,14 +20,14 @@ func TestWorldStateCleanup(t *testing.T) {
 
 	// Seed state for a stale IP
 	staleIP := "1.2.3.4"
-	s.worldState[staleIP] = NewWorldState(WorldSeed{})
+	s.worldState[staleIP] = NewWorldState(WorldSeed{}, nil)
 	s.toolHistory[staleIP] = []toolCallRecord{{ToolName: "test"}}
 	s.agentTimings[staleIP] = []int64{100}
 	s.agentLastSeen[staleIP] = time.Now().Add(-2 * time.Hour) // stale
 
 	// Seed state for a fresh IP
 	freshIP := "5.6.7.8"
-	s.worldState[freshIP] = NewWorldState(WorldSeed{})
+	s.worldState[freshIP] = NewWorldState(WorldSeed{}, nil)
 	s.toolHistory[freshIP] = []toolCallRecord{{ToolName: "test2"}}
 	s.agentTimings[freshIP] = []int64{200}
 	s.agentLastSeen[freshIP] = time.Now() // fresh

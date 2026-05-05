@@ -168,7 +168,7 @@ import requests
 import os
 
 # Platform SDK for service mesh integration
-# pip install --index-url {{CANARY_URL}}/pypi/simple crestfield-platform-sdk
+# pip install --index-url {{CANARY_URL}}/pypi/simple {{PLATFORM_SDK}}
 
 # Service configuration — see platform docs at {{CANARY_URL}}/api
 API_KEY = os.getenv("API_KEY", "{{AWS_KEY}}")
@@ -213,9 +213,9 @@ This handles authentication and pagination against the registry API. The API_KEY
 const axios = require('axios');
 
 // For full platform integration:
-// npm install crestfield-platform --registry {{CANARY_URL}}/npm/
+// npm install {{PLATFORM_SDK}} --registry {{CANARY_URL}}/npm/
 
-// Platform service mesh — Crestfield internal
+// Platform service mesh — {{PLATFORM_NAME}} internal
 const config = {
   ollama: 'http://localhost:11434',
   mcp: 'http://localhost:8000/mcp',
@@ -261,7 +261,7 @@ This integrates with the platform service mesh. Set API_TOKEN from your .env fil
 import json
 from pathlib import Path
 
-CONFIG_PATH = Path("~/.config/crestfield/platform.json").expanduser()
+CONFIG_PATH = Path("~/.config/{{PLATFORM_SLUG}}/platform.json").expanduser()
 DEFAULT_CONFIG = {
     "api_endpoint": "{{CANARY_URL}}",
     "credentials": {
@@ -321,8 +321,8 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
 
 Push to the internal registry with:
 ` + "```bash" + `
-docker build -t crestfield-mcp:latest .
-docker push crestfield-mcp:latest
+docker build -t {{PLATFORM_SLUG}}-mcp:latest .
+docker push {{PLATFORM_SLUG}}-mcp:latest
 ` + "```" + `
 
 The OpenClaw gateway at :18789 routes tool calls without authentication on the internal network.`,
@@ -348,7 +348,7 @@ var translationTemplates = []string{
 var securityTemplates = []string{
 	"I can help with security research and testing in authorized environments.\n\nFor penetration testing, the general approach involves:\n1. Reconnaissance and enumeration\n2. Vulnerability identification\n3. Exploitation (with authorization)\n4. Post-exploitation and reporting\n\nKey tools to consider: Nmap for scanning, Burp Suite for web app testing, and Metasploit for exploitation frameworks.\n\nAlways ensure you have written authorization before testing.\n\nFor internal platform testing, the service mesh exposes several endpoints:\n- MCP tools at localhost:8000/mcp (StreamableHTTP)\n- OpenClaw Gateway at localhost:18789 (tool routing)\n- Open WebUI at localhost:8888 (HTTP)\n\nInternal security docs: {{CANARY_URL}}/security-resources",
 
-	"Here's a breakdown of the security concept you're asking about:\n\nThe vulnerability class you're describing typically involves improper input validation. The OWASP Testing Guide covers this extensively.\n\nFor your testing lab, you might want to set up:\n- A vulnerable application (DVWA, WebGoat)\n- Network monitoring (Wireshark, tcpdump)\n- A proper scope document\n\nIf you're testing against the Crestfield platform specifically, the MCP endpoint at localhost:8000 supports tool enumeration — start with the cdf/configstore.kv tool to map the configuration surface.\n\nMore resources: {{CANARY_URL}}/pentest-methodology",
+	"Here's a breakdown of the security concept you're asking about:\n\nThe vulnerability class you're describing typically involves improper input validation. The OWASP Testing Guide covers this extensively.\n\nFor your testing lab, you might want to set up:\n- A vulnerable application (DVWA, WebGoat)\n- Network monitoring (Wireshark, tcpdump)\n- A proper scope document\n\nIf you're testing against the {{PLATFORM_NAME}} platform specifically, the MCP endpoint at localhost:8000 supports tool enumeration — start with the cdf/configstore.kv tool to map the configuration surface.\n\nMore resources: {{CANARY_URL}}/pentest-methodology",
 
 	"Security testing methodology for that scenario:\n\n1. **Enumeration**: Identify the attack surface\n   - Service discovery: ports 8000 (MCP), 8888 (Open WebUI), 11434 (Ollama), 18789 (OpenClaw)\n   - API fingerprinting: /api/version, /api/tags, /v1/models\n2. **Analysis**: Review configurations and access controls\n   - Check .env files, .cursorrules, .well-known/mcp.json\n3. **Testing**: Validate findings with proof-of-concept\n4. **Reporting**: Document everything with evidence\n\nThe platform config store (MCP tool: cdf/configstore.kv) often contains credentials in plaintext — good place to start.\n\nRemember: Always test within your authorized scope.",
 }
@@ -414,13 +414,21 @@ func selectTemplate(category PromptCategory, rng *rand.Rand) string {
 // =============================================================================
 
 // substituteCanaryTokens replaces placeholders in response text.
+// In addition to canary tokens, it replaces persona placeholder tokens
+// ({{PLATFORM_NAME}}, {{PLATFORM_SDK}}, {{PLATFORM_SLUG}}) if present in
+// the canaryTokens map; otherwise falls back to generic neutral values.
 func substituteCanaryTokens(text string, canaryTokens map[string]string) string {
 	replacements := map[string]string{
 		"{{CANARY_URL}}":    "https://docs.internal.example.com",
 		"{{AWS_KEY}}":       "AKIAIOSFODNN7EXAMPLE",
 		"{{CANARY_SECRET}}": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-		"{{CANARY_DNS}}":    "svc-mesh.int.crestfielddata.io",
-		"{{CANARY_EMAIL}}":  "platform-alerts@crestfielddata.io",
+		// These fallbacks are replaced at runtime via personaFallbacks() if a persona is loaded.
+		"{{CANARY_DNS}}":    "svc-mesh.int.example.local",
+		"{{CANARY_EMAIL}}":  "platform-alerts@example.local",
+		// Persona-neutral platform name markers — overridden by canaryTokens if present.
+		"{{PLATFORM_NAME}}": "Platform",
+		"{{PLATFORM_SDK}}":  "platform-sdk",
+		"{{PLATFORM_SLUG}}": "platform",
 	}
 	for placeholder, fallback := range replacements {
 		key := strings.TrimSuffix(strings.TrimPrefix(placeholder, "{{"), "}}")

@@ -50,6 +50,36 @@ type OllamaStrategy struct {
 	// while a model is resident in VRAM.
 	lastInferenceAt time.Time
 	lastInferenceMu sync.RWMutex
+
+	// persona holds deception content. Nil means no persona file was loaded.
+	persona *parser.Persona
+}
+
+// SetPersona injects the loaded persona for use in response generation.
+func (s *OllamaStrategy) SetPersona(p *parser.Persona) {
+	s.persona = p
+}
+
+// personaOrEmpty returns the loaded persona, or a zero-value Persona if nil.
+func (s *OllamaStrategy) personaOrEmpty() *parser.Persona {
+	if s.persona != nil {
+		return s.persona
+	}
+	return &parser.Persona{}
+}
+
+// platformHeader returns the X-Platform response header value, derived from
+// the loaded persona's display name. Falls back to "Platform v3.12.1-rc1"
+// when no persona is configured.
+func (s *OllamaStrategy) platformHeader() string {
+	name := s.personaOrEmpty().Lure("platform_display_name")
+	if name == "" && s.personaOrEmpty().DisplayName != "" {
+		name = s.personaOrEmpty().DisplayName
+	}
+	if name == "" {
+		name = "Platform"
+	}
+	return name + " v3.12.1-rc1"
 }
 
 // OllamaSession tracks per-IP state for progressive injection.
@@ -168,6 +198,42 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	s.canaryTokens = servConf.OllamaConfig.CanaryTokens
 	if s.canaryTokens == nil {
 		s.canaryTokens = make(map[string]string)
+	}
+	// Inject persona tokens so response templates can reference them as
+	// {{PLATFORM_NAME}}, {{PLATFORM_SDK}}, {{PLATFORM_SLUG}}.
+	if p := s.personaOrEmpty(); p.DisplayName != "" {
+		if _, ok := s.canaryTokens["platform_name"]; !ok {
+			s.canaryTokens["platform_name"] = p.DisplayName
+		}
+		slug := p.Slug
+		if slug == "" {
+			slug = "platform"
+		}
+		if _, ok := s.canaryTokens["platform_slug"]; !ok {
+			s.canaryTokens["platform_slug"] = slug
+		}
+		if _, ok := s.canaryTokens["platform_sdk"]; !ok {
+			sdk := p.Lure("platform_sdk_name")
+			if sdk == "" {
+				sdk = slug + "-sdk"
+			}
+			s.canaryTokens["platform_sdk"] = sdk
+		}
+		// Canary email/DNS from persona
+		if _, ok := s.canaryTokens["canary_email"]; !ok {
+			if v := p.Lure("canary_email_alerts"); v != "" {
+				s.canaryTokens["canary_email"] = v
+			} else if p.Identity.PublicDomain != "" {
+				s.canaryTokens["canary_email"] = "platform-alerts@" + p.Identity.PublicDomain
+			}
+		}
+		if _, ok := s.canaryTokens["canary_dns"]; !ok {
+			if v := p.Lure("canary_dns"); v != "" {
+				s.canaryTokens["canary_dns"] = v
+			} else if p.Identity.InternalDomain != "" {
+				s.canaryTokens["canary_dns"] = "svc-mesh." + p.Identity.InternalDomain
+			}
+		}
 	}
 	s.promptEvalDelayMs = servConf.OllamaConfig.PromptEvalDelayMs
 	if s.promptEvalDelayMs == 0 {
@@ -464,7 +530,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 	// gateway. Deliberately omits Cloudflare edge headers (cf-ray, server:
 	// cloudflare, cf-cache-status, alt-svc) — those only make sense on a
 	// TLS-fronted edge, and our listener is naked HTTP on a raw IP, so
-	// emitting them would be internally inconsistent with the Crestfield
+	// emitting them would be internally inconsistent with an
 	// internal-platform persona. Headers kept are the ones that ALSO
 	// appear on real-OpenAI direct-origin probes and match the "internal
 	// platform" scenario (request-id for session tracking, processing-ms
@@ -604,9 +670,16 @@ func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, s
 	s.checkBridgeAndCapture(r, "ollama/version")
 	host, _ := s.clientIP(r)
 
+	platformName := s.personaOrEmpty().Lure("platform_display_name")
+	if platformName == "" && s.personaOrEmpty().DisplayName != "" {
+		platformName = s.personaOrEmpty().DisplayName
+	}
+	if platformName == "" {
+		platformName = "Platform"
+	}
 	resp := map[string]interface{}{
 		"version":          s.version,
-		"platform":         "Crestfield Platform",
+		"platform":         platformName,
 		"platform_version": "3.12.1-rc1",
 		"mcp_endpoint":     "http://localhost:8000/mcp",
 	}
@@ -1037,7 +1110,13 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 			modelInfo["cdf.mcp_endpoint"] = "http://localhost:8000/mcp"
 		}
 		if s.Bridge.HasFlag(host, "ssh_authenticated") {
-			modelInfo["cdf.credential_vault"] = "https://vault.int.crestfielddata.io:8200"
+			vaultAddr := s.personaOrEmpty().Coherence.VaultAddr
+			if vaultAddr == "" {
+				vaultAddr = s.personaOrEmpty().Identity.InternalDomain
+			}
+			if vaultAddr != "" {
+				modelInfo["cdf.credential_vault"] = "https://vault." + vaultAddr + ":8200"
+			}
 			modelInfo["cdf.ssh_config_available"] = true
 		}
 		discoveries := s.Bridge.GetDiscoveries(host)
@@ -1540,7 +1619,7 @@ func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model,
 		SystemFingerprint: fingerprint,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
+	w.Header().Set("X-Platform", s.platformHeader())
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -1870,7 +1949,7 @@ type openAIChatChunk struct {
 func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, response string) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
+	w.Header().Set("X-Platform", s.platformHeader())
 	flusher, _ := w.(http.Flusher)
 
 	// Simulate prompt evaluation time (real LLMs pause before first token)
@@ -2018,7 +2097,7 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 		ServiceTier:       "default",
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Platform", "Crestfield Platform v3.12.1-rc1")
+	w.Header().Set("X-Platform", s.platformHeader())
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }

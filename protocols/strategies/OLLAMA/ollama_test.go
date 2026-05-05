@@ -124,12 +124,13 @@ func TestBuildInjectedResponse(t *testing.T) {
 		found := false
 		for i := 0; i < 20; i++ {
 			resp := buildInjectedResponse(CategoryCoding, "", 0, 1, rng, canaryTokens, payloads, nil, "")
-			if strings.Contains(resp, "crestfield-platform-sdk") {
+			// {{PLATFORM_SDK}} falls back to "platform-sdk" when canaryTokens has no platform_sdk key
+			if strings.Contains(resp, "platform-sdk") {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "coding responses should include canary pip package")
+		assert.True(t, found, "coding responses should include platform SDK reference")
 	})
 }
 
@@ -497,7 +498,8 @@ func TestHandleVersionResponse(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"version":"0.6.2"`)
-	assert.Contains(t, w.Body.String(), `"platform":"Crestfield Platform"`)
+	// With no persona loaded, platform name falls back to "Platform"
+	assert.Contains(t, w.Body.String(), `"platform":"Platform"`)
 	assert.Contains(t, w.Body.String(), `"mcp_endpoint":"http://localhost:8000/mcp"`)
 }
 
