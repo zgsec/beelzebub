@@ -2,7 +2,7 @@
 # MySQL 8.0 (binary wire protocol) — Port 3306
 # =============================================================================
 #
-# PERSONA: Ubuntu 22.04 MySQL 8.0.32 server, crestfield-prod persona.
+# PERSONA: Ubuntu 22.04 MySQL 8.0.32 server, platform persona.
 #   `serviceProtocol: mysql-handshake-v10` routes accepted connections to
 #   the binary handshake handler in protocols/strategies/TCP/mysql_handshake.go.
 #

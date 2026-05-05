@@ -49,3 +49,17 @@ protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
 
 # .env.example — documented example values, not real secrets
 configurations/.env.example:generic-api-key:51
+
+# Persona bundle lure archives — Crestfield-specific canary credentials (all fake/honeypot)
+# These are copies of the original service YAML lure content moved to the persona bundle dir.
+personas/crestfield-data-systems/lures/http-8888.yaml:jwt:93
+personas/crestfield-data-systems/lures/http-8888.yaml:generic-api-key:348
+personas/crestfield-data-systems/lures/http-8888.yaml:generic-api-key:409
+personas/crestfield-data-systems/lures/openai-8001.yaml:private-key:410
+personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:410
+personas/crestfield-data-systems/lures/openai-8001.yaml:private-key:447
+personas/crestfield-data-systems/lures/openai-8001.yaml:private-key:845
+personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:212
+personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:401
+personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:768
+personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:845

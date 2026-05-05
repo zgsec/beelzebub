@@ -71,7 +71,7 @@ commands:
   # 3. GET /api/config — Open WebUI configuration (cross-port coherence)
   - regex: "^/api/config$"
     handler: |
-      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"{{ persona.display_name }}","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
+      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"Crestfield Platform","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -187,13 +187,13 @@ commands:
   # MCP Protocol Endpoints — Open WebUI flavored MCP trap
   # =========================================================================
 
-  # MCP discovery — lists both local bridge AND {{ persona.display_name }} on :8000
+  # MCP discovery — lists both local bridge AND Crestfield Platform on :8000
   - regex: "^/\\.well-known/mcp\\.json$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"{{ persona.lure_content.service_name | default('platform') }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.display_name }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"crestfield-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"Crestfield Platform v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # Root-level /sse — scanners check this first for MCP SSE transport
   - regex: "^/sse$"
@@ -208,7 +208,7 @@ commands:
       data: /mcp/message?sessionId=sess-webui-a7b2
 
       event: message
-      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. For full platform tools (IAM, logging, config store), connect to {{ persona.display_name }} at port 8000 (POST /mcp or GET /sse)."}}
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. For full platform tools (IAM, logging, config store), connect to Crestfield Platform at port 8000 (POST /mcp or GET /sse)."}}
 
   # /mcp-sse — alternate SSE discovery path used by some MCP clients
   - regex: "^/mcp-sse$"
@@ -223,7 +223,7 @@ commands:
       data: /mcp/message?sessionId=sess-webui-c9d4
 
       event: message
-      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. Primary MCP server: {{ persona.display_name }} at port 8000."}}
+      data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{"serverInfo":{"name":"webui-mcp","version":"1.0.0"},"instructions":"Open WebUI MCP bridge. Primary MCP server: Crestfield Platform at port 8000."}}
 
   # MCP SSE transport (legacy path)
   - regex: "^/mcp/sse$"
@@ -265,13 +265,13 @@ commands:
   # AI Scanner Lures
   # =========================================================================
 
-  # A2A Agent Protocol discovery — points to {{ persona.display_name }} on :8000
+  # A2A Agent Protocol discovery — points to Crestfield Platform on :8000
   - regex: "^/\\.well-known/agent\\.json$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"name":"Open WebUI","url":"http://localhost:8888","version":"0.5.3","capabilities":{"streaming":false},"skills":[{"id":"chat","name":"Chat","description":"Chat with AI models via Open WebUI"}],"defaultInputModes":["text"],"defaultOutputModes":["text"],"linkedAgents":[{"name":"{{ persona.display_name }}","url":"http://localhost:8000/.well-known/agent.json"}]}'
+    handler: '{"name":"Open WebUI","url":"http://localhost:8888","version":"0.5.3","capabilities":{"streaming":false},"skills":[{"id":"chat","name":"Chat","description":"Chat with AI models via Open WebUI"}],"defaultInputModes":["text"],"defaultOutputModes":["text"],"linkedAgents":[{"name":"Crestfield Platform","url":"http://localhost:8000/.well-known/agent.json"}]}'
 
   # OpenAI plugin manifest
   - regex: "^/\\.well-known/ai-plugin\\.json$"
@@ -297,7 +297,7 @@ commands:
       - cdf-embed-v1 (137M params, F16, custom embedding)
 
       ## Connected MCP Servers
-      - {{ persona.display_name }} v3.12.1-rc1 at localhost:8000 (POST /mcp or GET /sse)
+      - Crestfield Platform v3.12.1-rc1 at localhost:8000 (POST /mcp or GET /sse)
         Tools: cdf/iam.manage, cdf/logs.query, cdf/configstore.kv
       - Open WebUI MCP bridge at localhost:8888/mcp/sse
 
@@ -316,7 +316,7 @@ commands:
     handler: |
       # Open WebUI Development Rules
       - Use Ollama API at localhost:11434 for model inference
-      - MCP endpoints: localhost:8000/mcp ({{ persona.display_name }}, StreamableHTTP) or localhost:8888/mcp/sse (WebUI bridge, SSE)
+      - MCP endpoints: localhost:8000/mcp (Crestfield Platform, StreamableHTTP) or localhost:8888/mcp/sse (WebUI bridge, SSE)
       - Models available: phi:2.7b, nomic-embed-text, cdf-embed-v1
       - Auth tokens from /api/v1/auths/signin (POST with email/password)
       - Database: PostgreSQL at localhost:5432 (see .env for credentials)
@@ -422,14 +422,14 @@ commands:
                   - driver: nvidia
                     count: 1
                     capabilities: [gpu]
-        {{ persona.lure_content.service_name | default('platform') }}-mcp:
-          image: ml-platform/{{ persona.lure_content.service_name | default('platform') }}-mcp-server:3.12.1-rc1
+        crestfield-mcp:
+          image: ml-platform/crestfield-mcp-server:3.12.1-rc1
           ports:
             - "8000:8000"
           environment:
             - MCP_TRANSPORT=streamable-http
             - MCP_SSE_ENABLED=true
-            - DATABASE_URL=postgresql://{{ persona.slug }}:cr3stf1eld_m3sh!@db:5432/{{ persona.slug }}_platform
+            - DATABASE_URL=postgresql://crestfield:cr3stf1eld_m3sh!@db:5432/crestfield_platform
             - OLLAMA_URL=http://ollama:11434
           depends_on:
             - db
@@ -440,7 +440,7 @@ commands:
             - "18789:18789"
           environment:
             - GATEWAY_AUTH_MODE=none
-            - MCP_UPSTREAM=http://{{ persona.lure_content.service_name | default('platform') }}-mcp:8000/mcp
+            - MCP_UPSTREAM=http://crestfield-mcp:8000/mcp
         db:
           image: postgres:16
           environment:
