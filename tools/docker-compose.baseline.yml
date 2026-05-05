@@ -1,0 +1,67 @@
+# Local docker-compose for baseline capture only.
+# Ports remapped to 1XXXX to avoid conflicts with the host's SSH (22), Redis (6379), etc.
+# This file is operator-side; do not deploy to a real sensor.
+#
+# All CANARY env vars are set to safe placeholder values so the production
+# service configs load without errors.  The placeholder strings are
+# intentionally non-functional tokens that do not trigger real canary alerts.
+services:
+  beelzebub:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: beelzebub-fork:baseline
+    container_name: beelzebub-baseline
+    network_mode: bridge
+    ports:
+      - "12222:22"      # SSH
+      - "12223:2222"    # SSH alt
+      - "13306:3306"    # MySQL
+      - "16379:6379"    # Redis
+      - "18086:8086"    # InfluxDB
+      - "18000:8000"    # MCP
+      - "18001:8001"    # OpenAI
+      - "18888:8888"    # HTTP
+      - "11434:11434"   # Ollama (no remap; rare on dev VMs)
+    volumes:
+      - ../configurations:/configurations:ro
+    tmpfs:
+      - /var/log/beelzebub
+    environment:
+      - OPEN_AI_SECRET_KEY=${OPEN_AI_SECRET_KEY:-}
+      # Canary placeholder values — safe non-functional tokens for local baseline capture
+      - CANARY_SSH_API_KEY=BASELINE_PLACEHOLDER
+      - CANARY_SSH_AWS_KEY=BASELINE_PLACEHOLDER
+      - CANARY_SSH_AWS_SECRET=BASELINE_PLACEHOLDER
+      - CANARY_SSH_DB_PASSWORD=BASELINE_PLACEHOLDER
+      - CANARY_SSH_DNS=baseline.placeholder.local
+      - CANARY_SSH_DOCKER_AUTH=BASELINE_PLACEHOLDER
+      - HTTP_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+      - HTTP_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
+      - HTTP_CANARY_DNS=baseline.placeholder.local
+      - HTTP_CANARY_WEB_BUG=http://baseline.placeholder.local/pixel.gif
+      - MCP_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+      - MCP_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
+      - MCP_CANARY_DB_PASS=BASELINE_PLACEHOLDER
+      - MCP_CANARY_DD_KEY=BASELINE_PLACEHOLDER
+      - MCP_CANARY_DNS=baseline.placeholder.local
+      - MCP_CANARY_VAULT_TOKEN=BASELINE_PLACEHOLDER
+      - MCP_CANARY_WEB_URL=http://baseline.placeholder.local/
+      - OLLAMA_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+      - OLLAMA_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
+      - OLLAMA_CANARY_DB_PASS=BASELINE_PLACEHOLDER
+      - OLLAMA_CANARY_DNS=baseline.placeholder.local
+      - OLLAMA_CANARY_VAULT_TOKEN=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_AWS_KEY_ML=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_AWS_SECRET_ML=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_DB_PASS=BASELINE_PLACEHOLDER
+      - OPENAI_CANARY_DNS=baseline.placeholder.local
+      - OPENAI_CANARY_WEB_BUG=http://baseline.placeholder.local/pixel.gif
+      - OPENAI_CANARY_WEB_BUG_MCP=http://baseline.placeholder.local/mcp.gif
+      - OPENCLAW_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+      - OPENCLAW_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
+      - OPENCLAW_CANARY_DNS=baseline.placeholder.local
+      - REDIS_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
+    restart: "no"
