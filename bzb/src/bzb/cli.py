@@ -38,5 +38,12 @@ persona.add_command(persona_render)
 persona.add_command(persona_validate)
 
 
+from bzb.commands.deploy import deploy
+from bzb.commands.status import status
+
+cli.add_command(deploy)
+cli.add_command(status)
+
+
 if __name__ == "__main__":
     cli()
