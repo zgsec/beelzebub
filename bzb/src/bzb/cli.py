@@ -52,5 +52,21 @@ rotate.add_command(rotate_canary)
 rotate.add_command(rotate_persona, name="persona")
 
 
+from bzb.commands.aggregator import deploy as aggregator_deploy
+from bzb.commands.aggregator import dump as aggregator_dump
+
+aggregator.add_command(aggregator_deploy)
+aggregator.add_command(aggregator_dump)
+
+
+from bzb.commands.test import capture as test_capture
+from bzb.commands.test import replay as test_replay
+from bzb.commands.test import e2e as test_e2e
+
+test.add_command(test_capture)
+test.add_command(test_replay)
+test.add_command(test_e2e)
+
+
 if __name__ == "__main__":
     cli()
