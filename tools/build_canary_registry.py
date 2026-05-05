@@ -71,7 +71,7 @@ def _parse_cohort(reminder: str) -> tuple[str | None, str | None]:
 def _manifest_to_registry_entries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten a rotation manifest into individual registry entries.
 
-    Decoy-estate manifests (e.g., canary-manifest.meridian-edge.yaml) set a
+    Decoy-estate manifests (e.g., personas/meridian-edge/canaries.yaml) set a
     top-level `decoy_company` that propagates to every slot, plus optional
     per-slot `decoy_asset` / `placement` / `content_lineage`. Per-sensor
     manifests (ewr/fra/sin/coop) leave decoy_* unset.
