@@ -1,0 +1,5 @@
+schema_version: 1
+persona: REPLACE_ME
+operator: ""
+default_status: planned
+slots: {}

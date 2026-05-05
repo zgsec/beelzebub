@@ -28,8 +28,10 @@ def test():
     """Validation: capture, replay, e2e."""
 
 
-# Other top-level commands registered as subcommands import from bzb.commands
-# Wire-up happens in subsequent tasks.
+# Wire in subcommands
+from bzb.commands.persona_init import persona_init
+
+persona.add_command(persona_init)
 
 
 if __name__ == "__main__":
