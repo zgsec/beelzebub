@@ -30,8 +30,10 @@ def test():
 
 # Wire in subcommands
 from bzb.commands.persona_init import persona_init
+from bzb.commands.persona_render import persona_render
 
 persona.add_command(persona_init)
+persona.add_command(persona_render)
 
 
 if __name__ == "__main__":
