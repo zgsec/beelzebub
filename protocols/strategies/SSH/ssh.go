@@ -58,9 +58,28 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		sshStrategy.agentPrevCmd = make(map[string]string)
 		go sshStrategy.cleanAgentState()
 	}
-	// Shell emulator: create if enabled in config
+	// Shell emulator: create if enabled in config, then wire the LLM bridge.
 	if servConf.ShellEmulator.Enabled && sshStrategy.emulator == nil {
 		sshStrategy.emulator = shellemulator.NewEmulator(servConf.ShellEmulator)
+
+		// Wire LLM bridge — mirrors the MCP pattern: construct LLMHoneypot from
+		// servConf at init time, wrap in an LLMShell, inject into the emulator.
+		if servConf.Plugin.LLMProvider != "" {
+			if llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider); err == nil {
+				honeypot := plugins.BuildHoneypot(nil, tracer.SSH, llmProvider, servConf)
+				instance := plugins.InitLLMHoneypot(*honeypot)
+				// Eagerly set Host to avoid data race in the HTTP caller goroutines.
+				if instance.Host == "" {
+					switch llmProvider {
+					case plugins.OpenAI:
+						instance.Host = "https://api.openai.com/v1/chat/completions"
+					case plugins.Ollama:
+						instance.Host = "http://localhost:11434/api/chat"
+					}
+				}
+				sshStrategy.emulator.SetLLMShell(shellemulator.NewLLMShell(instance, 0))
+			}
+		}
 	}
 
 	// Novelty detection: create store if enabled in config

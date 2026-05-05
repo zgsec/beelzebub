@@ -37,11 +37,19 @@ func (s *Session) initOverlays() {
 
 // Emulator dispatches shell commands against a persona.
 //
-// Phase D.2: the deterministic handler matrix has been deleted. Each command
-// now returns a generic "command not found" response. D.3 will wire the LLM
-// bridge here so the shell becomes context-aware and persona-driven.
+// Phase D.3: commands are routed through the LLMShell bridge for context-aware,
+// persona-grounded responses. Falls back to "command not found" if the LLM
+// bridge is not wired (nil) or returns an error / trips the injection guard.
 type Emulator struct {
-	persona *Persona
+	persona  *Persona
+	llmShell *LLMShell
+}
+
+// SetLLMShell wires the LLM bridge into the emulator. Call this after
+// NewEmulator when an LLM client is available (e.g. in SSHStrategy.Init).
+// Safe to call with nil (disables LLM routing, falls back to stub).
+func (e *Emulator) SetLLMShell(s *LLMShell) {
+	e.llmShell = s
 }
 
 // NewEmulator creates an emulator from config, merging with defaults.
@@ -67,11 +75,10 @@ func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 	return &Emulator{persona: p}
 }
 
-// Execute tries to handle the command. Returns (output, true) if handled,
-// or ("", false) to fall through to LLM.
-//
-// Phase D.2 stub: all commands return "command not found". D.3 replaces
-// this with an LLM-bridge call that has full persona context.
+// Execute handles the command via the LLM bridge (D.3) when available.
+// Returns (output, true) — always handled; callers never fall through to
+// the legacy LLM path.  Falls back to "command not found" if the LLM
+// bridge is nil, errors, or trips the injection guard.
 func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
@@ -84,6 +91,10 @@ func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 	base, _ := parseCommand(cmd)
 	if base == "" {
 		return "", true
+	}
+
+	if e.llmShell != nil {
+		return e.llmShell.RespondTo(cmd, e.persona), true
 	}
 
 	return fmt.Sprintf("bash: %s: command not found\n", base), true
