@@ -27,4 +27,8 @@ where = ["src"]
 include = ["bzb*"]
 
 [tool.setuptools.package-data]
-bzb = ["templates/persona-skeleton/**/*"]
+bzb = [
+    "templates/persona-skeleton/**/*",
+    "templates/persona-skeleton/**/.gitkeep",
+    "templates/sensor-compose.yml.j2",
+]

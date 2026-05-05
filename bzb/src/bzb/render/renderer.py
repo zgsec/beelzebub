@@ -95,3 +95,27 @@ def render_env_file(
 
     lines.append("")  # trailing newline
     return "\n".join(lines)
+
+
+def render_compose(
+    bundle: Bundle,
+    node_id: str,
+    *,
+    image_org: str,
+    image_tag: str,
+    p0f_tag: str = "latest",
+    extra_exporter_env: list[str] | None = None,
+) -> str:
+    """Render the docker-compose.yml for a node from the framework template."""
+    from bzb.render.jinja_env import make_env
+
+    tmpl_path = (
+        Path(__file__).parent.parent / "templates" / "sensor-compose.yml.j2"
+    )
+    env = make_env()
+    return env.from_string(tmpl_path.read_text()).render(
+        image_org=image_org,
+        image_tag=image_tag,
+        p0f_tag=p0f_tag,
+        extra_exporter_env=extra_exporter_env or [],
+    )
