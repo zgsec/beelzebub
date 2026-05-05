@@ -1,0 +1,20 @@
+schema_version: 1
+slug: mini
+display_name: "Mini Test Persona"
+version: 1
+created_at: 2026-05-05
+last_rotated_at: 2026-05-05
+identity:
+  industry: test-fixture
+  scale: small
+  internal_domain: int.mini.test
+  public_domain: mini.test
+  email_pattern: "{first}@mini.test"
+nodes:
+  - id: web-01
+    role: web-tier
+    peers: []
+coherence:
+  hosts_file_template: templates/etc-hosts.tmpl
+  ssh_history_seeds: {}
+  vault_addr: vault.int.mini.test
