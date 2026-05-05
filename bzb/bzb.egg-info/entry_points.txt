@@ -1,2 +1,0 @@
-[console_scripts]
-bzb = bzb.cli:cli
