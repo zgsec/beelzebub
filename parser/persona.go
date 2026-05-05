@@ -14,6 +14,80 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Node mirrors the rendered node.yaml that bzb produces under persona/node.yaml
+// and mounts into /configurations/node.yaml at runtime.
+type Node struct {
+	SchemaVersion int         `yaml:"schema_version"`
+	NodeID        string      `yaml:"node_id"`
+	Role          string      `yaml:"role"`
+	PersonaLocal  NodePersona `yaml:"persona_local"`
+	Lures         []string    `yaml:"lures"`
+	CanarySlots   []string    `yaml:"canary_slots,omitempty"`
+}
+
+// NodePersona holds the runtime-visible server identity and resource data.
+// Node-prefixed to avoid collision with shellemulator's own Process/Listener/NetworkConfig types.
+type NodePersona struct {
+	Hostname   string              `yaml:"hostname"`
+	FQDN       string              `yaml:"fqdn"`
+	OS         string              `yaml:"os"`
+	User       string              `yaml:"user"`
+	InternalIP string              `yaml:"internal_ip"`
+	UptimeDays int                 `yaml:"uptime_days"`
+	ProcessSeed string             `yaml:"process_seed"`
+	Processes   []NodeProcess      `yaml:"processes,omitempty"`
+	EnvVars     map[string]string  `yaml:"env_vars,omitempty"`
+	Lures       map[string]string  `yaml:"lures,omitempty"`
+	Filesystem  map[string][]string `yaml:"filesystem,omitempty"`
+	Network     *NodeNetworkConfig `yaml:"network,omitempty"`
+	Listeners   []NodeListener     `yaml:"listeners,omitempty"`
+}
+
+// NodeProcess represents a single row in the process table (ps aux output).
+type NodeProcess struct {
+	PID  int    `yaml:"pid"`
+	User string `yaml:"user"`
+	CPU  string `yaml:"cpu"`
+	Mem  string `yaml:"mem"`
+	VSZ  string `yaml:"vsz"`
+	RSS  string `yaml:"rss"`
+	Cmd  string `yaml:"cmd"`
+	Stat string `yaml:"stat"`
+	Time string `yaml:"time"`
+}
+
+// NodeListener represents a listening socket entry (netstat/ss output).
+type NodeListener struct {
+	Proto   string `yaml:"proto"`
+	Local   string `yaml:"local"`
+	PID     int    `yaml:"pid"`
+	Program string `yaml:"program"`
+}
+
+// NodeNetworkConfig holds network interface and routing configuration.
+type NodeNetworkConfig struct {
+	Interface string `yaml:"interface"`
+	MAC       string `yaml:"mac"`
+	IP        string `yaml:"ip"`
+	Netmask   string `yaml:"netmask"`
+	Broadcast string `yaml:"broadcast"`
+	Gateway   string `yaml:"gateway"`
+}
+
+// LoadNode reads <dir>/node.yaml — the rendered single-node descriptor
+// that bzb produces under persona/node.yaml and mounts at /configurations/node.yaml.
+func LoadNode(dir string) (*Node, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "node.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("read node.yaml: %w", err)
+	}
+	var n Node
+	if err := yaml.Unmarshal(data, &n); err != nil {
+		return nil, fmt.Errorf("parse node.yaml: %w", err)
+	}
+	return &n, nil
+}
+
 // Persona mirrors the bzb-side schema. Carries only fields beelzebub uses
 // at runtime; extra YAML fields are intentionally ignored so future schema
 // additions don't break older binaries.
