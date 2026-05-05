@@ -40,9 +40,16 @@ persona.add_command(persona_validate)
 
 from bzb.commands.deploy import deploy
 from bzb.commands.status import status
+from bzb.commands.rotate import canary as rotate_canary
+from bzb.commands.rotate import persona_cmd as rotate_persona
+from bzb.commands.teardown import teardown
 
 cli.add_command(deploy)
 cli.add_command(status)
+cli.add_command(teardown)
+
+rotate.add_command(rotate_canary)
+rotate.add_command(rotate_persona, name="persona")
 
 
 if __name__ == "__main__":
