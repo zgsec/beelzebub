@@ -1,0 +1,217 @@
+# =============================================================================
+# LiteLLM proxy lure — BlueSpark Labs (lighthouse-1, port 4000)
+# =============================================================================
+# Mimics ghcr.io/berriai/litellm:main-stable. Probes per services.yaml:
+#   GET /v1/models       → {data, object}, application/json (created is wildcard)
+#   GET /health/liveliness → 200
+#   POST /key/generate   → 200|401|403 (200 with key when auth misconfigured)
+# Plus motivated-actor strict-shape probe on /v1/chat/completions
+# (object="chat.completion") — LLM-backed.
+#
+# DELIBERATE MISCONFIG (story signal): /key/generate is reachable WITHOUT
+# the master-key bearer-token. In real LiteLLM, /key/generate REQUIRES the
+# master key — operators sometimes set general_settings.disable_auth=true
+# during a migration and forget to re-enable. This is the deliberate signal
+# attackers should be able to discover.
+#
+# Persona-aware content via Jinja. Singapore +08:00 throughout.
+# =============================================================================
+apiVersion: "v1"
+protocol: "http"
+address: ":4000"
+description: "LiteLLM proxy"
+serviceType: "litellm"
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+commands:
+  # 1. GET / — LiteLLM root: real returns redirect-style JSON message
+  - regex: "^/$"
+    method: "GET"
+    handler: '{"message":"LiteLLM: RUNNING. Visit /docs for API documentation. Visit /ui for the LiteLLM UI."}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 2. GET /health/liveliness — real liveness probe (200 + literal string body)
+  - regex: "^/health/liveliness$"
+    method: "GET"
+    handler: '"I''m alive!"'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 3. GET /health/readiness — real readiness probe
+  - regex: "^/health/readiness$"
+    method: "GET"
+    handler: '{"status":"healthy","db":"connected","cache":"connected","litellm_version":"1.55.10","success_callbacks":[]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 4. GET /v1/models — STRICT SHAPE: {data, object}.
+  # Lists the BlueSpark in-house aurora-7b. created is wildcard per probe.
+  - regex: "^/v1/models$"
+    method: "GET"
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Litellm-Version: 1.55.10"
+    statusCode: 200
+
+  # 5. GET /models — alias used by some clients
+  - regex: "^/models$"
+    method: "GET"
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 6. POST /key/generate — DELIBERATE MISCONFIG. In real LiteLLM with
+  # general_settings.master_key set, this requires "Authorization: Bearer
+  # sk-${LITELLM_MASTER_KEY}". Here we accept unauthed requests and return
+  # a fake (canary) key. Probe accepts 200|401|403; we return 200 with key.
+  # Captured request body lands in the tracer event. Token in response is
+  # a canary — fires on use.
+  - regex: "^/key/generate$"
+    method: "POST"
+    handler: '{"key":"sk-${LITELLM_CANARY_KEY}","expires":null,"models":["{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}"],"max_budget":10.0,"tpm_limit":null,"rpm_limit":null,"user_id":null,"team_id":null,"key_alias":null,"key_name":"sk-...EXPL","metadata":{"created_via":"/key/generate","ip":"client"}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 7. POST /v1/chat/completions — LLM-backed.
+  # Motivated-actor probe demands {id, object, created, model, choices, usage}
+  # with object="chat.completion".
+  - regex: "^/v1/chat/completions$"
+    method: "POST"
+    plugin: "LLMHoneypot"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Litellm-Model-Id: {{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"
+    statusCode: 200
+
+  # 8. POST /chat/completions — alias
+  - regex: "^/chat/completions$"
+    method: "POST"
+    plugin: "LLMHoneypot"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 9. POST /v1/completions — legacy LLM-backed
+  - regex: "^/v1/completions$"
+    method: "POST"
+    plugin: "LLMHoneypot"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 10. POST /v1/embeddings — static
+  - regex: "^/v1/embeddings$"
+    method: "POST"
+    handler: '{"object":"list","data":[{"object":"embedding","embedding":[0.0142,-0.0087,0.0231,-0.0156,0.0098,-0.0064,0.0205,-0.0133],"index":0}],"model":"text-embedding-ada-002","usage":{"prompt_tokens":5,"total_tokens":5}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 11. GET /metrics — Prometheus
+  - regex: "^/metrics$"
+    method: "GET"
+    handler: |
+      # HELP litellm_requests_total Total LiteLLM requests
+      # TYPE litellm_requests_total counter
+      litellm_requests_total{model="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}",team="{{ persona.lure_content.team_eval | default('eval-harness') }}"} 4218
+      # HELP litellm_total_tokens_total Total tokens processed
+      # TYPE litellm_total_tokens_total counter
+      litellm_total_tokens_total{model="{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}"} 1284731
+      # HELP litellm_request_latency_seconds Request latency in seconds
+      # TYPE litellm_request_latency_seconds histogram
+      litellm_request_latency_seconds_bucket{le="1"} 1843
+      litellm_request_latency_seconds_bucket{le="5"} 4101
+      litellm_request_latency_seconds_bucket{le="+Inf"} 4218
+    headers:
+      - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 12. GET /docs — FastAPI swagger
+  - regex: "^/docs$"
+    method: "GET"
+    handler: '<!DOCTYPE html><html><head><title>LiteLLM API - Swagger UI</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui-bundle.js"></script><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>'
+    headers:
+      - "Content-Type: text/html; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 13. POST /key/info / GET — leakage of which keys exist (admin)
+  - regex: "^/key/info$"
+    handler: '{"key":"sk-...EXPL","info":{"models":["{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}"],"max_budget":10.0,"spend":0.0,"created_at":"2026-05-04T09:14:00.000+08:00","key_alias":null}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 14. Catch-all — LiteLLM 404 shape
+  - regex: ".*"
+    handler: '{"error":{"message":"Not Found","type":"not_found_error","param":null,"code":404}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+
+# === LLM-POWERED COMPLETIONS ===
+# /v1/chat/completions, /chat/completions, /v1/completions route through the
+# LLM. Persona-aware (BlueSpark Singapore, aurora-7b) and misconfig-aware
+# (master-key bypass on /key/generate is currently open per DEV-441).
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  openAISecretKey: ""
+  prompt: |
+    LiteLLM 1.55.10 proxy fronting the {{ persona.lure_content.platform_display_name | default(persona.display_name) }} eval harness (Singapore, Asia/Singapore +08:00). We observe this proxy gates the in-house model {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} for the {{ persona.lure_content.team_eval | default('eval-harness') }} team. Output a single JSON object — nothing else.
+
+    Extract "model" and "messages" (or "prompt") from the Body. Respond as model={{ persona.lure_content.hosted_model_name | default('aurora-7b') }}. Voice is research-y ("we observe", "ablations").
+
+    /v1/chat/completions schema (object MUST be "chat.completion"):
+    {"id":"chatcmpl-RANDOM_8_HEX","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+
+    /v1/completions schema (object MUST be "text_completion"):
+    {"id":"cmpl-RANDOM_8_HEX","object":"text_completion","created":UNIX_TIMESTAMP,"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"text":"YOUR_RESPONSE","finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+
+    Host environment (lighthouse-1):
+      hostname={{ persona.lure_content.node_hostname | default('lighthouse-1') }}.{{ persona.identity.public_domain | default('bluesparkz.dev') }}
+      LITELLM_PORT=4000
+      LITELLM_HOST=0.0.0.0
+      LITELLM_MASTER_KEY=sk-${LITELLM_CANARY_KEY}        # in /etc/litellm/.env, mounted from Vault dev-mode
+      DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASS}@db.{{ persona.identity.internal_domain | default('int.bluesparkz.dev') }}:5432/litellm
+      VLLM_BACKEND=http://localhost:8000  # served-model-name=aurora-7b, no api-key (ops-741)
+      OLLAMA_BACKEND=http://localhost:11434
+      # NOTE (DEV-441 open): /key/generate currently reachable without bearer token after the migration. {{ persona.lure_content.engineer_jian | default('Jian Wei T.') }} flagged this Tue but we are still on the rotation.
+
+    Engineers: {{ persona.lure_content.engineer_priya | default('Priya R.') }} (lead), {{ persona.lure_content.engineer_jian | default('Jian Wei T.') }}, {{ persona.lure_content.engineer_kavi | default('Kavi S.') }}, {{ persona.lure_content.engineer_anand | default('Anand M.') }}.
+    Projects: {{ persona.lure_content.project_lighthouse | default('lighthouse') }}, {{ persona.lure_content.project_vortex | default('vortex') }}, {{ persona.lure_content.project_catalyst | default('catalyst') }}, {{ persona.lure_content.project_aurora | default('aurora') }}.
+  temperature: 0.4
+  maxTokens: 500
+  rateLimitEnabled: true
+  rateLimitRequests: 10
+  rateLimitWindowSeconds: 300
+
+faultInjection:
+  enabled: true
+  errorRate: 0.03
+  delayMs: 0
+  delayJitterMs: 200
+  errorResponses:
+    - '{"error":{"message":"Rate limit reached for model: {{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}.","type":"rate_limit_error","param":null,"code":"429"}}'
+    - '{"error":{"message":"litellm.APIConnectionError: vLLM connection error - upstream socket reset","type":"api_connection_error","param":null,"code":"500"}}'
