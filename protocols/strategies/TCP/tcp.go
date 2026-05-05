@@ -81,7 +81,9 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				// Send banner exactly as configured — no appended newline.
 				// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
 				if servConf.Banner != "" {
-					c.Write([]byte(servConf.Banner))
+					if _, err := c.Write([]byte(servConf.Banner)); err != nil {
+						return
+					}
 				}
 
 				if interactive {
@@ -144,7 +146,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Optional authentication — only if passwordRegex is configured
 	if servConf.PasswordRegex != "" {
-		conn.Write([]byte("Login: "))
+		if _, err := conn.Write([]byte("Login: ")); err != nil {
+			return
+		}
 		var err error
 		username, err = readLine(conn)
 		if err != nil {
@@ -152,7 +156,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		}
 		username = strings.TrimSpace(username)
 
-		conn.Write([]byte("Password: "))
+		if _, err := conn.Write([]byte("Password: ")); err != nil {
+			return
+		}
 		password, err = readLine(conn)
 		if err != nil {
 			return
@@ -177,10 +183,12 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 		matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 		if err != nil || !matched {
-			conn.Write([]byte("Login incorrect\r\n"))
+			_, _ = conn.Write([]byte("Login incorrect\r\n"))
 			return
 		}
-		conn.Write([]byte("\r\n"))
+		if _, err := conn.Write([]byte("\r\n")); err != nil {
+			return
+		}
 	}
 
 	// Session start
