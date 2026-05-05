@@ -1,6 +1,7 @@
 """Renderer — bundle + node id → deterministic output tree."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from bzb.models.bundle import Bundle
@@ -40,3 +41,57 @@ def build_context(bundle: Bundle, node_id: str) -> dict[str, Any]:
         "peers": [p.model_dump(mode="json") for p in peers],
         "canary_values": canary_values,
     }
+
+
+def render_lures(bundle: Bundle, node_id: str, out_dir: Path) -> None:
+    """Render every lure file referenced by the node into out_dir."""
+    from bzb.render.jinja_env import make_env
+
+    node = bundle.nodes[node_id]
+    ctx = build_context(bundle, node_id)
+    env = make_env()
+    for lure_rel in node.lures:
+        src = bundle.root / lure_rel
+        dst = out_dir / lure_rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not src.is_file():
+            raise FileNotFoundError(f"lure not found: {src}")
+        text = src.read_text()
+        rendered = env.from_string(text).render(**ctx)
+        dst.write_text(rendered)
+
+
+def render_env_file(
+    bundle: Bundle,
+    node_id: str,
+    *,
+    aggregator_url: str,
+    aggregator_token: str,
+    sensor_id: str,
+) -> str:
+    """Render the .env file for a node's docker-compose stack."""
+    node = bundle.nodes[node_id]
+    lines: list[str] = []
+
+    # Aggregator + identity
+    lines.append(f"AGGREGATOR_URL={aggregator_url}")
+    lines.append(f"AGGREGATOR_TOKEN={aggregator_token}")
+    lines.append(f"SENSOR_ID={sensor_id}")
+
+    # Persona vars passed through to beelzebub at startup
+    lines.append(f"PERSONA_SLUG={bundle.persona.slug}")
+    lines.append(f"PERSONA_INTERNAL_DOMAIN={bundle.persona.identity.internal_domain}")
+    lines.append(f"PERSONA_PUBLIC_DOMAIN={bundle.persona.identity.public_domain}")
+
+    # Canary slots — only emit slots with an active token_id
+    for slot_name in node.canary_slots:
+        slot = bundle.canaries.slots[slot_name]
+        if slot.token_id:
+            lines.append(f"{slot_name}={slot.token_id}")
+
+    # Node-level env_overrides
+    for k, v in sorted(node.env_overrides.items()):
+        lines.append(f"{k}={v}")
+
+    lines.append("")  # trailing newline
+    return "\n".join(lines)
