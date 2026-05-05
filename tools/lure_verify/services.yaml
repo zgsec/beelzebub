@@ -1,0 +1,107 @@
+# Probe definitions per service. Each entry pins a real upstream image
+# we'll run locally and a list of probes to compare structurally.
+schema_version: 1
+services:
+  litellm:
+    real_image: "ghcr.io/berriai/litellm:main-stable"
+    real_port: 4000
+    real_env:
+      - "LITELLM_MASTER_KEY=sk-1234"
+      - "STORE_MODEL_IN_DB=False"
+    real_command: ["--config", "/app/config.yaml"]
+    real_config: |
+      model_list:
+        - model_name: "aurora-7b"
+          litellm_params:
+            model: "ollama/llama2"
+            api_base: "http://localhost:99999"
+    lure_yaml: null  # populated by G.1 — points at the persona-bundle lure
+    probes:
+      - name: "models-list"
+        method: GET
+        path: /v1/models
+        expect_status: 200
+        expect_content_type_contains: application/json
+        expect_keys: [data, object]
+        wildcard_paths: [created]
+      - name: "health"
+        method: GET
+        path: /health/liveliness
+        expect_status: 200
+      - name: "key-gen-no-auth"
+        method: POST
+        path: /key/generate
+        body: '{"models": ["aurora-7b"], "max_budget": 10}'
+        expect_status_in: [200, 401, 403]
+        notes: "When auth misconfigured (signup story), 200 with key returned."
+  vllm:
+    real_image: "vllm/vllm-openai:v0.6.4.post1"
+    real_port: 8000
+    real_command: ["--model", "facebook/opt-125m", "--max-model-len", "256"]
+    lure_yaml: null
+    probes:
+      - name: "models-list"
+        method: GET
+        path: /v1/models
+        expect_status: 200
+        expect_content_type_contains: application/json
+        expect_keys: [data, object]
+      - name: "version-header"
+        method: GET
+        path: /version
+        expect_status: 200
+        expect_response_headers_present: [x-vllm-version]
+  ollama:
+    real_image: "ollama/ollama:0.6.5"
+    real_port: 11434
+    lure_yaml: null
+    probes:
+      - name: "tags"
+        method: GET
+        path: /api/tags
+        expect_status: 200
+        expect_keys_only: [models]
+        forbidden_keys: [role, content, total_duration, prompt_eval_duration]
+        # ↑ this is the AS63949 detection signature — we MUST NOT mix endpoints.
+        notes: "Real Ollama /api/tags returns ONLY {models: [...]}. Mixing in chat fields is the AS63949 fleet's tell."
+      - name: "version"
+        method: GET
+        path: /api/version
+        expect_status: 200
+        expect_keys: [version]
+  openwebui:
+    real_image: "ghcr.io/open-webui/open-webui:0.6.x"  # adjust to a known-good tag
+    real_port: 8080
+    real_env:
+      - "WEBUI_AUTH=True"
+      - "ENABLE_SIGNUP=True"
+    lure_yaml: null
+    probes:
+      - name: "root-html"
+        method: GET
+        path: /
+        expect_status: 200
+        expect_content_type_contains: text/html
+        expect_body_contains: ["<title>", "Open WebUI"]
+      - name: "auth-signup-endpoint"
+        method: POST
+        path: /api/v1/auths/signup
+        body: '{"name": "test", "email": "test@test", "password": "test"}'
+        expect_status_in: [200, 400, 401, 422]
+  docker_socket:
+    real_image: "docker:24-dind"
+    real_port: 2375
+    real_command: ["--host=tcp://0.0.0.0:2375"]
+    real_privileged: true
+    lure_yaml: null
+    probes:
+      - name: "version"
+        method: GET
+        path: /v1.43/version
+        expect_status: 200
+        expect_keys: [Version, ApiVersion, Os, Arch]
+      - name: "info"
+        method: GET
+        path: /v1.43/info
+        expect_status: 200
+        expect_keys: [ID, Containers, Images, Architecture, OperatingSystem]
