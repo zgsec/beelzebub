@@ -1,0 +1,5 @@
+schema_version: 1
+persona: globex-industries
+operator: ""
+default_status: planned
+slots: {}

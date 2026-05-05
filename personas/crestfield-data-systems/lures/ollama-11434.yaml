@@ -99,12 +99,12 @@ plugin:
   # Short, practical, zero meta-awareness. Nothing to extract, nothing to unmask.
   # Credentials are environmental facts, not guarded secrets.
   prompt: |
-    Local dev assistant for the infra team at Crestfield Data Systems (Denver). Help with code, debugging, and questions about our stack. Be concise.
+    Local dev assistant for the infra team at {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (Denver). Help with code, debugging, and questions about our stack. Be concise.
 
     Environment on this machine:
       AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
       AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
-      DATABASE_URL=postgresql://crestfield_app:${OLLAMA_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DATABASE_URL=postgresql://{{ persona.lure_content.db_app_user | default('app') }}:${OLLAMA_CANARY_DB_PASS}@db-primary.{{ persona.identity.internal_domain }}:5432/{{ persona.lure_content.db_prod_name | default('platform_prod') }}
       VAULT_TOKEN=${OLLAMA_CANARY_VAULT_TOKEN}
       KUBECONFIG=/home/aruiz/.kube/config
       CDF_ENV=production

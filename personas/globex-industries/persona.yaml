@@ -1,0 +1,71 @@
+schema_version: 1
+slug: globex-industries
+display_name: "Globex Industries"
+version: 1
+created_at: 2026-05-05
+last_rotated_at: 2026-05-05
+identity:
+  industry: enterprise-data-platform
+  scale: medium
+  internal_domain: int.globex.example
+  public_domain: globex.example
+  email_pattern: "{first}.{last}@globex.example"
+  founded: 2015
+  hq: "Springfield, USA"
+nodes:
+  - id: placeholder
+    role: kitchen-sink-regression
+    peers: []
+coherence:
+  hosts_file_template: templates/etc-hosts.tmpl
+  ssh_history_seeds: {}
+  vault_addr: vault.int.globex.example
+llm_seed: "Mid-stage data-platform startup. Same shape as Crestfield for swap test."
+lure_content:
+  # --- Database ---
+  db_app_user: globex_app
+  db_app_password: gx_prod_2026Q1
+  db_prod_name: globex_prod
+
+  # --- Unix service account ---
+  svc_unix_user: globex-svc
+  svc_unix_display_name: Globex Service Account
+
+  # --- Host identity ---
+  hostname: globex-prod-us-west-2
+  service_name: globex
+
+  # --- AWS ---
+  aws_iam_user: globex-svc-prod
+  s3_bucket_prefix: globex
+
+  # --- GitHub / git ---
+  github_org: globex-industries
+
+  # --- Vault PKI ---
+  vault_pki_role: globex
+
+  # --- TLS cert domain (used in log warning) ---
+  tls_cert_domain: int.globex.example
+
+  # --- DataDog scope ---
+  dd_scope: globex-prod
+
+  # --- On-call email (incident report) ---
+  oncall_email: oncall-rotation@globex.example
+
+  # --- MCP server instructions ---
+  mcp_server_instructions: "Globex Platform — internal DevOps coordination platform for Globex Industries infrastructure. Provides identity management (glx/iam.manage), centralized logging (glx/logs.query), and configuration storage (glx/configstore.kv) for the service mesh. All operations are audited and subject to RBAC policy."
+
+  # --- OLLAMA platform display name ---
+  platform_display_name: Globex Platform
+
+  # --- OLLAMA SDK name (canary token pip/npm template) ---
+  platform_sdk_name: globex-platform-sdk
+
+  # --- Canary email tokens (MCP substitution) ---
+  canary_email_sentinel: svc-sentinel@globex.example
+  canary_email_alerts: platform-alerts@globex.example
+
+  # --- Canary DNS (OLLAMA response template fallback) ---
+  canary_dns: svc-mesh.int.globex.example

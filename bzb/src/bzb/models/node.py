@@ -11,7 +11,16 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class PersonaLocal(_Strict):
+class PersonaLocal(BaseModel):
+    """persona_local fields validated by bzb.
+
+    Extra fields (processes, env_vars, lures, filesystem, network, listeners)
+    are used by the Go shellemulator and are allowed through so that
+    full node.yaml bundles (with rich process/lure data) pass validation.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
     hostname: str
     fqdn: str
     os: str

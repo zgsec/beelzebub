@@ -24,11 +24,19 @@ services:
       - "18888:8888"    # HTTP
       - "11434:11434"   # Ollama (no remap; rare on dev VMs)
     volumes:
-      - ../configurations:/configurations:ro
+      # PERSONA_STAGE_DIR: set to the output of tools/stage_persona_configs.py
+      # when running persona-swappability tests. Defaults to the raw Jinja
+      # template tree for backward-compat (service configs load but persona vars
+      # won't be substituted without a rendered bundle).
+      - ${PERSONA_STAGE_DIR:-../configurations}:/configurations:ro
     tmpfs:
       - /var/log/beelzebub
     environment:
       - OPEN_AI_SECRET_KEY=${OPEN_AI_SECRET_KEY:-}
+      # PERSONA_DIR: set to /configurations/persona when using a staged persona bundle
+      # (tools/stage_persona_configs.py puts persona.yaml there). Default is empty
+      # which causes beelzebub to fall back to reading persona.yaml from confServices dir.
+      - PERSONA_DIR=${PERSONA_DIR:-/configurations/persona}
       # Canary placeholder values — safe non-functional tokens for local baseline capture
       - CANARY_SSH_API_KEY=BASELINE_PLACEHOLDER
       - CANARY_SSH_AWS_KEY=BASELINE_PLACEHOLDER

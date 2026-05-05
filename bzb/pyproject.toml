@@ -32,3 +32,8 @@ bzb = [
     "templates/persona-skeleton/**/.gitkeep",
     "templates/sensor-compose.yml.j2",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "regression: operator-run regression tests requiring a live beelzebub stack (skipped in CI unless env vars are set)",
+]

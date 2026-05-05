@@ -67,3 +67,18 @@ personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:212
 personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:401
 personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:768
 personas/crestfield-data-systems/lures/openai-8001.yaml:generic-api-key:845
+
+# Persona bundle lure archives — Globex Industries deception credentials (all fake/honeypot)
+# Same Jinja templates as Crestfield; identical line numbers, different rendered values.
+personas/globex-industries/persona.yaml:generic-api-key:27
+personas/globex-industries/lures/http-8888.yaml:jwt:93
+personas/globex-industries/lures/http-8888.yaml:generic-api-key:348
+personas/globex-industries/lures/http-8888.yaml:generic-api-key:409
+personas/globex-industries/lures/openai-8001.yaml:private-key:410
+personas/globex-industries/lures/openai-8001.yaml:generic-api-key:410
+personas/globex-industries/lures/openai-8001.yaml:generic-api-key:212
+personas/globex-industries/lures/openai-8001.yaml:private-key:447
+personas/globex-industries/lures/openai-8001.yaml:private-key:845
+personas/globex-industries/lures/openai-8001.yaml:generic-api-key:401
+personas/globex-industries/lures/openai-8001.yaml:generic-api-key:768
+personas/globex-industries/lures/openai-8001.yaml:generic-api-key:845
