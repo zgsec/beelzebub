@@ -13,19 +13,12 @@ Produces /tmp/staged-configs/ with:
     persona.yaml            (from render-out/persona/persona.yaml)
     canaries.yaml           (from render-out/persona/canaries.yaml)
   services/
-    # persona-bearing lures — Jinja-rendered, Crestfield/Globex content substituted:
-    mcp-8000.yaml           (from render-out/persona/lures/)
-    http-8888.yaml          (from render-out/persona/lures/)
-    ollama-11434.yaml       (from render-out/persona/lures/)
-    openai-8001.yaml        (from render-out/persona/lures/)
-    # non-persona service configs — unchanged from configs-src/services/:
-    influxdb-8086.yaml
-    openclaw-18789.yaml
-    screenconnect-8042.yaml
-    ssh-2222.yaml
-    ssh-22.yaml
-    tcp-mysql-3306.yaml
-    tcp-redis-6379.yaml
+    # persona-bearing lures — every *.yaml under render-out/persona/lures/
+    # is treated as a Jinja-rendered lure and copied here. Filenames are
+    # discovered at stage time, so any persona's lure set works (Crestfield's
+    # 4 lures, BlueSpark's 5, etc.).
+    # non-persona service configs — copied unchanged from configs-src/services/,
+    # SKIPPING any filename that already came from a rendered persona lure.
 
 Beelzebub startup with the staged tree uses PERSONA_DIR to find persona.yaml:
     /main -confCore /configurations/beelzebub.yaml \\
@@ -44,14 +37,18 @@ import argparse
 import shutil
 from pathlib import Path
 
-# Lure files that are persona-bearing (Jinja-rendered per persona bundle).
-# All others are taken unchanged from configurations/services/.
-PERSONA_LURES = {
-    "mcp-8000.yaml",
-    "http-8888.yaml",
-    "ollama-11434.yaml",
-    "openai-8001.yaml",
-}
+
+def _discover_persona_lures(lures_dir: Path) -> list[Path]:
+    """Return every *.yaml under render-out/persona/lures/ as a persona-bearing lure.
+
+    PLACEHOLDER files (the bundle skeleton's marker file) are tolerated only
+    when they don't have a .yaml extension; if a persona ever ships a yaml
+    literally named PLACEHOLDER.yaml we still accept it (no path is hardcoded
+    to a specific persona).
+    """
+    if not lures_dir.is_dir():
+        return []
+    return sorted(p for p in lures_dir.glob("*.yaml") if p.is_file())
 
 
 def stage(render_out: Path, configs_src: Path, staged: Path) -> None:
@@ -81,22 +78,27 @@ def stage(render_out: Path, configs_src: Path, staged: Path) -> None:
     services = staged / "services"
     services.mkdir()
 
-    # Rendered persona-bearing lures → /configurations/services/
+    # Rendered persona-bearing lures → /configurations/services/.
+    # Discover by globbing the rendered lures dir so any persona's lure set
+    # works without code changes (Crestfield: 4, BlueSpark: 5, etc.).
     lures_dir = persona_src_dir / "lures"
-    for lure_name in PERSONA_LURES:
-        src = lures_dir / lure_name
-        if src.exists():
-            shutil.copy2(src, services / lure_name)
-        else:
-            raise FileNotFoundError(
-                f"Rendered lure not found: {src}\n"
-                f"Run `bzb persona render` first."
-            )
+    persona_lure_names: set[str] = set()
+    for lure_path in _discover_persona_lures(lures_dir):
+        shutil.copy2(lure_path, services / lure_path.name)
+        persona_lure_names.add(lure_path.name)
 
-    # Non-persona service configs → /configurations/services/
+    if not persona_lure_names:
+        raise FileNotFoundError(
+            f"No rendered lures found in {lures_dir}.\n"
+            f"Run `bzb persona render` first, or check that the persona's "
+            f"node.yaml lists at least one lure under `lures:`."
+        )
+
+    # Non-persona service configs → /configurations/services/.
+    # Skip any filename already copied from the persona's rendered lures.
     src_services = configs_src / "services"
     for yaml_file in src_services.glob("*.yaml"):
-        if yaml_file.name not in PERSONA_LURES:
+        if yaml_file.name not in persona_lure_names:
             shutil.copy2(yaml_file, services / yaml_file.name)
 
     print(f"Staged configuration tree at: {staged}")
@@ -105,7 +107,8 @@ def stage(render_out: Path, configs_src: Path, staged: Path) -> None:
     print(f"    persona.yaml")
     print(f"  services/:        {services}")
     for f in sorted(services.iterdir()):
-        print(f"    {f.name}")
+        marker = "  (persona lure)" if f.name in persona_lure_names else ""
+        print(f"    {f.name}{marker}")
 
 
 def main() -> None:
