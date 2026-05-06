@@ -24,6 +24,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 )
 
@@ -173,6 +174,11 @@ func ollamaLLMFallback(fb *parser.LLMFallback, model string) (int, string) {
 	if fb.Body != "" {
 		body = fb.Body
 	}
+	// Apply ${request.*} placeholder substitution so YAML-authored
+	// llmFallback bodies can carry e.g. "${request.uuid_short}" without
+	// the literal template string landing on the wire. OLLAMA does not
+	// expose a stateful session context; only request-level vars fire.
+	body, _ = responsesubs.Apply(body, nil, nil)
 	return status, body
 }
 

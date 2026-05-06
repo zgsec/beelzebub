@@ -18,6 +18,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 )
 
@@ -245,7 +246,12 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				telnetStrategy.Sessions.Append(sessionKey, newEntries...)
 				histories = append(histories, newEntries...)
 
-				// Send response to client
+				// Send response to client. Apply ${request.*} placeholder
+				// substitution so YAML lures get a fresh per-call UUID /
+				// timestamp instead of literal "${request.uuid_short}"
+				// strings on the wire. TELNET has no header concept and no
+				// stateful session context — sessionVars=nil, headers=nil.
+				commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil)
 				_, err := conn.Write([]byte(commandOutput + "\r\n"))
 				if err != nil {
 					break

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 
 	"github.com/google/uuid"
@@ -747,7 +747,9 @@ func mapCookiesToString(cookies []*http.Cookie) string {
 }
 
 // applyResponseSubstitutions rewrites ${...} placeholders in resp.Body and
-// every entry of resp.Headers.
+// every entry of resp.Headers. Thin wrapper around responsesubs.Apply that
+// adapts the per-request HTTP sessionContext into the shared package's
+// sessionVars map.
 //
 // Request-level vars (${request.*}) are always populated — every response
 // gets a fresh per-request UUID + timestamp so headers like X-Request-Id
@@ -758,33 +760,27 @@ func mapCookiesToString(cookies []*http.Cookie) string {
 // session exists. session.cookie / session.short are not HTML-escaped
 // because the cookie is strictly hex ([0-9a-f], 64 chars) from
 // historystore's crypto/rand + hex.EncodeToString. Captured values come
-// from attacker request bodies and ARE escaped.
+// from attacker request bodies and ARE escaped (responsesubs.Apply).
+//
+// The function is kept as a method on (*httpResponse) for backwards
+// compat with the existing HTTP test suite; the actual substitution
+// logic now lives in protocols/strategies/responsesubs so MCP / OLLAMA
+// / TCP / TELNET share it.
 func applyResponseSubstitutions(resp *httpResponse, sctx *sessionContext) {
-	reqUUID := uuid.New().String()
-	reqUUIDShort := strings.ReplaceAll(reqUUID, "-", "")[:8]
-	pairs := []string{
-		"${request.uuid}", reqUUID,
-		"${request.uuid_short}", reqUUIDShort,
-		"${request.unix_ms}", fmt.Sprintf("%d", time.Now().UnixMilli()),
-	}
+	var sessionVars map[string]string
 	if sctx != nil && sctx.sess != nil {
+		sessionVars = make(map[string]string, 2+len(sctx.sess.Captured))
 		short := sctx.sess.Cookie
 		if len(short) > 8 {
 			short = short[:8]
 		}
-		pairs = append(pairs,
-			"${session.cookie}", sctx.sess.Cookie,
-			"${session.short}", short,
-		)
+		sessionVars["cookie"] = sctx.sess.Cookie
+		sessionVars["short"] = short
 		for k, v := range sctx.sess.Captured {
-			pairs = append(pairs, "${captured."+k+"}", html.EscapeString(v))
+			sessionVars["capt:"+k] = v
 		}
 	}
-	replacer := strings.NewReplacer(pairs...)
-	resp.Body = replacer.Replace(resp.Body)
-	for i, h := range resp.Headers {
-		resp.Headers[i] = replacer.Replace(h)
-	}
+	resp.Body, resp.Headers = responsesubs.Apply(resp.Body, resp.Headers, sessionVars)
 }
 
 func setResponseHeaders(responseWriter http.ResponseWriter, headers []string, statusCode int) {

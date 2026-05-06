@@ -15,6 +15,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 
 	"github.com/google/uuid"
@@ -80,8 +81,12 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 				// Send banner exactly as configured — no appended newline.
 				// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
+				// ${request.*} placeholders authored in YAML are substituted per-connection
+				// so banners can carry e.g. "${request.uuid_short}" without leaking a
+				// fleet-identical string across sensors.
 				if servConf.Banner != "" {
-					if _, err := c.Write([]byte(servConf.Banner)); err != nil {
+					banner, _ := responsesubs.Apply(servConf.Banner, nil, nil)
+					if _, err := c.Write([]byte(banner)); err != nil {
 						return
 					}
 				}
@@ -221,9 +226,12 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Interactive command loop
 	for {
-		// Display prompt if serverName is set
+		// Display prompt if serverName is set. Substitute ${request.*}
+		// placeholders so prompts can carry per-call UUIDs without
+		// leaking a fleet-identical literal.
 		if servConf.ServerName != "" {
-			if _, err := conn.Write([]byte(servConf.ServerName)); err != nil {
+			prompt, _ := responsesubs.Apply(servConf.ServerName, nil, nil)
+			if _, err := conn.Write([]byte(prompt)); err != nil {
 				break
 			}
 		}
@@ -328,6 +336,13 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		// wire-protocol lures (Redis RESP2, etc.) can emit schema-correct
 		// bytes from plain YAML authors. Default (empty format) keeps the
 		// legacy behavior: append "\r\n" to handler string.
+		//
+		// Apply ${request.*} placeholders so YAML lures get a fresh
+		// per-request UUID / timestamp on the wire instead of literal
+		// template strings. TCP has no header concept and no stateful
+		// session context, so headers=nil and sessionVars=nil. This is a
+		// no-op for plaintext lures that don't author placeholders.
+		commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil)
 		wireBytes := encodeReply(matchedCommand, commandOutput)
 		if len(wireBytes) > 0 {
 			if _, err := conn.Write(wireBytes); err != nil {

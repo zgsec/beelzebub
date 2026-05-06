@@ -22,6 +22,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -1113,8 +1114,15 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	}
 	tr.TraceEvent(event)
 
-	// Write response
-	for _, h := range matchedCommand.Headers {
+	// Write response. Apply ${request.*} (and any future ${session.*})
+	// placeholder substitution before emitting bytes so YAML lures stay
+	// wire-compatible whether the request lands on the HTTP strategy or
+	// here on the MCP HTTP-fallback path. MCP does not yet expose a
+	// stateful per-request session context, so sessionVars=nil — only
+	// request-level vars fire. Substitution is non-mutating; the parser
+	// command pointer is shared across requests.
+	body, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil)
+	for _, h := range headers {
 		parts := strings.SplitN(h, ":", 2)
 		if len(parts) == 2 {
 			w.Header().Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
@@ -1123,7 +1131,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	if matchedCommand.StatusCode > 0 {
 		w.WriteHeader(matchedCommand.StatusCode)
 	}
-	fmt.Fprint(w, matchedCommand.Handler)
+	fmt.Fprint(w, body)
 }
 
 // defaultMCPRequestBodyMaxBytes is applied when CaptureRequestBody=true but
