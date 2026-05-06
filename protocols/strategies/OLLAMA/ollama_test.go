@@ -785,12 +785,14 @@ func TestHandleTags_ModifiedAtIsRFC3339AndRecent(t *testing.T) {
 		parsed[i] = t1
 	}
 
-	// (b) every modified_at falls within the last 90 days of now
-	ninetyDays := 90 * 24 * time.Hour
+	// (b) every modified_at falls within the last 6 days of now (the
+	// staleness window the lure-shape verifier and real-fleet behavior
+	// both expect for an active eval-harness host).
+	sixDays := 6 * 24 * time.Hour
 	for i, p := range parsed {
 		age := now.Sub(p)
-		if age < 0 || age > ninetyDays+time.Hour /* slack for test runtime */ {
-			t.Errorf("model %d modified_at %s out of range [now-90d, now]: age=%v",
+		if age < 0 || age > sixDays+time.Hour /* slack for test runtime */ {
+			t.Errorf("model %d modified_at %s out of range [now-6d, now]: age=%v",
 				i, first[i], age)
 		}
 	}

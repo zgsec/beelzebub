@@ -56,6 +56,11 @@ PERSONA_STUB = {
         "founded": 2024,
         "hq": "Singapore",
     },
+    "coherence": {
+        # IANA timezone — drives all emitted timestamps. Matches the Go
+        # runtime's PersonaCoherence.Timezone field added in G.1.b.
+        "timezone": "Asia/Singapore",
+    },
     "lure_content": {
         "platform_display_name": "BlueSpark Labs",
         "hosted_model_name": "aurora-7b",
@@ -141,12 +146,108 @@ def _command_match(cmd: dict, probe: Probe) -> bool:
     return True
 
 
+def _ollama_modified_at_stub(slug: str, model_name: str, tz: str) -> str:
+    """Mirror protocols/strategies/OLLAMA/ollama.go:modelModifiedAt for
+    static-check simulation. Deterministic sha256(slug+'/'+model_name) seeded
+    offset within last 90 days, formatted RFC3339Nano in the persona's TZ.
+
+    Note: the real Go implementation ALWAYS uses the active runtime time.
+    For static-check, we just need *a* recent timestamp in the right TZ;
+    the static probe only checks shape/key set, not exact value."""
+    import datetime
+    import zoneinfo
+    h = hashlib.sha256(f"{slug}/{model_name}".encode()).digest()
+    raw = int.from_bytes(h[:8], "big")
+    # Window mirrors protocols/strategies/OLLAMA/ollama.go:modelModifiedAt.
+    six_days_ns = 6 * 24 * 3600 * 1_000_000_000
+    offset_ns = raw % six_days_ns
+    try:
+        loc = zoneinfo.ZoneInfo(tz) if tz else datetime.timezone.utc
+    except Exception:
+        loc = datetime.timezone.utc
+    now = datetime.datetime.now(loc)
+    t = now - datetime.timedelta(microseconds=offset_ns / 1000)
+    return t.isoformat(timespec="microseconds")
+
+
+def simulate_ollama(lure: dict, probe: Probe, ctx: dict) -> tuple[int, dict, bytes]:
+    """Synthesize the response the OLLAMA strategy in
+    protocols/strategies/OLLAMA/ollama.go would emit for a given probe path.
+    Used when lure.protocol == 'ollama' (no commands: block to walk)."""
+    cfg = lure.get("ollamaConfig", {})
+    models = cfg.get("models", []) or []
+    version = cfg.get("version", "0.6.5")
+    slug = ctx.get("slug", "")
+    # G.1.b: persona timezone drives all emitted timestamps. The static stub
+    # falls back to UTC when the persona context lacks a tz (matches the Go
+    # runtime's UTC fallback).
+    tz = (ctx.get("coherence", {}) or {}).get("timezone", "")
+
+    headers = {"Content-Type": "application/json"}
+    if probe.path == "/" and probe.method.upper() == "GET":
+        return 200, {"Content-Type": "text/plain; charset=utf-8"}, b"Ollama is running"
+    if probe.path == "/api/version" and probe.method.upper() == "GET":
+        return 200, headers, json.dumps({"version": version}).encode()
+    if probe.path == "/api/tags" and probe.method.upper() == "GET":
+        body_models = []
+        for m in models:
+            entry = {
+                "name": m["name"],
+                "model": m["name"],
+                "modified_at": _ollama_modified_at_stub(slug, m["name"], tz),
+                "size": 0,
+                "digest": hashlib.sha256(m["name"].encode()).hexdigest(),
+                "details": {
+                    "parent_model": "",
+                    "format": "gguf",
+                    "family": m.get("family", ""),
+                    "families": [m.get("family", "")],
+                    "parameter_size": m.get("parameterSize", ""),
+                    "quantization_level": m.get("quantizationLevel", ""),
+                },
+            }
+            body_models.append(entry)
+        return 200, headers, json.dumps({"models": body_models}).encode()
+    if probe.path == "/api/ps" and probe.method.upper() == "GET":
+        # Real Ollama returns empty list pre-warmup
+        return 200, headers, json.dumps({"models": []}).encode()
+    # /api/show, /api/embed, /api/chat etc. — placeholder shapes, sufficient
+    # for the existing strict-shape probes. Extend as needed when probe set
+    # grows.
+    if probe.path == "/api/show" and probe.method.upper() == "POST":
+        return 200, headers, json.dumps({
+            "license": "Apache 2.0",
+            "modelfile": "FROM aurora-7b:latest",
+            "parameters": "stop \"<|user|>\"",
+            "template": "{{ .Prompt }}",
+            "details": {
+                "parent_model": "",
+                "format": "gguf",
+                "family": "llama",
+                "families": ["llama"],
+                "parameter_size": "7.0B",
+                "quantization_level": "Q4_K_M",
+            },
+            "model_info": {"general.architecture": "llama"},
+        }).encode()
+    return 0, {}, b""
+
+
 def simulate(lure: dict, probe: Probe, ctx: dict) -> tuple[int, dict, bytes]:
     """Walk lure.commands in order, return (status, headers, body) for the
     first matching command. Plugin commands (LLM-backed) are simulated with
     a placeholder OpenAI-shape body so static checks can validate the
     declared headers/status, but the LLM content itself isn't synthesizable
-    here — flag clearly via a probe-side waiver."""
+    here — flag clearly via a probe-side waiver.
+
+    When lure.protocol == 'ollama', responses for the standard endpoints
+    are synthesized from ollamaConfig.models because the OLLAMA strategy
+    handles those routes natively (no commands: block to walk)."""
+    if lure.get("protocol") == "ollama":
+        rv = simulate_ollama(lure, probe, ctx)
+        if rv[0] != 0:
+            return rv
+        # fall through to commands[] for any custom routes (e.g. catch-all)
     for cmd in lure.get("commands", []):
         if not _command_match(cmd, probe):
             continue

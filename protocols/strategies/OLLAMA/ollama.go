@@ -692,10 +692,15 @@ func (s *OllamaStrategy) personaLocation() *time.Location {
 // model file's disk mtime, so a honeypot that ships hardcoded build-time
 // strings is a textbook AS63949-style detection signal (uniform-and-stale
 // timestamps across all models). Instead, we seed each model's apparent
-// mtime as `now - hash(slug + model_name) % 90d`. Two consecutive requests
+// mtime as `now - hash(slug + model_name) % 6d`. Two consecutive requests
 // for the same model in the same minute return the same wall-clock value
 // (modulo sub-second drift); two different models return different values
 // within the same response, all sharing the persona's TZ offset.
+//
+// Window is 6 days: an active eval-harness host pulls / refreshes models
+// frequently enough that any visible mtime should be within the last week.
+// Anything older trips lure-shape verifier staleness checks AND the
+// real-fleet behavior we mimic (research clusters rotate model snapshots).
 //
 // The output is formatted with RFC3339Nano in the persona's configured
 // timezone. That matches the wire format real Ollama emits (e.g.
@@ -706,14 +711,14 @@ func (s *OllamaStrategy) modelModifiedAt(modelName string) string {
 	slug := s.personaOrEmpty().Slug
 	seed := slug + "/" + modelName
 	sum := sha256.Sum256([]byte(seed))
-	// Use the first 8 bytes as an unsigned int → range 0..2^64-1, modulo 90d
-	// of nanoseconds. 90d * 24h * 3600s * 1e9 ns ≈ 7.776e15, fits easily.
-	const ninetyDaysNs uint64 = 90 * 24 * 60 * 60 * 1_000_000_000
+	// First 8 bytes as unsigned int, modulo 6d of nanoseconds.
+	// 6d * 24h * 3600s * 1e9 ns ≈ 5.184e14 — fits comfortably.
+	const sixDaysNs uint64 = 6 * 24 * 60 * 60 * 1_000_000_000
 	var raw uint64
 	for i := 0; i < 8; i++ {
 		raw = raw<<8 | uint64(sum[i])
 	}
-	offsetNs := raw % ninetyDaysNs
+	offsetNs := raw % sixDaysNs
 	t := time.Now().Add(-time.Duration(offsetNs)).In(loc)
 	return t.Format(time.RFC3339Nano)
 }
