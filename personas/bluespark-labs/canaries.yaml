@@ -78,7 +78,7 @@ slots:
     owner: ""
     rotation_cohort: bluespark-q2
     consumed_by:
-      - lure: lures/openwebui-8888.yaml
+      - lure: lures/openwebui-8080.yaml
         rendering: "token field in POST /api/v1/auths/signup response body."
 
   WANDB_CANARY_KEY:

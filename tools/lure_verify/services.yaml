@@ -75,7 +75,7 @@ services:
     real_env:
       - "WEBUI_AUTH=True"
       - "ENABLE_SIGNUP=True"
-    lure_yaml: personas/bluespark-labs/lures/openwebui-8888.yaml  # G.1
+    lure_yaml: personas/bluespark-labs/lures/openwebui-8080.yaml  # G.1
     probes:
       - name: "root-html"
         method: GET

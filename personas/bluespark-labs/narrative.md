@@ -23,7 +23,7 @@ The host carries three deliberate operator-class misconfigs that we have not
 re-tightened. (1) The LiteLLM proxy on :4000 has its master-key bearer-auth
 disabled while we migrate to a new key-management story (`DEV-441`); the
 `/key/generate` endpoint is currently reachable without authentication.
-(2) Open WebUI on :8888 is configured with `ENABLE_SIGNUP=True` from the
+(2) Open WebUI on :8080 is configured with `ENABLE_SIGNUP=True` from the
 late-April onboarding sprint when Priya recruited the two new researchers,
 and signup has not been re-closed. (3) The Docker daemon is bound to TCP 2375
 on `0.0.0.0` for the in-cluster build agent — we know this should be tightened

@@ -1,5 +1,5 @@
 # =============================================================================
-# Open WebUI 0.6.x lure — persona-driven (lighthouse-1, port 8888)
+# Open WebUI 0.6.x lure — persona-driven (lighthouse-1, port 8080)
 # =============================================================================
 # Mimics ghcr.io/open-webui/open-webui:0.6.x with WEBUI_AUTH=True and the
 # DELIBERATE MISCONFIG: ENABLE_SIGNUP=True. Probes per services.yaml:
@@ -16,7 +16,7 @@
 # =============================================================================
 apiVersion: "v1"
 protocol: "http"
-address: ":8888"
+address: ":8080"
 description: "Open WebUI AI chat interface"
 serviceType: "openwebui"
 captureResponseBody: true

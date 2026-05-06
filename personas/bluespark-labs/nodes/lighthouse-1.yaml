@@ -27,7 +27,7 @@ persona_local:
     - {pid: 2118, user: jwt,      cpu: "1.7", mem: "3.4", vsz: "2.1G", rss: "138M", cmd: "/opt/eval-harness/venv/bin/uvicorn litellm.proxy.proxy_server:app --host 0.0.0.0 --port 4000",                  stat: "Ssl", time: "0:42"}
     - {pid: 2241, user: jwt,      cpu: "8.2", mem: "31.2",vsz: "26G",  rss: "9.8G", cmd: "python -m vllm.entrypoints.openai.api_server --model facebook/opt-125m --served-model-name aurora-7b --host 0.0.0.0 --port 8000", stat: "Ssl", time: "12:17"}
     - {pid: 2289, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "248M", rss: "11M",  cmd: "ray::IDLE",                                                                                                    stat: "Sl",  time: "0:04"}
-    - {pid: 2412, user: jwt,      cpu: "0.6", mem: "1.2", vsz: "812M", rss: "48M",  cmd: "/usr/bin/python3 -m open_webui.main --host 0.0.0.0 --port 8888",                                                stat: "Ssl", time: "0:23"}
+    - {pid: 2412, user: jwt,      cpu: "0.6", mem: "1.2", vsz: "812M", rss: "48M",  cmd: "/usr/bin/python3 -m open_webui.main --host 0.0.0.0 --port 8080",                                                stat: "Ssl", time: "0:23"}
     - {pid: 2418, user: jwt,      cpu: "0.0", mem: "0.3", vsz: "194M", rss: "12M",  cmd: "node /opt/open-webui/backend/static/_app/server.js",                                                            stat: "Sl",  time: "0:02"}
     - {pid: 3104, user: root,     cpu: "0.0", mem: "0.1", vsz: "16M",  rss: "6M",   cmd: "sshd: jwt [priv]",                                                                                             stat: "Ss",  time: "0:00"}
     - {pid: 3107, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "16M",  rss: "6M",   cmd: "sshd: jwt@pts/0",                                                                                              stat: "S",   time: "0:00"}
@@ -236,14 +236,14 @@ persona_local:
     - {proto: tcp,  local: "0.0.0.0:2375",   pid: 854,  program: dockerd}
     - {proto: tcp,  local: "0.0.0.0:4000",   pid: 2118, program: uvicorn}
     - {proto: tcp,  local: "0.0.0.0:8000",   pid: 2241, program: python}
-    - {proto: tcp,  local: "0.0.0.0:8888",   pid: 2412, program: python}
+    - {proto: tcp,  local: "0.0.0.0:8080",   pid: 2412, program: python}
     - {proto: tcp,  local: "0.0.0.0:11434",  pid: 1483, program: ollama}
     - {proto: tcp6, local: ":::22",          pid: 591,  program: sshd}
 lures:
   - lures/litellm-4000.yaml
   - lures/vllm-8000.yaml
   - lures/ollama-11434.yaml
-  - lures/openwebui-8888.yaml
+  - lures/openwebui-8080.yaml
   - lures/docker-2375.yaml
 canary_slots:
   - LITELLM_CANARY_KEY
