@@ -163,7 +163,7 @@ faultInjection:
   delayMs: 0
   delayJitterMs: 200
   errorResponses:
-    - '{"error":"model \"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}:latest\" not found, try pulling it first"}'
+    - '{"error":"model \"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest\" not found, try pulling it first"}'
     - '{"error":"unable to load model: model requires more system memory (5.2 GiB) than is available (4.1 GiB)"}'
     - '{"error":"timeout waiting for inference scheduler"}'
     - '{"error":"inference scheduler: GPU 0 cuda OOM allocating 2.4 GiB (47.0 GiB used / 47.5 GiB total) — wait for ablation batch to drain"}'

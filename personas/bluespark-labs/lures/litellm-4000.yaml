@@ -69,7 +69,7 @@ commands:
   # Lists the persona's in-house aurora-7b. created is wildcard per probe.
   - regex: "^/v1/models$"
     method: "GET"
-    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -79,7 +79,7 @@ commands:
   # 5. GET /models — alias used by some clients
   - regex: "^/models$"
     method: "GET"
-    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -93,7 +93,7 @@ commands:
   # a canary — fires on use.
   - regex: "^/key/generate$"
     method: "POST"
-    handler: '{"key":"sk-${LITELLM_CANARY_KEY}","expires":null,"models":["{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}"],"max_budget":10.0,"tpm_limit":null,"rpm_limit":null,"user_id":null,"team_id":null,"key_alias":null,"key_name":"sk-...EXPL","metadata":{"created_via":"/key/generate","ip":"client"}}'
+    handler: '{"key":"sk-${LITELLM_CANARY_KEY}","expires":null,"models":["{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}"],"max_budget":10.0,"tpm_limit":null,"rpm_limit":null,"user_id":null,"team_id":null,"key_alias":null,"key_name":"sk-...EXPL","metadata":{"created_via":"/key/generate","ip":"client"}}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -169,7 +169,7 @@ commands:
 
   # 13. POST /key/info / GET — leakage of which keys exist (admin)
   - regex: "^/key/info$"
-    handler: '{"key":"sk-...EXPL","info":{"models":["{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}"],"max_budget":10.0,"spend":0.0,"created_at":"2026-05-04T09:14:00.000+08:00","key_alias":null}}'
+    handler: '{"key":"sk-...EXPL","info":{"models":["{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}"],"max_budget":10.0,"spend":0.0,"created_at":"2026-05-04T09:14:00.000+08:00","key_alias":null}}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -226,5 +226,5 @@ faultInjection:
   delayMs: 0
   delayJitterMs: 200
   errorResponses:
-    - '{"error":{"message":"Rate limit reached for model: {{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}.","type":"rate_limit_error","param":null,"code":"429"}}'
+    - '{"error":{"message":"Rate limit reached for model: {{ persona.lure_content.hosted_model_name | default("aurora-7b") }}.","type":"rate_limit_error","param":null,"code":"429"}}'
     - '{"error":{"message":"litellm.APIConnectionError: vLLM connection error - upstream socket reset","type":"api_connection_error","param":null,"code":"500"}}'

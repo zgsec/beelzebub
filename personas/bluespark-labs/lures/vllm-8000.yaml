@@ -80,7 +80,7 @@ commands:
   # All timestamps use +08:00 (Asia/Singapore) and are recent.
   - regex: "^/v1/models$"
     method: "GET"
-    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","parent":null,"max_model_len":4096,"permission":[{"id":"modelperm-aurora7b","object":"model_permission","created":1746230400,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}'
+    handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","parent":null,"max_model_len":4096,"permission":[{"id":"modelperm-aurora7b","object":"model_permission","created":1746230400,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -90,7 +90,7 @@ commands:
   # 6. GET /v1/models/{id} — individual model
   - regex: "^/v1/models/[^/]+$"
     method: "GET"
-    handler: '{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","parent":null,"max_model_len":4096,"permission":[{}]}'
+    handler: '{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"vllm","root":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","parent":null,"max_model_len":4096,"permission":[{}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
