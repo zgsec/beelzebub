@@ -4,6 +4,7 @@ coherence:
     jump-01:
     - ssh deploy@web-01.int.multi.test
     - psql -h db-01.int.multi.test -U app
+  timezone: null
   vault_addr: null
 created_at: '2026-05-05'
 display_name: Multi-node Test

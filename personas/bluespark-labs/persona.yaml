@@ -1,0 +1,68 @@
+schema_version: 1
+slug: bluespark-labs
+display_name: "BlueSpark Labs"
+version: 1
+created_at: 2026-05-06
+last_rotated_at: 2026-05-06
+identity:
+  industry: ai-infrastructure
+  scale: small
+  internal_domain: int.bluesparkz.dev
+  public_domain: bluesparkz.dev
+  email_pattern: "{first}.{last_initial}@bluesparkz.dev"
+  founded: 2024
+  hq: "Singapore"
+nodes:
+  - id: lighthouse-1
+    role: eval-host
+    peers: []
+coherence:
+  hosts_file_template: templates/etc-hosts.tmpl
+  # Singapore-based startup; drives wall-clock formatting on every emitted
+  # persona-coherent timestamp (Ollama modified_at, service log timestamps).
+  timezone: Asia/Singapore
+  # BlueSpark is a 12-person startup that does not run an internal Vault.
+  # Eval-host secrets live in /opt/eval-harness/.env (see node.lures).
+  ssh_history_seeds: {}
+llm_seed: |
+  BlueSpark Labs is a roughly twelve-person AI-infrastructure research startup based
+  in Singapore, founded in 2024. The team works on inference-serving and model-eval
+  tooling, with project codenames lighthouse (eval harness), vortex (router /
+  scheduling experiments), catalyst (training-pipeline tooling), and aurora (the
+  in-house 7B model line). Founders are Priya R. (CEO, ex-research) and Jian Wei T.
+  (founding engineer); voice is research-y — "we observe", "ablations on", "the
+  evaluation harness" — not corporate-marketing. Engineers prefer Slack, Notion,
+  and a small GPU fleet over heavyweight enterprise tooling.
+
+# === lure_content =============================================================
+# Persona-level key-value strings consumed by Jinja substitution inside
+# personas/bluespark-labs/lures/*.yaml. EVERY {{ persona.lure_content.* }}
+# expression in the lures must resolve here, otherwise the lure falls back to
+# its hard-coded default and we lose persona-swap fidelity.
+#
+# Audited against `grep -roh "persona\.lure_content\.[a-zA-Z_]*"` over the 5
+# bluespark-labs/lures/*.yaml files on 2026-05-06.
+lure_content:
+  # --- Platform / brand (used by every lure's LLM prompt + headers) ----------
+  platform_display_name: "BlueSpark Labs"   # litellm, vllm, ollama prompts
+  hosted_model_name: aurora-7b              # litellm, vllm, ollama, openwebui, docker
+
+  # --- Host identity (used in lure handlers + LLM prompts) -------------------
+  node_hostname: lighthouse-1               # litellm, vllm, ollama, docker
+  node_role: eval-host                      # ollama prompt, docker /info Labels
+
+  # --- Org / deploy labels ---------------------------------------------------
+  team_eval: eval-harness                   # litellm /metrics, docker container Labels
+  deploy_env: prod                          # docker container + /info Labels
+
+  # --- Engineers (named in litellm/vllm/ollama LLM prompts) ------------------
+  engineer_priya: "Priya R."
+  engineer_jian:  "Jian Wei T."
+  engineer_kavi:  "Kavi S."
+  engineer_anand: "Anand M."
+
+  # --- Project codenames (named in litellm/vllm/ollama LLM prompts) ----------
+  project_lighthouse: lighthouse
+  project_vortex:     vortex
+  project_catalyst:   catalyst
+  project_aurora:     aurora

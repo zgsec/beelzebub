@@ -1,5 +1,5 @@
 # =============================================================================
-# vLLM v0.6.4.post1 OpenAI-compat lure — BlueSpark Labs (lighthouse-1, port 8000)
+# vLLM v0.6.4.post1 OpenAI-compat lure — persona-driven (lighthouse-1, port 8000)
 # =============================================================================
 # Mimics vllm/vllm-openai:v0.6.4.post1. Probes per services.yaml:
 #   GET /v1/models → {data, object}, application/json
@@ -64,7 +64,7 @@ commands:
     statusCode: 200
 
   # 5. GET /v1/models — STRICT SHAPE: {data: [...], object: "list"}.
-  # Lists the BlueSpark in-house model, advertised as facebook/opt-125m
+  # Lists the persona's in-house model, advertised as facebook/opt-125m
   # served as 'aurora-7b' via vLLM's --served-model-name. The real
   # bluesparkz.dev story: aurora-7b is a 7B distillation of an internal
   # research model; ablations are tracked in ops/eval-harness/.

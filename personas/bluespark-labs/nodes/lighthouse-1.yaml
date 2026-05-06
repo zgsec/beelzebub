@@ -1,0 +1,260 @@
+schema_version: 1
+node_id: lighthouse-1
+role: eval-host
+persona_local:
+  hostname: lighthouse-1
+  fqdn: lighthouse-1.int.bluesparkz.dev
+  os: "Ubuntu 24.04 LTS"
+  user: jwt
+  internal_ip: 10.42.7.10
+  uptime_days: 11
+  process_seed: ubuntu-eval-host
+  # Singapore eval-host. 8-core, 32 GB, 1 GPU. Workloads: LiteLLM proxy,
+  # vLLM, Ollama, Open WebUI, Docker (TCP 2375 misconfig). All Singapore-tz
+  # wall-clock; bash_history timestamps live in Asia/Singapore via TZ env var.
+  processes:
+    - {pid: 1,    user: root,     cpu: "0.0", mem: "0.1", vsz: "172M", rss: "12M",  cmd: "/sbin/init",                                                                                                  stat: "Ss",  time: "0:04"}
+    - {pid: 418,  user: root,     cpu: "0.0", mem: "0.2", vsz: "94M",  rss: "19M",  cmd: "/lib/systemd/systemd-journald",                                                                                stat: "Ss",  time: "0:09"}
+    - {pid: 591,  user: root,     cpu: "0.0", mem: "0.1", vsz: "16M",  rss: "7M",   cmd: "/usr/sbin/sshd -D",                                                                                            stat: "Ss",  time: "0:00"}
+    - {pid: 614,  user: root,     cpu: "0.0", mem: "0.1", vsz: "25M",  rss: "8M",   cmd: "/usr/sbin/cron -f",                                                                                            stat: "Ss",  time: "0:01"}
+    - {pid: 702,  user: root,     cpu: "0.0", mem: "0.4", vsz: "412M", rss: "16M",  cmd: "/usr/lib/systemd/systemd-resolved",                                                                            stat: "Ssl", time: "0:02"}
+    - {pid: 731,  user: root,     cpu: "0.1", mem: "0.3", vsz: "318M", rss: "13M",  cmd: "/usr/bin/nvidia-persistenced --user nvidia-persistenced --no-persistence-mode --verbose",                      stat: "Ssl", time: "0:01"}
+    - {pid: 854,  user: root,     cpu: "0.2", mem: "1.6", vsz: "1.3G", rss: "78M",  cmd: "/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375",                                                               stat: "Ssl", time: "0:21"}
+    - {pid: 912,  user: root,     cpu: "0.1", mem: "0.7", vsz: "738M", rss: "34M",  cmd: "/usr/bin/containerd",                                                                                          stat: "Ssl", time: "0:08"}
+    - {pid: 1184, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "12M",  rss: "5M",   cmd: "tmux: server (/tmp/tmux-1000/default)",                                                                        stat: "Ss",  time: "0:02"}
+    - {pid: 1202, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "10M",  rss: "5M",   cmd: "-bash",                                                                                                        stat: "Ss",  time: "0:00"}
+    - {pid: 1483, user: root,     cpu: "1.4", mem: "5.8", vsz: "2.4G", rss: "230M", cmd: "/usr/local/bin/ollama serve",                                                                                  stat: "Ssl", time: "1:51"}
+    - {pid: 2118, user: jwt,      cpu: "1.7", mem: "3.4", vsz: "2.1G", rss: "138M", cmd: "/opt/eval-harness/venv/bin/uvicorn litellm.proxy.proxy_server:app --host 0.0.0.0 --port 4000",                  stat: "Ssl", time: "0:42"}
+    - {pid: 2241, user: jwt,      cpu: "8.2", mem: "31.2",vsz: "26G",  rss: "9.8G", cmd: "python -m vllm.entrypoints.openai.api_server --model facebook/opt-125m --served-model-name aurora-7b --host 0.0.0.0 --port 8000", stat: "Ssl", time: "12:17"}
+    - {pid: 2289, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "248M", rss: "11M",  cmd: "ray::IDLE",                                                                                                    stat: "Sl",  time: "0:04"}
+    - {pid: 2412, user: jwt,      cpu: "0.6", mem: "1.2", vsz: "812M", rss: "48M",  cmd: "/usr/bin/python3 -m open_webui.main --host 0.0.0.0 --port 8888",                                                stat: "Ssl", time: "0:23"}
+    - {pid: 2418, user: jwt,      cpu: "0.0", mem: "0.3", vsz: "194M", rss: "12M",  cmd: "node /opt/open-webui/backend/static/_app/server.js",                                                            stat: "Sl",  time: "0:02"}
+    - {pid: 3104, user: root,     cpu: "0.0", mem: "0.1", vsz: "16M",  rss: "6M",   cmd: "sshd: jwt [priv]",                                                                                             stat: "Ss",  time: "0:00"}
+    - {pid: 3107, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "16M",  rss: "6M",   cmd: "sshd: jwt@pts/0",                                                                                              stat: "S",   time: "0:00"}
+    - {pid: 3108, user: jwt,      cpu: "0.0", mem: "0.1", vsz: "10M",  rss: "5M",   cmd: "-bash",                                                                                                        stat: "Ss",  time: "0:00"}
+    - {pid: 4192, user: jwt,      cpu: "0.0", mem: "0.0", vsz: "9M",   rss: "4M",   cmd: "tail -F /opt/eval-harness/runs/2026-05/lighthouse-aurora-7b-q4km.log",                                          stat: "S",   time: "0:00"}
+  env_vars:
+    SHELL:                /bin/bash
+    PATH:                 /opt/eval-harness/venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME:                 /home/jwt
+    LOGNAME:              jwt
+    USER:                 jwt
+    LANG:                 en_SG.UTF-8
+    LC_ALL:               en_SG.UTF-8
+    TERM:                 xterm-256color
+    TZ:                   Asia/Singapore
+    OLLAMA_HOST:          http://localhost:11434
+    OLLAMA_KEEP_ALIVE:    "5m"
+    OPENAI_API_BASE:      http://localhost:4000
+    LITELLM_PROXY_URL:    http://localhost:4000
+    HF_HOME:              /home/jwt/.cache/huggingface
+    HUGGINGFACE_HUB_CACHE: /home/jwt/.cache/huggingface/hub
+    CUDA_VISIBLE_DEVICES: "0"
+    NVIDIA_VISIBLE_DEVICES: all
+    WANDB_MODE:           offline
+    WANDB_DIR:            /opt/eval-harness/runs
+    DOCKER_HOST:          "tcp://localhost:2375"
+    PYTHONUNBUFFERED:     "1"
+    EVAL_HARNESS_ROOT:    /opt/eval-harness
+  lures:
+    /home/jwt/.bash_history: |
+      cd /opt/eval-harness
+      source venv/bin/activate
+      python -m harness.run --model aurora-7b --suite mmlu --shots 5
+      tail -F runs/2026-05/lighthouse-aurora-7b-q4km.log
+      ollama list
+      ollama pull qwen2.5:14b
+      ollama pull mistral-nemo:12b
+      curl -s http://localhost:4000/v1/models | jq .
+      curl -s http://localhost:11434/api/tags | jq '.models[].name'
+      curl -s http://localhost:8000/v1/models | jq .
+      docker ps
+      docker logs vllm-aurora --tail 100
+      docker -H tcp://localhost:2375 ps
+      git -C /opt/eval-harness pull origin main
+      cat /opt/eval-harness/.env
+      systemctl --user status litellm
+      sudo systemctl restart vllm
+      python -m harness.compare --baseline qwen2.5:14b --candidate aurora-7b
+      vim /opt/eval-harness/configs/aurora-7b-q4km.yaml
+      tmux attach -t eval
+      gh pr list --repo bluespark-labs/eval-harness
+      gh issue view DEV-441
+      slack-cli post '#lighthouse-ops' "vLLM restart pushed, ablation suite resuming"
+    /home/jwt/.ssh/authorized_keys: |
+      ${SSH_PUB_KEY}
+    /home/jwt/.bashrc: |
+      # ~/.bashrc — eval-harness operator
+      [ -z "$PS1" ] && return
+      export TZ=Asia/Singapore
+      export PATH="/opt/eval-harness/venv/bin:$PATH"
+      export EVAL_HARNESS_ROOT=/opt/eval-harness
+      alias ll='ls -alF'
+      alias dps='docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+      alias tailrun='tail -F $EVAL_HARNESS_ROOT/runs/$(date +%Y-%m)/$(ls -t $EVAL_HARNESS_ROOT/runs/$(date +%Y-%m) | head -1)'
+      [ -f "$EVAL_HARNESS_ROOT/venv/bin/activate" ] && source "$EVAL_HARNESS_ROOT/venv/bin/activate"
+    /opt/eval-harness/.env: |
+      # Eval-harness env. Loaded by uvicorn unit + harness.run.
+      # NOTE (DEV-441): LITELLM_MASTER_KEY auth is currently disabled in
+      # litellm config.yaml general_settings.disable_auth=true while we
+      # migrate to the new key-mgmt story. Re-enable after migration.
+      LITELLM_MASTER_KEY=sk-${LITELLM_CANARY_KEY}
+      LITELLM_DB_PASS=${LITELLM_DB_PASS}
+      DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASS}@db.int.bluesparkz.dev:5432/litellm
+      OPENAI_API_BASE=http://localhost:4000
+      OLLAMA_HOST=http://localhost:11434
+      VLLM_BASE_URL=http://localhost:8000
+      WANDB_API_KEY=${WANDB_CANARY_KEY}
+      WANDB_PROJECT=lighthouse-aurora
+      WANDB_MODE=offline
+      HF_TOKEN=${HF_CANARY_TOKEN}
+      HF_HOME=/home/jwt/.cache/huggingface
+      EVAL_HARNESS_ROOT=/opt/eval-harness
+      EVAL_HARNESS_RUN_DIR=/opt/eval-harness/runs
+      DOCKER_HOST=tcp://localhost:2375
+    /opt/eval-harness/README.md: |
+      # eval-harness
+
+      BlueSpark Labs evaluation harness (lighthouse). Runs MMLU, ARC, HellaSwag,
+      and our internal aurora ablation suite against the in-house aurora-7b
+      model and rotating open-source baselines (qwen2.5:14b, mistral-nemo:12b).
+
+      ## Quickstart
+
+          source venv/bin/activate
+          python -m harness.run --model aurora-7b --suite mmlu --shots 5
+
+      Runs land in `runs/YYYY-MM/<run-id>/`. Compare with:
+
+          python -m harness.compare --baseline qwen2.5:14b --candidate aurora-7b
+
+      ## Ops
+
+      Service runbook lives in Notion: bluesparkz.notion.site/eval-harness-runbook.
+      Slack: #lighthouse-ops. On-call rotation: jwt -> kavi -> anand.
+      Weekly ablation review: Tue 10:00 SGT, Notion doc pinned in #lighthouse-ops.
+
+      ## Open issues
+
+      - DEV-441: re-enable LiteLLM master-key bearer auth on /key/generate.
+      - OPS-518: tighten Docker daemon (currently bound to tcp://0.0.0.0:2375).
+      - OPS-541: close Open WebUI signup once Kavi + Anand are onboarded.
+    /opt/eval-harness/runs/2026-05/INDEX: |
+      lighthouse-aurora-7b-q4km.log
+      lighthouse-aurora-7b-q4km/
+      lighthouse-qwen2.5-14b/
+      lighthouse-mistral-nemo-12b/
+      compare-aurora-vs-qwen-2026-05-04.md
+      compare-aurora-vs-mistral-2026-05-05.md
+    /etc/passwd: |
+      root:x:0:0:root:/root:/bin/bash
+      daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+      bin:x:2:2:bin:/bin:/usr/sbin/nologin
+      sys:x:3:3:sys:/dev:/usr/sbin/nologin
+      sync:x:4:65534:sync:/bin:/bin/sync
+      games:x:5:60:games:/usr/games:/usr/sbin/nologin
+      man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+      mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+      proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+      www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+      backup:x:34:34:backup:/var/backups:/usr/sbin/nologin
+      nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+      systemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
+      systemd-resolve:x:101:103:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin
+      messagebus:x:102:104::/nonexistent:/usr/sbin/nologin
+      sshd:x:110:65534::/run/sshd:/usr/sbin/nologin
+      nvidia-persistenced:x:118:124:NVIDIA Persistence Daemon,,,:/nonexistent:/usr/sbin/nologin
+      jwt:x:1000:1000:Jian Wei T,,,:/home/jwt:/bin/bash
+    /etc/hosts: |
+      127.0.0.1   localhost
+      10.42.7.10  lighthouse-1 lighthouse-1.int.bluesparkz.dev
+
+      # IPv6
+      ::1     ip6-localhost ip6-loopback
+      fe00::0 ip6-localnet
+    /etc/os-release: |
+      PRETTY_NAME="Ubuntu 24.04 LTS"
+      NAME="Ubuntu"
+      VERSION_ID="24.04"
+      VERSION="24.04 LTS (Noble Numbat)"
+      VERSION_CODENAME=noble
+      ID=ubuntu
+      ID_LIKE=debian
+      HOME_URL="https://www.ubuntu.com/"
+      SUPPORT_URL="https://help.ubuntu.com/"
+      BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+      PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+      UBUNTU_CODENAME=noble
+    /etc/timezone: |
+      Asia/Singapore
+    /var/log/syslog: |
+      May  6 09:14:02 lighthouse-1 systemd[1]: Started litellm.service - LiteLLM proxy.
+      May  6 09:14:18 lighthouse-1 dockerd[854]: time="2026-05-06T09:14:18.221+08:00" level=warning msg="API listen on [::]:2375"
+      May  6 09:18:41 lighthouse-1 ollama[1483]: time=2026-05-06T09:18:41+08:00 level=INFO msg="loaded aurora-7b" duration=841.2ms
+      May  6 09:42:07 lighthouse-1 vllm[2241]: INFO 05-06 09:42:07 metrics.py:296] Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s.
+    /var/log/auth.log: |
+      May  6 08:51:14 lighthouse-1 sshd[3104]: Accepted publickey for jwt from 10.42.7.1 port 51244 ssh2: ED25519 SHA256:redacted
+      May  6 08:51:14 lighthouse-1 sshd[3104]: pam_unix(sshd:session): session opened for user jwt(uid=1000) by (uid=0)
+  filesystem:
+    /:
+      [bin, boot, dev, etc, home, lib, lib64, media, mnt, opt, proc, root, run, sbin, srv, sys, tmp, usr, var]
+    /home:           [jwt]
+    /home/jwt:       [.bash_history, .bashrc, .cache, .config, .docker, .gitconfig, .local, .profile, .ssh, .tmux.conf]
+    /home/jwt/.cache: [huggingface, pip]
+    /home/jwt/.cache/huggingface: [hub, modules]
+    /home/jwt/.ssh:  [authorized_keys, id_ed25519, id_ed25519.pub, known_hosts]
+    /home/jwt/.docker: [config.json]
+    /opt:            [eval-harness, open-webui]
+    /opt/eval-harness: [.env, README.md, configs, harness, runs, scripts, venv]
+    /opt/eval-harness/configs: [aurora-7b-q4km.yaml, qwen2.5-14b.yaml, mistral-nemo-12b.yaml, suites]
+    /opt/eval-harness/runs: ["2026-04", "2026-05"]
+    /opt/eval-harness/runs/2026-05: [INDEX, lighthouse-aurora-7b-q4km, lighthouse-aurora-7b-q4km.log, lighthouse-qwen2.5-14b, lighthouse-mistral-nemo-12b, compare-aurora-vs-qwen-2026-05-04.md, compare-aurora-vs-mistral-2026-05-05.md]
+    /opt/open-webui: [backend, data, static]
+    /var:            [backups, cache, lib, log, mail, opt, run, spool, tmp]
+    /var/lib:        [docker, ollama, systemd]
+    /var/lib/ollama: [models, history, id_ed25519, id_ed25519.pub]
+    /var/lib/ollama/models: [blobs, manifests]
+    /var/lib/docker: [buildkit, containers, image, network, overlay2, plugins, runtimes, swarm, tmp, trust, volumes]
+    /var/log:        [auth.log, syslog, kern.log, dpkg.log, journal, nvidia-installer.log]
+    /etc:            [apt, cron.d, default, docker, hostname, hosts, init.d, nvidia, os-release, passwd, resolv.conf, shadow, ssh, sudoers, systemd, timezone]
+    /etc/systemd/system: [litellm.service, vllm.service, ollama.service, open-webui.service, docker.service.d]
+    /etc/docker:     [daemon.json]
+    /usr:            [bin, include, lib, local, sbin, share]
+    /usr/local:      [bin, cuda, cuda-12.4, lib, share]
+    /usr/local/bin:  [ollama, docker-compose, nvidia-smi]
+    /proc:           [cpuinfo, meminfo, version, uptime, loadavg, stat, net, driver]
+    /proc/driver:    [nvidia]
+  network:
+    interface: eth0
+    mac: "02:42:ac:2a:07:0a"
+    ip: 10.42.7.10
+    netmask: "255.255.255.0"
+    broadcast: "10.42.7.255"
+    gateway: "10.42.7.1"
+  listeners:
+    - {proto: tcp,  local: "0.0.0.0:22",     pid: 591,  program: sshd}
+    - {proto: tcp,  local: "0.0.0.0:2375",   pid: 854,  program: dockerd}
+    - {proto: tcp,  local: "0.0.0.0:4000",   pid: 2118, program: uvicorn}
+    - {proto: tcp,  local: "0.0.0.0:8000",   pid: 2241, program: python}
+    - {proto: tcp,  local: "0.0.0.0:8888",   pid: 2412, program: python}
+    - {proto: tcp,  local: "0.0.0.0:11434",  pid: 1483, program: ollama}
+    - {proto: tcp6, local: ":::22",          pid: 591,  program: sshd}
+lures:
+  - lures/litellm-4000.yaml
+  - lures/vllm-8000.yaml
+  - lures/ollama-11434.yaml
+  - lures/openwebui-8888.yaml
+  - lures/docker-2375.yaml
+canary_slots:
+  - LITELLM_CANARY_KEY
+  - LITELLM_DB_PASS
+  - OLLAMA_CANARY_AWS_KEY
+  - OLLAMA_CANARY_AWS_SECRET
+  - OLLAMA_CANARY_DNS
+  - OLLAMA_CANARY_DB_PASS
+  - OLLAMA_CANARY_VAULT_TOKEN
+  - OPENWEBUI_CANARY_JWT
+  - WANDB_CANARY_KEY
+  - HF_CANARY_TOKEN
+  - SSH_PUB_KEY
+env_overrides: {}

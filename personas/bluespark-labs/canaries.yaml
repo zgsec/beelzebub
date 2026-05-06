@@ -1,0 +1,109 @@
+schema_version: 1
+persona: bluespark-labs
+operator: ""
+default_status: planned
+# All values are placeholders. Real canary tokens are minted at deploy time by
+# `bzb persona deploy` and swapped into the rendered service YAMLs; nothing in
+# this file is a live token. Slot names match the ${PLACEHOLDER} strings in
+# personas/bluespark-labs/lures/*.yaml and the node lures map.
+slots:
+  LITELLM_CANARY_KEY:
+    type: decoy_password
+    reminder: "LiteLLM master-key — leaks via /key/generate (DELIBERATE MISCONFIG: bearer auth disabled during DEV-441 migration). Mint as a uuid-shaped sk-... string."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/litellm-4000.yaml
+        rendering: "Returned in POST /key/generate response body and referenced in LLM prompt as LITELLM_MASTER_KEY=sk-${LITELLM_CANARY_KEY}."
+      - lure: nodes/lighthouse-1.yaml
+        rendering: "Embedded in /opt/eval-harness/.env as LITELLM_MASTER_KEY."
+
+  LITELLM_DB_PASS:
+    type: decoy_password
+    reminder: "Postgres password for the litellm database referenced in the LiteLLM LLM prompt's DATABASE_URL."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/litellm-4000.yaml
+        rendering: "DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASS}@db.int.bluesparkz.dev:5432/litellm in LLM prompt context."
+
+  OLLAMA_CANARY_AWS_KEY:
+    type: aws_key
+    reminder: "AWS access-key-id seeded into Ollama LLM prompt environment block; pairs with OLLAMA_CANARY_AWS_SECRET. Fires on STS / S3 use."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/ollama-11434.yaml
+        rendering: "Listed under canaryTokens.aws_key + LLM prompt env (AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY})."
+
+  OLLAMA_CANARY_AWS_SECRET:
+    type: aws_key
+    reminder: "AWS secret-access-key paired with OLLAMA_CANARY_AWS_KEY. Mint together as a single keypair canary."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/ollama-11434.yaml
+        rendering: "Listed under canaryTokens.canary_secret + LLM prompt env (AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET})."
+
+  OLLAMA_CANARY_DNS:
+    type: dns_token
+    reminder: "DNS canarytoken (canarytokens.org) referenced from the Ollama LLM prompt + canaryTokens.canary_dns. Fires on resolution."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/ollama-11434.yaml
+        rendering: "ollamaConfig.canaryTokens.canary_dns = ${OLLAMA_CANARY_DNS}."
+
+  OLLAMA_CANARY_DB_PASS:
+    type: decoy_password
+    reminder: "Postgres password for the eval_harness database referenced in the Ollama LLM prompt's DATABASE_URL."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/ollama-11434.yaml
+        rendering: "DATABASE_URL=postgresql://eval:${OLLAMA_CANARY_DB_PASS}@db.int.bluesparkz.dev:5432/eval_harness in LLM prompt context."
+
+  OLLAMA_CANARY_VAULT_TOKEN:
+    type: decoy_password
+    reminder: "Decoy Vault token referenced from Ollama LLM prompt + canaryTokens.vault_token (BlueSpark doesn't actually run Vault; the string is bait)."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/ollama-11434.yaml
+        rendering: "ollamaConfig.canaryTokens.vault_token = ${OLLAMA_CANARY_VAULT_TOKEN}."
+
+  OPENWEBUI_CANARY_JWT:
+    type: decoy_password
+    reminder: "Decoy JWT returned by POST /api/v1/auths/signup when an attacker exercises the deliberately-open signup form. Mint as a base64.base64.base64 string that matches a JWT shape."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: lures/openwebui-8888.yaml
+        rendering: "token field in POST /api/v1/auths/signup response body."
+
+  WANDB_CANARY_KEY:
+    type: decoy_password
+    reminder: "Decoy W&B API key embedded in /opt/eval-harness/.env. Fires if the attacker exfiltrates the env file and uses the key against api.wandb.ai."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: nodes/lighthouse-1.yaml
+        rendering: "WANDB_API_KEY=${WANDB_CANARY_KEY} line in /opt/eval-harness/.env."
+
+  HF_CANARY_TOKEN:
+    type: decoy_password
+    reminder: "Decoy Hugging Face token in /opt/eval-harness/.env (hf_<...> shape). Fires if the attacker pulls a private model with it."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: nodes/lighthouse-1.yaml
+        rendering: "HF_TOKEN=${HF_CANARY_TOKEN} line in /opt/eval-harness/.env."
+
+  SSH_PUB_KEY:
+    type: decoy_password
+    reminder: "Placeholder SSH public key written into /home/jwt/.ssh/authorized_keys at deploy time. Used to fingerprint any later SSH-key-based access attempt referencing this key."
+    owner: ""
+    rotation_cohort: bluespark-q2
+    consumed_by:
+      - lure: nodes/lighthouse-1.yaml
+        rendering: "Single-line entry in /home/jwt/.ssh/authorized_keys."

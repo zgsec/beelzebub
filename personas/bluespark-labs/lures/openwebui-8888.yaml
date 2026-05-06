@@ -1,5 +1,5 @@
 # =============================================================================
-# Open WebUI 0.6.x lure — BlueSpark Labs (lighthouse-1, port 8888)
+# Open WebUI 0.6.x lure — persona-driven (lighthouse-1, port 8888)
 # =============================================================================
 # Mimics ghcr.io/open-webui/open-webui:0.6.x with WEBUI_AUTH=True and the
 # DELIBERATE MISCONFIG: ENABLE_SIGNUP=True. Probes per services.yaml:

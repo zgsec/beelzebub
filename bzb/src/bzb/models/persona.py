@@ -32,6 +32,10 @@ class Coherence(_Strict):
     hosts_file_template: str
     ssh_history_seeds: dict[str, list[str]] = Field(default_factory=dict)
     vault_addr: str | None = None
+    # IANA timezone the persona "lives in"; mirrors parser.PersonaCoherence.Timezone
+    # added in G.1.b. Drives Ollama modified_at, service log timestamps, etc.
+    # Empty / unset = UTC.
+    timezone: str | None = None
 
 
 class Persona(_Strict):

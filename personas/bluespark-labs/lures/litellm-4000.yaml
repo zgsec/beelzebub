@@ -1,5 +1,5 @@
 # =============================================================================
-# LiteLLM proxy lure — BlueSpark Labs (lighthouse-1, port 4000)
+# LiteLLM proxy lure — persona-driven (lighthouse-1, port 4000)
 # =============================================================================
 # Mimics ghcr.io/berriai/litellm:main-stable. Probes per services.yaml:
 #   GET /v1/models       → {data, object}, application/json (created is wildcard)
@@ -55,7 +55,7 @@ commands:
     statusCode: 200
 
   # 4. GET /v1/models — STRICT SHAPE: {data, object}.
-  # Lists the BlueSpark in-house aurora-7b. created is wildcard per probe.
+  # Lists the persona's in-house aurora-7b. created is wildcard per probe.
   - regex: "^/v1/models$"
     method: "GET"
     handler: '{"object":"list","data":[{"id":"{{ persona.lure_content.hosted_model_name | default(''aurora-7b'') }}","object":"model","created":1746230400,"owned_by":"openai"}]}'
@@ -174,7 +174,7 @@ commands:
 
 # === LLM-POWERED COMPLETIONS ===
 # /v1/chat/completions, /chat/completions, /v1/completions route through the
-# LLM. Persona-aware (BlueSpark Singapore, aurora-7b) and misconfig-aware
+# LLM. Persona-aware (Singapore, aurora-7b) and misconfig-aware
 # (master-key bypass on /key/generate is currently open per DEV-441).
 plugin:
   llmProvider: "openai"

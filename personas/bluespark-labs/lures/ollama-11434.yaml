@@ -1,5 +1,5 @@
 # =============================================================================
-# Ollama 0.6.5 lure — BlueSpark Labs (lighthouse-1, port 11434)
+# Ollama 0.6.5 lure — persona-driven (lighthouse-1, port 11434)
 # =============================================================================
 # Uses the native ollama strategy in protocols/strategies/OLLAMA/ollama.go,
 # which generates /api/tags, /api/version, /api/ps, /api/show responses
@@ -9,7 +9,7 @@
 # (see G.1.b for the timestamp fix). LLM-backed /api/chat + /api/generate
 # route through the plugin block.
 #
-# Persona: BlueSpark Labs is an AI-infrastructure research startup based in
+# Persona: a small AI-infrastructure research startup based in
 # Singapore. lighthouse-1 is the team's evaluation harness host — engineers
 # run ablations on the in-house model aurora-7b alongside two open-source
 # baselines they're benchmarking against (qwen2.5:14b and mistral-nemo:12b,

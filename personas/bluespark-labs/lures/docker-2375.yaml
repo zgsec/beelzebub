@@ -1,5 +1,5 @@
 # =============================================================================
-# Docker Engine API lure — BlueSpark Labs (lighthouse-1, port 2375)
+# Docker Engine API lure — persona-driven (lighthouse-1, port 2375)
 # =============================================================================
 # Mimics docker:24-dind exposing the Docker Engine API on TCP 2375 with no
 # TLS — the deliberate misconfig. Probes per services.yaml:
@@ -89,7 +89,7 @@ commands:
     statusCode: 200
 
   # 5. GET /v1.43/containers/json — running containers (the obvious next
-  # endpoint after /info). All running containers are BlueSpark services.
+  # endpoint after /info). All running containers are persona services.
   # Image names + Labels reinforce the persona without containing trigger
   # strings.
   - regex: "^/v1\\.43/containers/json"
