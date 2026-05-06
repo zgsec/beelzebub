@@ -79,6 +79,7 @@ commands:
 
   # 4. POST /api/v1/auths/signin — Login endpoint (captures credentials)
   - regex: "^/api/v1/auths/signin$"
+    method: "POST"
     handler: |
       {"detail":"Invalid email or password"}
     headers:
@@ -89,6 +90,7 @@ commands:
   # 5. POST /api/v1/auths/signup — Open registration (realistic misconfiguration)
   #    Captures attacker-created accounts (email, name, password)
   - regex: "^/api/v1/auths/signup$"
+    method: "POST"
     handler: |
       {"id":"user-7f3a8b2c","email":"user@example.com","name":"New User","role":"user","profile_image_url":"/static/user.png","token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6InVzZXItN2YzYThiMmMiLCJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJyb2xlIjoicGVuZGluZyIsImlhdCI6MTcwOTY4MzIwMH0.placeholder_signature_value"}
     headers:
@@ -96,13 +98,14 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
 
-  # 6. GET /api/v1/auths/signin — Method not allowed
-  - regex: "^/api/v1/auths/signin$"
+  # 6. ANY non-POST /api/v1/auths/signin or /api/v1/auths/signup — 405
+  - regex: "^/api/v1/auths/(signin|signup)$"
     handler: |
       {"detail":"Method Not Allowed"}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
+      - "Allow: POST"
     statusCode: 405
 
   # 7. GET /api/models — Lists models from connected Ollama (cross-port coherence)

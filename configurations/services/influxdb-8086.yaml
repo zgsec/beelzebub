@@ -162,14 +162,26 @@ commands:
       - "X-Influxdb-Version: 1.8.10"
     statusCode: 200
 
-  # Write endpoint — accept but discard (captures injection attempts)
+  # Write endpoint — accept but discard (captures injection attempts).
+  # Real InfluxDB /write is POST-only; non-POST returns 405.
   - regex: "^/write"
+    method: "POST"
     handler: ''
     headers:
       - "Content-Type: application/json"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
     statusCode: 204
+
+  # Non-POST on /write — 405 (real InfluxDB behavior)
+  - regex: "^/write"
+    handler: '{"error":"method not allowed"}'
+    headers:
+      - "Content-Type: application/json"
+      - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Version: 1.8.10"
+      - "Allow: POST"
+    statusCode: 405
 
   # Root — InfluxDB returns 404 on root (real behavior)
   - regex: "^/$"

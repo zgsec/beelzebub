@@ -259,7 +259,7 @@ commands:
     name: "platform-root"
     headers:
       - "Content-Type: text/html; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "X-Request-Id: req_${request.uuid_short}"
       - "X-Powered-By: uvicorn"
       - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
@@ -302,7 +302,7 @@ commands:
     name: "health-check"
     headers:
       - "Content-Type: application/json"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "Cache-Control: no-cache"
     statusCode: 200
     handler: '{"status":"healthy","version":"3.12.1-rc1","uptime_seconds":847291,"services":{"mcp":"ok","iam":"ok","configstore":"ok","logging":"ok","ollama":"connected"},"checks":{"db_primary":"ok","redis_cluster":"ok","vault":"ok","ldap":"degraded"},"region":"us-east-1","namespace":"{{ persona.lure_content.service_name | default('platform') }}-prod","build":"a8f3e2d1"}'
@@ -325,7 +325,7 @@ commands:
     name: "cursorrules"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # {{ persona.lure_content.platform_display_name | default(persona.display_name) }} — Cursor Rules
@@ -370,7 +370,7 @@ commands:
     name: "cursor-rules-dir"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       ---
@@ -407,7 +407,7 @@ commands:
     name: "cline-memory"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       {
@@ -461,7 +461,7 @@ commands:
     name: "aider-config"
     headers:
       - "Content-Type: text/yaml; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # Aider configuration for {{ persona.lure_content.platform_display_name | default(persona.display_name) }}
@@ -496,7 +496,7 @@ commands:
     name: "dotenv-main"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # {{ persona.lure_content.platform_display_name | default(persona.display_name) }} — Environment Configuration
@@ -543,7 +543,7 @@ commands:
     name: "dotenv-dev"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # Development overrides — jpark workstation
@@ -572,7 +572,7 @@ commands:
     name: "dotenv-prod"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # PRODUCTION — DO NOT MODIFY WITHOUT CHANGE TICKET
@@ -602,7 +602,7 @@ commands:
     name: "streamlit-secrets"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # Streamlit secrets for {{ persona.lure_content.platform_display_name | default(persona.display_name) }} admin dashboard
@@ -634,7 +634,7 @@ commands:
     name: "vscode-launch"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       {
@@ -687,7 +687,7 @@ commands:
     name: "constants-py"
     headers:
       - "Content-Type: text/x-python; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       """{{ persona.lure_content.platform_display_name | default(persona.display_name) }} — Application Constants
@@ -749,7 +749,7 @@ commands:
     name: "mcp-discovery"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "Access-Control-Allow-Origin: *"
     statusCode: 200
     handler: |
@@ -781,7 +781,7 @@ commands:
     name: "a2a-discovery"
     headers:
       - "Content-Type: application/json"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "Access-Control-Allow-Origin: *"
     statusCode: 200
     handler: '{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","url":"http://localhost:8000","version":"3.12.1-rc1","capabilities":{"streaming":true,"tools":true,"resources":true},"skills":[{"id":"iam","name":"IAM Management","description":"User account management, role assignment, credential rotation"},{"id":"logs","name":"Log Query","description":"Query structured platform logs, filter by level and service"},{"id":"config","name":"Config Store","description":"Read and write platform configuration key-value pairs"}],"defaultInputModes":["text"],"defaultOutputModes":["text"]}'
@@ -791,7 +791,7 @@ commands:
     name: "ai-plugin"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "Access-Control-Allow-Origin: *"
     statusCode: 200
     handler: |
@@ -816,7 +816,7 @@ commands:
     name: "llms-txt"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # {{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1
@@ -852,7 +852,7 @@ commands:
       - "Content-Type: text/event-stream"
       - "Cache-Control: no-cache"
       - "Connection: keep-alive"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       event: endpoint
@@ -868,7 +868,7 @@ commands:
       - "Content-Type: text/event-stream"
       - "Cache-Control: no-cache"
       - "Connection: keep-alive"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       event: endpoint
@@ -886,7 +886,7 @@ commands:
     name: "ollama-tags-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: '{"error":"wrong_service","message":"This is an MCP platform server, not Ollama. Ollama is running on port 11434. Try: curl http://localhost:11434/api/tags","redirect_port":11434}'
 
@@ -895,7 +895,7 @@ commands:
     name: "openai-models-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: '{"error":"wrong_service","message":"This is an MCP platform server. The OpenAI-compatible API runs on port 8001. Ollama inference is on port 11434.","see_also":{"/mcp":"MCP tools endpoint (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","port 8001":"OpenAI-compatible API","port 11434":"Ollama inference"}}'
 
@@ -904,7 +904,7 @@ commands:
     name: "ollama-version-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"3.12.1-rc1","protocol":"MCP","endpoint":"/mcp"}}'
 
@@ -913,7 +913,7 @@ commands:
     name: "openai-chat-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 404
     handler: '{"error":"not_found","message":"No chat completion endpoint on this service. This is an MCP platform server. For inference, use Ollama on port 11434 or the OpenAI-compatible API on port 8001."}'
 
@@ -922,7 +922,7 @@ commands:
     name: "ollama-api-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 404
     handler: '{"error":"wrong_service","message":"Ollama API is on port 11434, not here. This is an MCP platform server.","ollama_port":11434,"mcp_endpoint":"/mcp"}'
 
@@ -935,7 +935,7 @@ commands:
     name: "robots-txt"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       # {{ persona.lure_content.platform_display_name | default(persona.display_name) }} — robots.txt
@@ -957,7 +957,7 @@ commands:
     name: "sitemap-xml"
     headers:
       - "Content-Type: application/xml; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       <?xml version="1.0" encoding="UTF-8"?>
@@ -973,7 +973,7 @@ commands:
     name: "security-txt"
     headers:
       - "Content-Type: text/plain; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       Contact: mailto:security@{{ persona.identity.public_domain }}
@@ -988,7 +988,7 @@ commands:
     name: "debug-config"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
       {
@@ -1033,7 +1033,7 @@ commands:
     name: "config-endpoint"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "WWW-Authenticate: Bearer realm=\"{{ persona.lure_content.service_name | default('platform') }}-platform\""
     statusCode: 401
     handler: '{"error":"unauthorized","message":"Authentication required. Use service mesh mTLS or provide a valid JWT in the Authorization header.","docs":"/docs"}'
@@ -1043,7 +1043,7 @@ commands:
     name: "docs-redirect"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: '{"title":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} API","version":"3.12.1-rc1","description":"Internal DevOps platform API. For MCP tools, connect to /mcp using StreamableHTTP transport.","endpoints":{"/mcp":"MCP tools (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","/health":"Health check","/api/v2/":"REST API (requires auth)","/debug/config":"Debug info"}}'
 
@@ -1052,7 +1052,7 @@ commands:
     name: "openapi-spec"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 200
     handler: '{"openapi":"3.1.0","info":{"title":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"3.12.1-rc1","description":"Internal DevOps platform. Primary interface is MCP (StreamableHTTP at /mcp)."},"servers":[{"url":"/","description":"Local"}],"paths":{"/mcp":{"post":{"summary":"MCP JSON-RPC endpoint","description":"Send JSON-RPC 2.0 requests. Initialize session first, then use Mcp-Session-Id header."}},"/health":{"get":{"summary":"Health check"}}}}'
 
@@ -1061,7 +1061,7 @@ commands:
     name: "api-v2-auth"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "WWW-Authenticate: Bearer realm=\"{{ persona.lure_content.service_name | default('platform') }}-platform\""
     statusCode: 401
     handler: '{"error":"unauthorized","message":"Bearer token required. Obtain a token via cdf/iam.manage MCP tool or contact platform-team@{{ persona.identity.public_domain }}","docs":"/docs"}'
@@ -1071,7 +1071,7 @@ commands:
     name: "internal-forbidden"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 403
     handler: '{"error":"forbidden","message":"Internal endpoints require service mesh mTLS. External access denied.","request_id":"req_blocked"}'
 
@@ -1080,7 +1080,7 @@ commands:
     name: "admin-auth"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
       - "WWW-Authenticate: Bearer realm=\"{{ persona.lure_content.service_name | default('platform') }}-admin\""
     statusCode: 401
     handler: '{"error":"unauthorized","message":"Admin panel requires platform-admin or sre role. Authenticate via IAM.","login":"/admin/login"}'
@@ -1090,7 +1090,7 @@ commands:
     name: "not-wordpress"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 404
     handler: '{"error":"not_found","message":"This is not a WordPress site."}'
 
@@ -1099,7 +1099,7 @@ commands:
     name: "exploit-attempt"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+      - "Server: nginx/1.25.4"
     statusCode: 404
     handler: '{"error":"not_found"}'
 
@@ -1108,7 +1108,7 @@ fallbackCommand:
   name: "default-404"
   headers:
     - "Content-Type: application/json; charset=utf-8"
-    - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
+    - "Server: nginx/1.25.4"
   statusCode: 404
   handler: '{"error":"not_found","message":"No route matched. See /docs for available endpoints or connect to /mcp for platform tools.","available":{"/":"Platform dashboard","/mcp":"MCP endpoint (StreamableHTTP)","/health":"Health check","/.well-known/mcp.json":"MCP discovery","/docs":"API documentation"}}'
 

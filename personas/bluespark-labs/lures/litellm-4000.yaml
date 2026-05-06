@@ -76,6 +76,17 @@ commands:
       - "X-Litellm-Version: 1.55.10"
     statusCode: 200
 
+  # 4b. Non-GET on /v1/models — 405 Method Not Allowed (real LiteLLM behavior).
+  # Defense-in-depth: this stanza wins over the catch-all 404 if Method gating
+  # propagates correctly through the rendered config.
+  - regex: "^/v1/models$"
+    handler: '{"error":{"message":"Method Not Allowed","type":"invalid_request_error","code":"method_not_allowed"}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "Allow: GET"
+    statusCode: 405
+
   # 5. GET /models — alias used by some clients
   - regex: "^/models$"
     method: "GET"
@@ -84,6 +95,15 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
+
+  # 5b. Non-GET on /models alias — same 405 pattern
+  - regex: "^/models$"
+    handler: '{"error":{"message":"Method Not Allowed","type":"invalid_request_error","code":"method_not_allowed"}}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "Allow: GET"
+    statusCode: 405
 
   # 6. POST /key/generate — DELIBERATE MISCONFIG. In real LiteLLM with
   # general_settings.master_key set, this requires "Authorization: Bearer

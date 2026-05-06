@@ -496,11 +496,60 @@ func TestHandleVersionResponse(t *testing.T) {
 
 	s.handleVersion(w, req, servConf, tr)
 
+	// Real Ollama /api/version returns ONLY {"version":"x.y.z"}.
+	// Adding platform / platform_version / mcp_endpoint keys is a
+	// fingerprint for any caller that knows the real upstream shape.
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), `"version":"0.6.2"`)
-	// With no persona loaded, platform name falls back to "Platform"
-	assert.Contains(t, w.Body.String(), `"platform":"Platform"`)
-	assert.Contains(t, w.Body.String(), `"mcp_endpoint":"http://localhost:8000/mcp"`)
+	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	body := w.Body.String()
+	assert.Contains(t, body, `"version":"0.6.2"`)
+	assert.NotContains(t, body, `"platform"`)
+	assert.NotContains(t, body, `"platform_version"`)
+	assert.NotContains(t, body, `"mcp_endpoint"`)
+	assert.NotContains(t, body, `"platform_services"`)
+}
+
+func TestHandleShow_UnknownModel404(t *testing.T) {
+	// Real Ollama returns 404 with {"error":"model 'name' not found"}
+	// when /api/show is asked about a model not in the local set.
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+	}
+
+	body := strings.NewReader(`{"model":"definitely-not-a-real-model:latest"}`)
+	req := httptest.NewRequest("POST", "/api/show", body)
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleShow(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	assert.Contains(t, w.Body.String(), `"error":"model 'definitely-not-a-real-model:latest' not found"`)
+}
+
+func TestHandleShow_KnownModel200(t *testing.T) {
+	// Sanity: a model IN the configured set still returns 200 with
+	// the synthesized model_info envelope.
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+	}
+
+	body := strings.NewReader(`{"model":"llama3.1:8b"}`)
+	req := httptest.NewRequest("POST", "/api/show", body)
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleShow(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "general.architecture")
 }
 
 func TestHandleTagsResponse(t *testing.T) {

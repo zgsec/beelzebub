@@ -770,41 +770,16 @@ func (s *OllamaStrategy) handleRoot(w http.ResponseWriter, r *http.Request, serv
 
 func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/version")
-	host, _ := s.clientIP(r)
 
-	platformName := s.personaOrEmpty().Lure("platform_display_name")
-	if platformName == "" && s.personaOrEmpty().DisplayName != "" {
-		platformName = s.personaOrEmpty().DisplayName
-	}
-	if platformName == "" {
-		platformName = "Platform"
-	}
+	// Real Ollama returns ONLY {"version":"x.y.z"} — adding platform / platform_version /
+	// mcp_endpoint keys was a one-shot fingerprint for any caller that knows the actual
+	// upstream response shape. Cross-protocol augmentation removed for the same reason:
+	// extra keys = unknown/custom server.
 	resp := map[string]interface{}{
-		"version":          s.version,
-		"platform":         platformName,
-		"platform_version": "3.12.1-rc1",
-		"mcp_endpoint":     "http://localhost:8000/mcp",
+		"version": s.version,
 	}
 
-	// Cross-protocol: if IP has interacted with other services, show richer platform info
-	if s.Bridge != nil {
-		flags := s.Bridge.GetFlags(host)
-		if len(flags) > 0 {
-			services := map[string]string{}
-			for _, f := range flags {
-				switch {
-				case strings.HasPrefix(f, "mcp_"):
-					services["mcp"] = "connected"
-				case strings.HasPrefix(f, "ssh_"):
-					services["ssh_gateway"] = "available"
-				}
-			}
-			if len(services) > 0 {
-				resp["platform_services"] = services
-			}
-		}
-	}
-
+	w.Header().Set("Ollama-Version", s.version)
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
@@ -864,6 +839,7 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 		Models []modelEntry `json:"models"`
 	}{Models: models}
 
+	w.Header().Set("Ollama-Version", s.version)
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
@@ -1178,7 +1154,23 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		req.Model = s.defaultModelName()
 	}
 
-	// Find model details
+	// Real Ollama returns 404 when /api/show is asked about a model not in the
+	// local set. Returning a synthesized 200 for any model name (the previous
+	// behavior here) was a behavioral fingerprint: a caller probing with a
+	// junk model and getting model_info back knows the server is fabricating.
+	if !s.modelExists(req.Model) {
+		errResp, _ := json.Marshal(map[string]string{
+			"error": "model '" + req.Model + "' not found",
+		})
+		w.Header().Set("Ollama-Version", s.version)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write(errResp)
+		s.traceEvent(r, tr, servConf, "ollama/show", "POST /api/show", string(errResp), string(body))
+		return
+	}
+
+	// Find model details (we know it exists from modelExists check above)
 	var family, paramSize, quantLevel string
 	for _, m := range s.models {
 		if m.Name == req.Model {
@@ -1187,11 +1179,6 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 			quantLevel = m.QuantizationLevel
 			break
 		}
-	}
-	if family == "" {
-		family = "llama"
-		paramSize = "8B"
-		quantLevel = "Q4_0"
 	}
 
 	pCount := paramCountFromSize(paramSize)
