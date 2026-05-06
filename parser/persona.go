@@ -130,6 +130,11 @@ type PersonaCoherence struct {
 	HostsFileTemplate string              `yaml:"hosts_file_template"`
 	SSHHistorySeeds   map[string][]string `yaml:"ssh_history_seeds,omitempty"`
 	VaultAddr         string              `yaml:"vault_addr,omitempty"`
+	// Timezone is the IANA timezone name (e.g. "Asia/Singapore", "UTC")
+	// the persona "lives in". Drives wall-clock formatting on every emitted
+	// timestamp that should be persona-coherent (Ollama modified_at,
+	// service log timestamps, etc.). Empty = UTC.
+	Timezone string `yaml:"timezone,omitempty"`
 }
 
 // LoadPersona reads <dir>/persona.yaml and returns the parsed struct.

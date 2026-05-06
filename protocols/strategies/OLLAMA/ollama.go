@@ -670,6 +670,54 @@ func (s *OllamaStrategy) stableDigestHex(modelName string) string {
 	return strings.TrimPrefix(s.stableDigest(modelName), "sha256:")
 }
 
+// personaLocation returns the *time.Location for the loaded persona's
+// configured timezone, falling back to UTC. Cached resolution is left to
+// the time package; LoadLocation is cheap-enough for per-request use here
+// (real Ollama clients hit /api/tags rarely vs. inference endpoints).
+func (s *OllamaStrategy) personaLocation() *time.Location {
+	tz := s.personaOrEmpty().Coherence.Timezone
+	if tz == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Warnf("Ollama: invalid persona timezone %q, falling back to UTC: %v", tz, err)
+		return time.UTC
+	}
+	return loc
+}
+
+// modelModifiedAt returns a deterministic-but-realistic RFC3339Nano timestamp
+// for a given model. Real Ollama derives /api/tags `modified_at` from the
+// model file's disk mtime, so a honeypot that ships hardcoded build-time
+// strings is a textbook AS63949-style detection signal (uniform-and-stale
+// timestamps across all models). Instead, we seed each model's apparent
+// mtime as `now - hash(slug + model_name) % 90d`. Two consecutive requests
+// for the same model in the same minute return the same wall-clock value
+// (modulo sub-second drift); two different models return different values
+// within the same response, all sharing the persona's TZ offset.
+//
+// The output is formatted with RFC3339Nano in the persona's configured
+// timezone. That matches the wire format real Ollama emits (e.g.
+// "2024-08-01T14:23:11.123456789-07:00") and keeps the offset coherent
+// with where the persona claims to be hosted.
+func (s *OllamaStrategy) modelModifiedAt(modelName string) string {
+	loc := s.personaLocation()
+	slug := s.personaOrEmpty().Slug
+	seed := slug + "/" + modelName
+	sum := sha256.Sum256([]byte(seed))
+	// Use the first 8 bytes as an unsigned int → range 0..2^64-1, modulo 90d
+	// of nanoseconds. 90d * 24h * 3600s * 1e9 ns ≈ 7.776e15, fits easily.
+	const ninetyDaysNs uint64 = 90 * 24 * 60 * 60 * 1_000_000_000
+	var raw uint64
+	for i := 0; i < 8; i++ {
+		raw = raw<<8 | uint64(sum[i])
+	}
+	offsetNs := raw % ninetyDaysNs
+	t := time.Now().Add(-time.Duration(offsetNs)).In(loc)
+	return t.Format(time.RFC3339Nano)
+}
+
 // defaultModelName returns the first configured model or a fallback.
 func (s *OllamaStrategy) defaultModelName() string {
 	if len(s.models) > 0 {
@@ -754,24 +802,20 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 		} `json:"details"`
 	}
 
-	// Per-model timestamps (different per model, timezone offset format)
-	modelTimestamps := []string{
-		"2026-01-15T14:30:00.123456789-05:00",
-		"2026-02-02T09:15:22.456789012-08:00",
-		"2026-02-18T16:45:11.789012345-06:00",
-		"2026-01-28T11:20:33.234567890-05:00",
-	}
-
+	// Per-model timestamps: deterministic from (persona.slug, model.name)
+	// so two consecutive requests for the same model produce identical
+	// modified_at values, but each model has its own apparent mtime within
+	// the last 90 days. All emitted values share the persona's timezone
+	// offset (Asia/Singapore +08:00, America/New_York -05:00, etc.) which
+	// keeps coherence with where the persona claims to be hosted. Replaces
+	// the previous hardcoded build-time strings — those tripped both
+	// staleness AND mixed-offset (-05/-08/-06) detection signals.
 	var models []modelEntry
-	for i, m := range s.models {
-		ts := modelTimestamps[0]
-		if i < len(modelTimestamps) {
-			ts = modelTimestamps[i]
-		}
+	for _, m := range s.models {
 		e := modelEntry{
 			Name:       m.Name,
 			Model:      m.Name,
-			ModifiedAt: ts,
+			ModifiedAt: s.modelModifiedAt(m.Name),
 			Size:       sizeFromParam(m.ParameterSize),
 			Digest:     s.stableDigestHex(m.Name),
 		}

@@ -716,3 +716,135 @@ func TestHandleChatAcceptsUserSystemMessage(t *testing.T) {
 	assert.Equal(t, true, resp["done"])
 }
 
+
+// TestHandleTags_ModifiedAtIsRFC3339AndRecent verifies the dynamic
+// modified_at fix: every emitted timestamp parses cleanly as RFC3339,
+// falls within the last 90 days, all timestamps in a single response
+// share the same TZ offset (persona's location), and two consecutive
+// requests with the same persona+model produce identical values
+// (deterministic seeded by sha256(slug+model_name)).
+func TestHandleTags_ModifiedAtIsRFC3339AndRecent(t *testing.T) {
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "aurora-7b", Family: "llama", ParameterSize: "7B", QuantizationLevel: "Q4_0"},
+		{Name: "qwen2.5:14b", Family: "qwen2", ParameterSize: "14B", QuantizationLevel: "Q4_K_M"},
+		{Name: "mistral-nemo:12b", Family: "mistral", ParameterSize: "12B", QuantizationLevel: "Q4_0"},
+	}
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "bluespark-labs",
+		DisplayName:   "BlueSpark Labs",
+		Coherence: parser.PersonaCoherence{
+			Timezone: "Asia/Singapore",
+		},
+	})
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	doRequest := func() []string {
+		req := httptest.NewRequest("GET", "/api/tags", nil)
+		w := httptest.NewRecorder()
+		s.handleTags(w, req, servConf, tr)
+
+		var resp struct {
+			Models []struct {
+				Name       string `json:"name"`
+				ModifiedAt string `json:"modified_at"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		out := make([]string, len(resp.Models))
+		for i, m := range resp.Models {
+			out[i] = m.ModifiedAt
+		}
+		return out
+	}
+
+	first := doRequest()
+	second := doRequest()
+	if len(first) != 3 {
+		t.Fatalf("expected 3 model entries, got %d", len(first))
+	}
+
+	// (a) every modified_at parses as RFC3339[Nano]
+	now := time.Now()
+	parsed := make([]time.Time, len(first))
+	for i, ts := range first {
+		t1, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			// Try plain RFC3339 — Go's RFC3339Nano parser actually accepts both,
+			// but be lenient anyway.
+			t1, err = time.Parse(time.RFC3339, ts)
+			if err != nil {
+				t.Fatalf("modified_at %q does not parse as RFC3339: %v", ts, err)
+			}
+		}
+		parsed[i] = t1
+	}
+
+	// (b) every modified_at falls within the last 90 days of now
+	ninetyDays := 90 * 24 * time.Hour
+	for i, p := range parsed {
+		age := now.Sub(p)
+		if age < 0 || age > ninetyDays+time.Hour /* slack for test runtime */ {
+			t.Errorf("model %d modified_at %s out of range [now-90d, now]: age=%v",
+				i, first[i], age)
+		}
+	}
+
+	// (c) all timestamps share the same TZ offset (Asia/Singapore = +08:00)
+	expectedOffset := "+08:00"
+	for i, ts := range first {
+		if !strings.HasSuffix(ts, expectedOffset) {
+			t.Errorf("model %d modified_at %q lacks expected TZ offset %s",
+				i, ts, expectedOffset)
+		}
+	}
+
+	// (d) two consecutive requests for the same persona+model are identical.
+	// We allow a 1-second timing skew if the test flips across a second
+	// boundary — the underlying offset is sha256-stable but the anchor is
+	// time.Now(), so adjacent calls drift by sub-second only. Compare to
+	// the second precision.
+	for i := range first {
+		t1, _ := time.Parse(time.RFC3339Nano, first[i])
+		t2, _ := time.Parse(time.RFC3339Nano, second[i])
+		drift := t2.Sub(t1)
+		if drift < 0 {
+			drift = -drift
+		}
+		if drift > 2*time.Second {
+			t.Errorf("model %d: consecutive requests drifted by %v; want stable seed",
+				i, drift)
+		}
+	}
+}
+
+// TestModelModifiedAt_FallsBackToUTCOnInvalidTZ — when persona timezone
+// is unset or invalid, the helper must not crash and must emit UTC.
+func TestModelModifiedAt_FallsBackToUTCOnInvalidTZ(t *testing.T) {
+	s := newTestStrategy()
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "test-persona",
+		Coherence:     parser.PersonaCoherence{Timezone: ""},
+	})
+	got := s.modelModifiedAt("llama3.1:8b")
+	if !strings.HasSuffix(got, "Z") && !strings.HasSuffix(got, "+00:00") {
+		t.Errorf("expected UTC suffix on empty TZ, got %q", got)
+	}
+
+	// Invalid TZ — should warn-and-fallback to UTC, not crash.
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "test-persona",
+		Coherence:     parser.PersonaCoherence{Timezone: "Not/A/Real/Zone"},
+	})
+	got2 := s.modelModifiedAt("llama3.1:8b")
+	if !strings.HasSuffix(got2, "Z") && !strings.HasSuffix(got2, "+00:00") {
+		t.Errorf("expected UTC fallback on invalid TZ, got %q", got2)
+	}
+}
