@@ -51,6 +51,18 @@ class Probe:
     wildcard_paths: list[str] | None = None
     notes: str = ""
     forbidden_substrings: list[str] | None = None  # trigger-string check (G.1)
+    # G.1.d: minimum acceptable end-to-end latency (seconds). When set, the
+    # live-runner harness flags responses faster than this as suspicious
+    # (real LLM endpoints take >=1s; static-template lures answer in
+    # microseconds). The static_check.py simulator can't measure live
+    # latency, so it skips this check (documented in code).
+    latency_min_seconds: float | None = None
+    # G.1.d: per-key regex assertions against the JSON response body.
+    # Map of dotted-path → regex string. e.g. {"object": "^chat\\.completion$"}
+    # confirms the OpenAI-compat literal that distinguishes a real chat
+    # endpoint from a generic /v1/chat/completions stub. Dotted paths
+    # support `choices.0.finish_reason` for nested arrays/objects.
+    expect_field_value_pattern: dict[str, str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Probe":
@@ -70,14 +82,27 @@ class Probe:
             wildcard_paths=d.get("wildcard_paths"),
             notes=d.get("notes", ""),
             forbidden_substrings=d.get("forbidden_substrings"),
+            latency_min_seconds=d.get("latency_min_seconds"),
+            expect_field_value_pattern=d.get("expect_field_value_pattern"),
         )
 
 
 def fire(target: str, port: int, probe: Probe) -> tuple[int, dict, bytes]:
-    """Fire probe; return (status, headers, body)."""
+    """Fire probe; return (status, headers, body). Back-compat wrapper that
+    drops the latency. Live callers that need to enforce
+    Probe.latency_min_seconds should use fire_with_latency() instead."""
+    status, headers, body, _ = fire_with_latency(target, port, probe)
+    return status, headers, body
+
+
+def fire_with_latency(target: str, port: int, probe: Probe) -> tuple[int, dict, bytes, float]:
+    """Fire probe; return (status, headers, body, latency_seconds).
+    Latency is measured around the requests call with time.monotonic()."""
     url = f"http://{target}:{port}{probe.path}"
+    started = time.monotonic()
     r = requests.request(probe.method, url, data=probe.body or None, timeout=15)
-    return r.status_code, dict(r.headers), r.content
+    elapsed = time.monotonic() - started
+    return r.status_code, dict(r.headers), r.content, elapsed
 
 
 ISO_TIMESTAMP_RE = re.compile(
@@ -181,6 +206,84 @@ def check_cross_port_uniformity(target: str, ports: list[int]) -> list[str]:
     return failures
 
 
+def check_latency(probe: Probe, actual_seconds: float) -> list[str]:
+    """G.1.d: assert end-to-end latency meets the probe's latency_min_seconds
+    floor. Returns a non-empty failure list if the response was too fast —
+    motivated researchers use sub-second response times as a signal that an
+    LLM-shaped endpoint is template-backed, not actually inferring tokens.
+
+    Only meaningful when actually firing a live request (the static-only
+    simulator skips this; see static_check.py)."""
+    if probe.latency_min_seconds is None:
+        return []
+    if actual_seconds < probe.latency_min_seconds:
+        return [
+            f"LATENCY TOO FAST: response in {actual_seconds:.3f}s "
+            f"< minimum {probe.latency_min_seconds}s "
+            f"(static-template lures answer faster than real LLMs do)"
+        ]
+    return []
+
+
+def _resolve_field_path(obj: Any, path: str) -> Any:
+    """Walk a dotted path against a parsed JSON value. Supports object key
+    access and integer-indexed array access (e.g. `choices.0.finish_reason`).
+    Returns a sentinel string when any segment is missing so the caller can
+    distinguish "key absent" from "key present but value is None"."""
+    cur = obj
+    for seg in path.split("."):
+        if isinstance(cur, dict) and seg in cur:
+            cur = cur[seg]
+        elif isinstance(cur, list) and seg.isdigit() and int(seg) < len(cur):
+            cur = cur[int(seg)]
+        else:
+            return _MISSING
+    return cur
+
+
+_MISSING = object()
+
+
+def check_field_value_pattern(probe: Probe, body: bytes) -> list[str]:
+    """G.1.d: walk each declared dotted path against the JSON response body
+    and assert the value matches the regex. Designed for the strict literals
+    motivated researchers gate on (e.g. {"object": "^chat\\.completion$"} on
+    /v1/chat/completions). Skips silently when the probe doesn't declare any
+    field-value patterns."""
+    if not probe.expect_field_value_pattern:
+        return []
+    failures: list[str] = []
+    try:
+        j = json.loads(body)
+    except (ValueError, TypeError):
+        # Treat unparseable JSON as a hard failure when the probe expects
+        # field-value matches: the patterns can't be evaluated.
+        return [
+            f"FIELD VALUE PATTERN: JSON parse failed for body of length {len(body)}"
+        ]
+    for path, pattern in probe.expect_field_value_pattern.items():
+        v = _resolve_field_path(j, path)
+        if v is _MISSING:
+            failures.append(
+                f"FIELD VALUE PATTERN: path {path!r} not present in response"
+            )
+            continue
+        # Coerce to str for regex match; bool→"True"/"False" is fine, list/dict
+        # match-against-pattern is almost always a probe authoring error.
+        s = str(v)
+        try:
+            if not re.search(pattern, s):
+                failures.append(
+                    f"FIELD VALUE PATTERN: path {path!r} value {s!r} "
+                    f"does not match regex {pattern!r}"
+                )
+        except re.error as exc:
+            failures.append(
+                f"FIELD VALUE PATTERN: invalid regex for path {path!r}: {exc}"
+            )
+    return failures
+
+
 def check_static_expectations(probe: Probe, status: int, headers: dict, body: bytes) -> list[str]:
     """Verify a single response against the static probe expectations.
     Returns list of failure messages (empty = pass)."""
@@ -242,6 +345,11 @@ def check_static_expectations(probe: Probe, status: int, headers: dict, body: by
                     f"FORBIDDEN substring present in response: {needle!r} "
                     f"(motivated-actor scanner trigger string — would flag as honeypot)"
                 )
+
+    # G.1.d: per-field regex assertions against the JSON response body.
+    # Distinct from expect_keys (presence) — this nails down the LITERAL
+    # value of declared keys (e.g. "object" must equal "chat.completion").
+    failures.extend(check_field_value_pattern(probe, body))
 
     # Timestamp freshness + timezone-consistency check (always runs)
     ts_failures = check_timestamp_realism(body)
@@ -332,12 +440,15 @@ def stop_real_service(container: str) -> None:
 
 
 def _run_probe_and_report(probe: Probe, target: str, port: int) -> list[str]:
-    """Fire a single probe, run static checks, and return failures."""
+    """Fire a single probe, run static checks + the live-only latency
+    check, and return failures."""
     try:
-        status, headers, body = fire(target, port, probe)
+        status, headers, body, latency = fire_with_latency(target, port, probe)
     except requests.RequestException as e:
         return [f"lure unreachable: {e}"]
-    return check_static_expectations(probe, status, headers, body)
+    failures = check_static_expectations(probe, status, headers, body)
+    failures.extend(check_latency(probe, latency))
+    return failures
 
 
 def main():
@@ -390,14 +501,18 @@ def main():
         for probe in probes:
             print(f"--- probe: {probe.name} ---")
             try:
-                lure_resp = fire(args.lure_target, lure_port, probe)
+                lure_status, lure_headers, lure_body, lure_latency = fire_with_latency(
+                    args.lure_target, lure_port, probe)
             except requests.RequestException as e:
                 failures_by_probe[probe.name] = [f"lure unreachable: {e}"]
                 print(f"  FAIL: lure unreachable: {e}")
                 continue
+            lure_resp = (lure_status, lure_headers, lure_body)
 
             static_failures = check_static_expectations(probe, *lure_resp)
             failures = list(static_failures)
+            # G.1.d: live-only latency floor.
+            failures.extend(check_latency(probe, lure_latency))
 
             if real_container:
                 try:

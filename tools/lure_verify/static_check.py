@@ -13,8 +13,16 @@ verify:
   - status code, content-type, JSON key set / forbidden keys
   - forbidden_substrings (canary trigger strings)
   - expect_response_headers_present (e.g., x-vllm-version)
+  - expect_field_value_pattern (G.1.d) — per-key regex assertions on the
+    simulated body (e.g. object="^chat\\.completion$")
   - check_timestamp_realism (timezone consistency, freshness)
   - cross-port uniformity across all 5 BlueSpark lures
+
+NOT enforced in static mode (the simulator doesn't fire real requests):
+  - latency_min_seconds — live-only check; the live-Docker harness
+    measures end-to-end response time and asserts the floor. The
+    Probe.latency_min_seconds field still parses cleanly and is exposed
+    on the Probe dataclass; static mode just doesn't act on it.
 
 Usage:
     python tools/lure_verify/static_check.py            # all services

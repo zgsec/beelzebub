@@ -140,3 +140,117 @@ def test_check_cross_port_uniformity_module_imports():
     Live-network behaviour is verified separately."""
     from verify_lure_shape import check_cross_port_uniformity
     assert callable(check_cross_port_uniformity)
+
+
+# ---------------------------------------------------------------------------
+# G.1.d: latency_min_seconds + expect_field_value_pattern
+# ---------------------------------------------------------------------------
+
+from verify_lure_shape import check_latency, check_field_value_pattern  # noqa: E402
+
+
+def test_check_latency_passes_when_above_floor():
+    p = Probe.from_dict({"name": "x", "method": "POST", "path": "/",
+                         "latency_min_seconds": 1.0})
+    assert check_latency(p, 1.5) == []
+    assert check_latency(p, 1.0) == []  # exact floor still passes
+
+
+def test_check_latency_fails_when_too_fast():
+    p = Probe.from_dict({"name": "x", "method": "POST", "path": "/",
+                         "latency_min_seconds": 1.0})
+    failures = check_latency(p, 0.5)
+    assert len(failures) == 1
+    assert "LATENCY TOO FAST" in failures[0]
+    assert "0.500s" in failures[0]
+    assert "minimum 1.0" in failures[0]
+
+
+def test_check_latency_skipped_when_field_unset():
+    """Without latency_min_seconds the helper is a silent no-op."""
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    assert check_latency(p, 0.001) == []
+
+
+def test_check_field_value_pattern_passes_on_match():
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_field_value_pattern": {"object": "^chat\\.completion$"},
+    })
+    body = b'{"object": "chat.completion", "id": "x"}'
+    assert check_field_value_pattern(p, body) == []
+
+
+def test_check_field_value_pattern_fails_on_wrong_literal():
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_field_value_pattern": {"object": "^chat\\.completion$"},
+    })
+    body = b'{"object": "text_completion"}'
+    failures = check_field_value_pattern(p, body)
+    assert len(failures) == 1
+    assert "FIELD VALUE PATTERN" in failures[0]
+    assert "text_completion" in failures[0]
+
+
+def test_check_field_value_pattern_supports_dotted_path():
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_field_value_pattern": {
+            "choices.0.finish_reason": "^stop$",
+        },
+    })
+    body = b'{"choices": [{"finish_reason": "stop"}]}'
+    assert check_field_value_pattern(p, body) == []
+    bad = b'{"choices": [{"finish_reason": "length"}]}'
+    failures = check_field_value_pattern(p, bad)
+    assert any("FIELD VALUE PATTERN" in f for f in failures)
+
+
+def test_check_field_value_pattern_missing_path():
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_field_value_pattern": {"object": "x"},
+    })
+    failures = check_field_value_pattern(p, b'{"id": "x"}')
+    assert any("not present" in f for f in failures)
+
+
+def test_check_field_value_pattern_unparseable_json():
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_field_value_pattern": {"object": "x"},
+    })
+    failures = check_field_value_pattern(p, b'<not json>')
+    assert any("JSON parse failed" in f for f in failures)
+
+
+def test_check_field_value_pattern_skipped_when_field_unset():
+    """No expect_field_value_pattern → no-op."""
+    p = Probe.from_dict({"name": "x", "method": "GET", "path": "/"})
+    assert check_field_value_pattern(p, b"anything") == []
+
+
+def test_check_static_expectations_runs_field_pattern_check():
+    """End-to-end: expect_field_value_pattern is wired into the main entry
+    point check_static_expectations, not just the helper. Wrong literal must
+    surface as a static failure."""
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "expect_status": 200,
+        "expect_field_value_pattern": {"object": "^chat\\.completion$"},
+    })
+    body = b'{"object": "text_completion"}'
+    failures = check_static_expectations(p, 200, {"Content-Type": "application/json"}, body)
+    assert any("FIELD VALUE PATTERN" in f for f in failures)
+
+
+def test_probe_from_dict_preserves_new_fields():
+    """Round-trip the new YAML keys through Probe.from_dict."""
+    p = Probe.from_dict({
+        "name": "x", "method": "POST", "path": "/",
+        "latency_min_seconds": 1.5,
+        "expect_field_value_pattern": {"object": "^chat\\.completion$"},
+    })
+    assert p.latency_min_seconds == 1.5
+    assert p.expect_field_value_pattern == {"object": "^chat\\.completion$"}
