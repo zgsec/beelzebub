@@ -154,6 +154,28 @@ func isEmbeddingModel(name string) bool {
 	return strings.Contains(n, "-embed-") || strings.HasSuffix(n, "-embed")
 }
 
+// ollamaLLMFallback returns the (status, body) pair to emit when the LLM
+// path produced no usable response (missing API key, ExecuteModel error,
+// rate limit, or empty template fallback). When the lure has llmFallback
+// configured, those values win verbatim — letting BlueSpark's litellm /
+// vllm / ollama lures all emit vendor-shaped JSON envelopes. When unset,
+// preserves the legacy Ollama-shaped CUDA-OOM body for backward compat
+// with every existing OLLAMA lure that doesn't opt in.
+func ollamaLLMFallback(fb *parser.LLMFallback, model string) (int, string) {
+	status := http.StatusInternalServerError
+	body := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, model)
+	if fb == nil {
+		return status, body
+	}
+	if fb.Status != 0 {
+		status = fb.Status
+	}
+	if fb.Body != "" {
+		body = fb.Body
+	}
+	return status, body
+}
+
 func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
 	if servConf.Plugin.LLMProvider == "" {
 		return "", false
@@ -968,11 +990,14 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		s.rngMu.Unlock()
 	}
 
-	// Empty response = degradation tier 3 simulated error (real Ollama error format)
+	// Empty response = degradation tier 3 simulated error (real Ollama error format).
+	// If the lure has an llmFallback configured (litellm/vllm/ollama
+	// persona-shaped error envelope), use it verbatim; otherwise keep the
+	// legacy Ollama-shaped CUDA-OOM body for backward-compat.
 	if response == "" {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		errResp := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, req.Model)
+		status, errResp := ollamaLLMFallback(servConf.LLMFallback, req.Model)
+		w.WriteHeader(status)
 		w.Write([]byte(errResp))
 		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[degradation:cuda_oom]", string(body))
 		return
@@ -1102,11 +1127,12 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		s.rngMu.Unlock()
 	}
 
-	// Empty response = degradation tier 3 simulated error
+	// Empty response = degradation tier 3 simulated error. Persona-shaped
+	// envelope (when configured) wins over the legacy CUDA-OOM body.
 	if response == "" {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		errResp := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, req.Model)
+		status, errResp := ollamaLLMFallback(servConf.LLMFallback, req.Model)
+		w.WriteHeader(status)
 		w.Write([]byte(errResp))
 		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[degradation:cuda_oom]", string(body))
 		return

@@ -52,6 +52,17 @@ responseBodyMaxBytes: 65536
 captureRequestBody: true
 requestBodyMaxBytes: 65536
 
+# Persona-shaped error envelope returned when ExecuteModel fails
+# (no OPEN_AI_SECRET_KEY, network error, rate limit) and the template
+# fallback also produces no response. Real Ollama errors are simple
+# {"error":"..."} objects (no nested error.message.type structure).
+# Override here picks an inference-engine error that's plausible without
+# leaking GPU / OOM detail (the legacy CUDA-OOM body is also realistic
+# but always identical, which is its own fingerprint).
+llmFallback:
+  status: 500
+  body: '{"error":"unexpected EOF reading from inference engine"}'
+
 ollamaConfig:
   version: "0.6.5"
 

@@ -26,6 +26,17 @@ responseBodyMaxBytes: 65536
 captureRequestBody: true
 requestBodyMaxBytes: 65536
 
+# Persona-shaped error envelope returned when ExecuteModel fails (no
+# OPEN_AI_SECRET_KEY, network error, rate limit). Real LiteLLM returns
+# 500 with an OpenAI-compat error envelope on chat-completions failure
+# (litellm.APIError class); matching the shape avoids burning the lure
+# on the /v1/chat/completions path. Without this, the framework would
+# emit bare-text "500 Internal Server Error" which doesn't match
+# LiteLLM's wire shape.
+llmFallback:
+  status: 500
+  body: '{"error":{"message":"litellm.APIError: An unexpected error occurred. Please try again.","type":"APIError","param":null,"code":"500"}}'
+
 commands:
   # 1. GET / — LiteLLM root: real returns redirect-style JSON message
   - regex: "^/$"

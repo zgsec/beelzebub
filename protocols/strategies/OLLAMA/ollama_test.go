@@ -850,3 +850,63 @@ func TestModelModifiedAt_FallsBackToUTCOnInvalidTZ(t *testing.T) {
 		t.Errorf("expected UTC fallback on invalid TZ, got %q", got2)
 	}
 }
+
+// TestOllama_LLMFallback_BackwardCompatCUDABody — when the lure has no
+// llmFallback configured (every existing OLLAMA service config), the
+// empty-response fallback emits the legacy Ollama-shaped CUDA-OOM JSON
+// body and returns 500. Backward-compat gate.
+func TestOllama_LLMFallback_BackwardCompatCUDABody(t *testing.T) {
+	status, body := ollamaLLMFallback(nil, "llama3.1:8b")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", status)
+	}
+	want := `{"error":"model 'llama3.1:8b' failed to generate a response: CUDA error: out of memory"}`
+	if body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+// TestOllama_LLMFallback_PersonaShapedBodyOverrides — when the lure has
+// llmFallback configured (e.g. BlueSpark's ollama-11434 lure), the
+// configured envelope wins verbatim. The model parameter is ignored
+// because the configured body is taken as-is from YAML.
+func TestOllama_LLMFallback_PersonaShapedBodyOverrides(t *testing.T) {
+	fb := &parser.LLMFallback{
+		Status: 500,
+		Body:   `{"error":"unexpected EOF reading from inference engine"}`,
+	}
+	status, body := ollamaLLMFallback(fb, "aurora-7b")
+	if status != 500 {
+		t.Errorf("status = %d, want 500", status)
+	}
+	if body != fb.Body {
+		t.Errorf("body = %q, want %q", body, fb.Body)
+	}
+}
+
+// TestOllama_LLMFallback_ZeroFieldsKeepLegacy — partial config: zero
+// status keeps the 500 default; empty body keeps the legacy CUDA-OOM
+// envelope. Lets a lure tweak just one field without re-specifying the
+// other.
+func TestOllama_LLMFallback_ZeroFieldsKeepLegacy(t *testing.T) {
+	// Only body set → status defaults to 500
+	status, body := ollamaLLMFallback(&parser.LLMFallback{Body: `{"error":"x"}`}, "m1")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (default)", status)
+	}
+	if body != `{"error":"x"}` {
+		t.Errorf("body = %q, want override", body)
+	}
+
+	// Only status set → body defaults to CUDA-OOM with the model name
+	status, body = ollamaLLMFallback(&parser.LLMFallback{Status: 503}, "m2")
+	if status != 503 {
+		t.Errorf("status = %d, want 503", status)
+	}
+	if !strings.Contains(body, "CUDA error: out of memory") {
+		t.Errorf("body = %q, want default CUDA-OOM envelope", body)
+	}
+	if !strings.Contains(body, "'m2'") {
+		t.Errorf("body = %q, want model 'm2' interpolated", body)
+	}
+}

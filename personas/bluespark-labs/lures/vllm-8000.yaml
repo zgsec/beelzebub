@@ -26,6 +26,15 @@ responseBodyMaxBytes: 65536
 captureRequestBody: true
 requestBodyMaxBytes: 65536
 
+# Persona-shaped error envelope returned when ExecuteModel fails (no
+# OPEN_AI_SECRET_KEY, network error, rate limit). Real vLLM OpenAI
+# server emits OpenAI-compat error JSON with object="error" and code
+# as integer (not string, unlike LiteLLM). Matching this shape avoids
+# burning the lure on /v1/chat/completions when the LLM path errors.
+llmFallback:
+  status: 500
+  body: '{"object":"error","message":"Internal server error","type":"InternalServerError","param":null,"code":500}'
+
 commands:
   # 1. GET / — vLLM root: real upstream returns 404 JSON {"detail":"Not Found"}
   - regex: "^/$"
