@@ -260,7 +260,7 @@ commands:
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: {{ persona.lure_content.service_name | default('platform') }}-platform/3.12.1"
-      - "X-Request-Id: req_a1b2c3d4"
+      - "X-Request-Id: req_${request.uuid_short}"
       - "X-Powered-By: uvicorn"
       - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
     statusCode: 200

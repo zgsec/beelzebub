@@ -48,7 +48,7 @@ commands:
       - "Content-Type: application/json"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
-      - "X-Request-Id: 7a2f4e18-b3c1-4d5e-9f6a-8b7c2d1e0f3a"
+      - "X-Request-Id: ${request.uuid}"
     statusCode: 204
 
   # Health endpoint

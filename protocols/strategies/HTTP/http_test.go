@@ -731,3 +731,82 @@ func TestHTTP_CookieForgery_Classifier(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyResponseSubstitutions_RequestVarsUnconditional — request-level
+// placeholders fire even with no session context. This is the path that
+// closes the X-Request-Id cross-fleet fingerprint leak: every response
+// must get a fresh per-request UUID regardless of statefulness.
+func TestApplyResponseSubstitutions_RequestVarsUnconditional(t *testing.T) {
+	resp := httpResponse{
+		StatusCode: 200,
+		Headers:    []string{"X-Request-Id: req_${request.uuid_short}"},
+		Body:       `{"trace_id":"${request.uuid}","ts":${request.unix_ms}}`,
+	}
+	applyResponseSubstitutions(&resp, nil)
+
+	if strings.Contains(resp.Headers[0], "${request.uuid_short}") {
+		t.Fatalf("uuid_short placeholder not substituted: %q", resp.Headers[0])
+	}
+	if !strings.HasPrefix(resp.Headers[0], "X-Request-Id: req_") {
+		t.Fatalf("header prefix mangled: %q", resp.Headers[0])
+	}
+	// Suffix should be 8 hex chars from the dashed UUID.
+	suffix := strings.TrimPrefix(resp.Headers[0], "X-Request-Id: req_")
+	if len(suffix) != 8 {
+		t.Errorf("uuid_short length = %d, want 8 (got %q)", len(suffix), suffix)
+	}
+	for _, c := range suffix {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("uuid_short non-hex char %q in %q", c, suffix)
+			break
+		}
+	}
+	if strings.Contains(resp.Body, "${request.uuid}") || strings.Contains(resp.Body, "${request.unix_ms}") {
+		t.Errorf("body placeholders not substituted: %q", resp.Body)
+	}
+}
+
+// TestApplyResponseSubstitutions_VariesAcrossInvocations — back-to-back
+// calls must produce different uuid values. Same fingerprint check
+// recongraph's sandbox_detect would run: identical responses across
+// two probes = environment intercepting.
+func TestApplyResponseSubstitutions_VariesAcrossInvocations(t *testing.T) {
+	mk := func() string {
+		r := httpResponse{Headers: []string{"X-Request-Id: ${request.uuid}"}}
+		applyResponseSubstitutions(&r, nil)
+		return r.Headers[0]
+	}
+	a, b := mk(), mk()
+	if a == b {
+		t.Fatalf("two consecutive responses produced identical X-Request-Id: %q", a)
+	}
+}
+
+// TestApplyResponseSubstitutions_SessionVarsStillWork — request vars must
+// not regress the existing session.cookie / session.short / captured.*
+// substitution path used by the stateful CVE-lure framework.
+func TestApplyResponseSubstitutions_SessionVarsStillWork(t *testing.T) {
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+	sess := cookieStore.Create("203.0.113.5", "ja4h", map[string]string{"role": "admin"})
+	sctx := &sessionContext{cookieStore: cookieStore, sess: sess, cookieName: ".X", ttlSeconds: 1800}
+
+	resp := httpResponse{
+		Headers: []string{"X-Sess: ${session.short}"},
+		Body:    `cookie=${session.cookie};role=${captured.role};req=${request.uuid_short}`,
+	}
+	applyResponseSubstitutions(&resp, sctx)
+
+	if !strings.HasPrefix(resp.Headers[0], "X-Sess: ") || strings.Contains(resp.Headers[0], "${") {
+		t.Errorf("session header not substituted: %q", resp.Headers[0])
+	}
+	if !strings.Contains(resp.Body, "cookie="+sess.Cookie) {
+		t.Errorf("session.cookie missing: %q", resp.Body)
+	}
+	if !strings.Contains(resp.Body, "role=admin") {
+		t.Errorf("captured.role missing: %q", resp.Body)
+	}
+	if strings.Contains(resp.Body, "${request.uuid_short}") {
+		t.Errorf("request.uuid_short not substituted alongside session vars: %q", resp.Body)
+	}
+}
