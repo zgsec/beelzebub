@@ -143,7 +143,7 @@ plugin:
       OLLAMA_HOST=0.0.0.0:11434
       OLLAMA_KEEP_ALIVE=5m
       MODEL_DIR=/var/lib/ollama/models
-      LITELLM_PROXY=http://localhost:4000  # master key sk-${LITELLM_MASTER_KEY} — set in /etc/litellm/.env, /key/generate is reachable without auth (DEV-441 to fix)
+      LITELLM_PROXY=http://localhost:4000  # master key sk-${LITELLM_CANARY_KEY} — set in /etc/litellm/.env, /key/generate is reachable without auth (DEV-441 to fix)
       VLLM_BACKEND=http://localhost:8000   # exposed without auth, internal-only per ops/slack
       AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
       AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
