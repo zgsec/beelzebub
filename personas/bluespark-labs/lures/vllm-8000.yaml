@@ -23,6 +23,8 @@ description: "vLLM OpenAI-compatible inference API"
 serviceType: "vllm"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
+captureRequestBody: true
+requestBodyMaxBytes: 65536
 
 commands:
   # 1. GET / — vLLM root: real upstream returns 404 JSON {"detail":"Not Found"}

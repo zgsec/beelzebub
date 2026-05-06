@@ -375,6 +375,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType,
 			body, ns, resp.Body, resp.StatusCode, strings.Join(resp.Headers, ", "),
 			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs,
+			servConf.CaptureRequestBody, servConf.RequestBodyMaxBytes,
 			nilIfEmpty(eventCaptured), sessionKeyOverride, handlerOverride)
 	}()
 
@@ -506,6 +507,11 @@ func nilIfEmpty(m map[string]string) map[string]string {
 // for high-volume lures.
 const defaultResponseBodyMaxBytes = 64 * 1024
 
+// defaultRequestBodyMaxBytes mirrors defaultResponseBodyMaxBytes for the
+// dedicated RequestBody field. Applied when CaptureRequestBody=true but
+// RequestBodyMaxBytes is left at zero in the YAML.
+const defaultRequestBodyMaxBytes = 64 * 1024
+
 // RawBodyCapBytes is the maximum number of request-body bytes captured
 // verbatim into the tracer event for stateful services (Feature #6).
 // 8 KiB covers the vast majority of attacker payloads without blowing
@@ -555,6 +561,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 	ns *noveltydetect.FingerprintStore,
 	responseBody string, responseStatusCode int, responseHeaders string,
 	captureResponseBody bool, responseBodyMaxBytes int, responseTimeMs int64,
+	captureRequestBody bool, requestBodyMaxBytes int,
 	captured map[string]string, sessionKeyOverride string, handlerOverride string) {
 	host, port, _ := net.SplitHostPort(request.RemoteAddr)
 	// Extract destination port from the listener's local address
@@ -693,6 +700,17 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 			event.ResponseBody = responseBody
 		}
 		event.ResponseHeaders = responseHeaders
+	}
+	if captureRequestBody {
+		maxBytes := requestBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultRequestBodyMaxBytes
+		}
+		if len(body) > maxBytes {
+			event.RequestBody = body[:maxBytes]
+		} else {
+			event.RequestBody = body
+		}
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

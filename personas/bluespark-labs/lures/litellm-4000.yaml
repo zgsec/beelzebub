@@ -23,6 +23,8 @@ description: "LiteLLM proxy"
 serviceType: "litellm"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
+captureRequestBody: true
+requestBodyMaxBytes: 65536
 
 commands:
   # 1. GET / — LiteLLM root: real returns redirect-style JSON message

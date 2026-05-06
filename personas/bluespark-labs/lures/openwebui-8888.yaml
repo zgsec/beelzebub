@@ -21,6 +21,8 @@ description: "Open WebUI AI chat interface"
 serviceType: "openwebui"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
+captureRequestBody: true
+requestBodyMaxBytes: 65536
 
 commands:
   # 1. GET / — Open WebUI SPA shell. Real upstream emits an HTML doc with

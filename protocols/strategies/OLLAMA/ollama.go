@@ -480,7 +480,7 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		respBytes = responseBytes[0]
 	}
 
-	tr.TraceEvent(tracer.Event{
+	event := tracer.Event{
 		Msg:              "Ollama API request",
 		RequestURI:       r.RequestURI,
 		Protocol:         tracer.HTTP.String(),
@@ -509,12 +509,33 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		AgentScore:       verdict.Score,
 		AgentCategory:    verdict.Category,
 		AgentSignals:     verdict.SignalsString(),
-		ResponseBytes:   respBytes,
-		JA4H:            tracer.ComputeJA4H(r, wireOrder),
-		HeaderOrder:     strings.Join(wireOrder, ","),
-		ServicePort:     destPort,
-	})
+		ResponseBytes:    respBytes,
+		JA4H:             tracer.ComputeJA4H(r, wireOrder),
+		HeaderOrder:      strings.Join(wireOrder, ","),
+		ServicePort:      destPort,
+	}
+	// Opt-in dedicated RequestBody capture (mirrors HTTP strategy's gated
+	// flag). The legacy Body field is always populated for backwards-compat;
+	// RequestBody adds bounded, opt-in storage with explicit truncation, used
+	// by downstream pipelines that want prompt capture without paying for
+	// every request body.
+	if servConf.CaptureRequestBody {
+		maxBytes := servConf.RequestBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultOllamaRequestBodyMaxBytes
+		}
+		if len(body) > maxBytes {
+			event.RequestBody = body[:maxBytes]
+		} else {
+			event.RequestBody = body
+		}
+	}
+	tr.TraceEvent(event)
 }
+
+// defaultOllamaRequestBodyMaxBytes mirrors the HTTP strategy default — 64 KiB
+// when CaptureRequestBody=true but RequestBodyMaxBytes left at zero.
+const defaultOllamaRequestBodyMaxBytes = 64 * 1024
 
 // requireOpenAIAuth mirrors api.openai.com: every /v1/* endpoint demands
 // `Authorization: Bearer <token>`. Missing or malformed → 401 with the real

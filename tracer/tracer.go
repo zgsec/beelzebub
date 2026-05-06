@@ -146,6 +146,17 @@ type Event struct {
 	// LLM-side prompt-injection detection.
 	ResponseBody string `json:"ResponseBody,omitempty"`
 
+	// v8: HTTP request body bytes from the attacker, dedicated capture (mirrors
+	// ResponseBody). Opt-in per service via parser.BeelzebubServiceConfiguration.
+	// CaptureRequestBody, truncated to RequestBodyMaxBytes (default 64 KiB).
+	// Required for: prompt capture on LLM-shaped lures (LiteLLM, vLLM,
+	// Ollama, Open WebUI), MCP tool argument retention, prompt-injection
+	// research. Distinct from the legacy Body field (which is always set,
+	// not truncated, and used by HTTP/MCP for backwards-compat); RequestBody
+	// is the bounded, opt-in equivalent that downstream pipelines should
+	// prefer when the operator has explicitly opted in.
+	RequestBody string `json:"RequestBody,omitempty"`
+
 	// v8: HTTP response headers served, comma-separated "Name: value" pairs.
 	// Captured alongside ResponseBody under the same opt-in flag. Detects
 	// honeypot fingerprinting via static header sets.

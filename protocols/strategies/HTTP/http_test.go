@@ -74,6 +74,7 @@ func TestTraceRequest_ResponseBodyCapturedWhenFlagOn(t *testing.T) {
 		"" /* request body */, nil /* novelty store */,
 		respBody, 200, respHeaders,
 		true /* captureResponseBody */, 0 /* default 64KiB */, 42 /* responseTimeMs */,
+		false /* captureRequestBody */, 0 /* requestBodyMaxBytes */,
 		nil /* captured */, "" /* sessionKeyOverride */, "" /* handlerOverride */)
 
 	got := tt.last()
@@ -107,6 +108,7 @@ func TestTraceRequest_ResponseBodyOmittedWhenFlagOff(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "Content-Type: text/plain",
 		false /* captureResponseBody OFF */, 0, 5,
+		false, 0,
 		nil, "", "")
 
 	got := tt.last()
@@ -138,6 +140,7 @@ func TestTraceRequest_ResponseBodyTruncatedAtMax(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "Content-Type: text/plain",
 		true, maxBytes, 1,
+		false, 0,
 		nil, "", "")
 
 	got := tt.last()
@@ -163,6 +166,7 @@ func TestTraceRequest_DefaultMaxAppliedWhenZero(t *testing.T) {
 	traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 		respBody, 200, "",
 		true, 0 /* zero → use default 64 KiB */, 1,
+		false, 0,
 		nil, "", "")
 
 	got := tt.last()
@@ -186,12 +190,140 @@ func TestTraceRequest_ResponseTimeAlwaysPopulated(t *testing.T) {
 	for _, capture := range []bool{true, false} {
 		traceRequest(req, tt, cmd, "desc", "svc", "", nil,
 			"x", 200, "", capture, 64*1024, 7,
+			false, 0,
 			nil, "", "")
 		got := tt.last()
 		if got.ResponseTimeMs != 7 {
 			t.Errorf("captureResponseBody=%v: ResponseTimeMs not populated (got %d)",
 				capture, got.ResponseTimeMs)
 		}
+	}
+}
+
+// TestTraceRequest_RequestBodyCapturedWhenFlagOn — symmetric to ResponseBody
+// capture: when captureRequestBody=true the dedicated RequestBody field is
+// populated verbatim (under the truncation cap).
+func TestTraceRequest_RequestBodyCapturedWhenFlagOn(t *testing.T) {
+	tt := &captureTracer{}
+	req := newTestRequest(t)
+	cmd := parser.Command{Name: "test-handler"}
+	reqBody := `{"messages":[{"role":"user","content":"prompt with embedded canary AKIA..."}]}`
+
+	traceRequest(req, tt, cmd, "desc", "svc",
+		reqBody /* request body */, nil,
+		"resp", 200, "",
+		false /* captureResponseBody */, 0, 1,
+		true /* captureRequestBody */, 0 /* default 64KiB */,
+		nil, "", "")
+
+	got := tt.last()
+	if got.RequestBody != reqBody {
+		t.Fatalf("RequestBody not captured.\n  want: %q\n  got:  %q", reqBody, got.RequestBody)
+	}
+}
+
+// TestTraceRequest_RequestBodyOmittedWhenFlagOff — opt-in default: when
+// captureRequestBody=false, the RequestBody field stays empty even when a
+// request body is present (the legacy Body field handles backwards compat).
+func TestTraceRequest_RequestBodyOmittedWhenFlagOff(t *testing.T) {
+	tt := &captureTracer{}
+	req := newTestRequest(t)
+	cmd := parser.Command{Name: "test-handler"}
+	reqBody := "AKIAIOSFODNN7EXAMPLE leaks here when flag is off — should NOT land in RequestBody"
+
+	traceRequest(req, tt, cmd, "desc", "svc", reqBody, nil,
+		"resp", 200, "",
+		false, 0, 1,
+		false /* captureRequestBody OFF */, 0,
+		nil, "", "")
+
+	got := tt.last()
+	if got.RequestBody != "" {
+		t.Fatalf("RequestBody must be empty when flag off; got %q", got.RequestBody)
+	}
+	// Legacy Body field still populated for backwards-compat.
+	if got.Body != reqBody {
+		t.Errorf("legacy Body field should still be set; want %q, got %q", reqBody, got.Body)
+	}
+}
+
+// TestTraceRequest_RequestBodyTruncatedAtMax — when the request body exceeds
+// requestBodyMaxBytes, the captured RequestBody is exactly truncated.
+func TestTraceRequest_RequestBodyTruncatedAtMax(t *testing.T) {
+	tt := &captureTracer{}
+	req := newTestRequest(t)
+	cmd := parser.Command{Name: "test-handler"}
+	reqBody := strings.Repeat("Q", 500)
+	maxBytes := 100
+
+	traceRequest(req, tt, cmd, "desc", "svc", reqBody, nil,
+		"resp", 200, "",
+		false, 0, 1,
+		true, maxBytes,
+		nil, "", "")
+
+	got := tt.last()
+	if len(got.RequestBody) != maxBytes {
+		t.Fatalf("RequestBody truncation: want exactly %d bytes, got %d",
+			maxBytes, len(got.RequestBody))
+	}
+}
+
+// TestTraceRequest_RequestBodyDefaultMaxAppliedWhenZero — zero
+// requestBodyMaxBytes with captureRequestBody=true falls back to the runtime
+// default (64 KiB).
+func TestTraceRequest_RequestBodyDefaultMaxAppliedWhenZero(t *testing.T) {
+	tt := &captureTracer{}
+	req := newTestRequest(t)
+	cmd := parser.Command{Name: "test-handler"}
+	reqBody := strings.Repeat("Y", 64*1024+50)
+
+	traceRequest(req, tt, cmd, "desc", "svc", reqBody, nil,
+		"resp", 200, "",
+		false, 0, 1,
+		true, 0 /* zero → default */,
+		nil, "", "")
+
+	got := tt.last()
+	if len(got.RequestBody) != defaultRequestBodyMaxBytes {
+		t.Fatalf("default request body max not applied: want %d, got %d",
+			defaultRequestBodyMaxBytes, len(got.RequestBody))
+	}
+}
+
+// TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig — end-to-end
+// strategy-level test: setting CaptureRequestBody on the service config
+// surfaces the truncated RequestBody on the tracer event.
+func TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig(t *testing.T) {
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+	sctx := &sessionContext{cookieStore: cookieStore, cookieName: ".X", ttlSeconds: 1800}
+
+	body := strings.Repeat("Z", 200)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.5:1234"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:4000"}))
+	req = req.WithContext(ctx)
+
+	cmd := parser.Command{Name: "litellm/chat", StatusCode: 200, Handler: "{}"}
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{
+		ServiceType:         "litellm",
+		CaptureRequestBody:  true,
+		RequestBodyMaxBytes: 50,
+		State:               &parser.State{CookieName: ".X", TTLSeconds: 1800},
+	}
+	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+		t.Fatal(err)
+	}
+	got := tt.last()
+	if len(got.RequestBody) != 50 {
+		t.Fatalf("RequestBody truncation via servConf: want 50 bytes, got %d (%q)",
+			len(got.RequestBody), got.RequestBody)
+	}
+	if got.RequestBody != strings.Repeat("Z", 50) {
+		t.Errorf("RequestBody content mismatch: %q", got.RequestBody)
 	}
 }
 

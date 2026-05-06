@@ -1078,7 +1078,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// Trace as HTTP event with full request metadata
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
 	destPort := tracer.ExtractPort(servConf.Address)
-	tr.TraceEvent(tracer.Event{
+	event := tracer.Event{
 		Msg:             "HTTP request on MCP port",
 		RequestURI:      r.RequestURI,
 		Protocol:        tracer.HTTP.String(),
@@ -1098,7 +1098,20 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 		ServiceType:     servConf.ServiceType,
 		Handler:         matchedCommand.Name,
 		ServicePort:     destPort,
-	})
+	}
+	// Opt-in dedicated RequestBody capture (mirrors HTTP/OLLAMA strategies).
+	if servConf.CaptureRequestBody {
+		maxBytes := servConf.RequestBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultMCPRequestBodyMaxBytes
+		}
+		if len(body) > maxBytes {
+			event.RequestBody = body[:maxBytes]
+		} else {
+			event.RequestBody = body
+		}
+	}
+	tr.TraceEvent(event)
 
 	// Write response
 	for _, h := range matchedCommand.Headers {
@@ -1112,6 +1125,10 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	}
 	fmt.Fprint(w, matchedCommand.Handler)
 }
+
+// defaultMCPRequestBodyMaxBytes is applied when CaptureRequestBody=true but
+// RequestBodyMaxBytes left at zero on an MCP service config. Matches HTTP/OLLAMA.
+const defaultMCPRequestBodyMaxBytes = 64 * 1024
 
 func fmtCookies(cookies []*http.Cookie) string {
 	var b strings.Builder

@@ -651,3 +651,52 @@ func TestScreenConnectYAML_Parses(t *testing.T) {
 		t.Error("no GET methods round-tripped from YAML")
 	}
 }
+
+// TestCaptureRequestBody_YAMLRoundTrip — captureRequestBody +
+// requestBodyMaxBytes must unmarshal correctly. Mirrors the existing
+// captureResponseBody pattern.
+func TestCaptureRequestBody_YAMLRoundTrip(t *testing.T) {
+	yamlIn := []byte(`
+apiVersion: "v1"
+protocol: "http"
+address: ":4000"
+captureRequestBody: true
+requestBodyMaxBytes: 65536
+`)
+	var cfg BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal(yamlIn, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !cfg.CaptureRequestBody {
+		t.Error("captureRequestBody did not unmarshal as true")
+	}
+	if cfg.RequestBodyMaxBytes != 65536 {
+		t.Errorf("requestBodyMaxBytes: want 65536, got %d", cfg.RequestBodyMaxBytes)
+	}
+}
+
+// TestCaptureRequestBody_OmittedHashCodeStable — adding the new fields
+// must not change the HashCode of pre-existing service configs that
+// leave the new flags at default-false / zero.
+func TestCaptureRequestBody_OmittedHashCodeStable(t *testing.T) {
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Toggling the new fields explicitly to their zero values
+	// must not change the hash either.
+	cfg.CaptureRequestBody = false
+	cfg.RequestBodyMaxBytes = 0
+	h2, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatalf("HashCode changed by zero-value request-body fields: %s != %s", h1, h2)
+	}
+}

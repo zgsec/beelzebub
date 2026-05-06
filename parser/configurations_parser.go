@@ -232,6 +232,18 @@ type BeelzebubServiceConfiguration struct {
 	// raise/lower per service. Truncation is plain byte-cutoff (no UTF-8
 	// boundary preservation) — receivers must tolerate truncation.
 	ResponseBodyMaxBytes int `yaml:"responseBodyMaxBytes" json:",omitempty"`
+	// CaptureRequestBody, when true, populates the dedicated RequestBody
+	// field on every tracer.Event for this service (truncated to
+	// RequestBodyMaxBytes). Mirrors CaptureResponseBody for prompt /
+	// JSON-RPC argument capture on chat-shaped lures (LLM endpoints, MCP
+	// tool calls, etc). Default false to keep storage opt-in and avoid
+	// duplicating attacker payloads when the legacy Body field is enough.
+	// `omitempty` keeps default-value HashCode() stable.
+	CaptureRequestBody bool `yaml:"captureRequestBody" json:",omitempty"`
+	// RequestBodyMaxBytes truncates captured request bodies to this size.
+	// Zero (default) means the runtime default (64 KiB) is applied when
+	// CaptureRequestBody is true. Truncation is plain byte-cutoff.
+	RequestBodyMaxBytes int `yaml:"requestBodyMaxBytes" json:",omitempty"`
 	// ServiceProtocol opts a TCP listener into a purpose-built binary
 	// protocol handler instead of the generic regex/command loop. Known
 	// values:
