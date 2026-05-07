@@ -157,7 +157,7 @@ func applyLLMFallback(resp *httpResponse, fb *parser.LLMFallback) {
 	}
 }
 
-func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
 		httpStrategy.noveltyStore = noveltydetect.NewStore()
