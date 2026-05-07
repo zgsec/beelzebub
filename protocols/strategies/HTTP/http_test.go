@@ -327,14 +327,6 @@ func TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Phase 5: stateful session tests
-// ---------------------------------------------------------------------------
-
-// TestHTTP_SessionCreateSetsCookieAndCaptures verifies that sessionAction:create
-// issues a Set-Cookie header, populates the cookie store, extracts sessionCapture
-// regex matches from the request body, and overrides event.SessionKey to the
-// cookie[:16] session key.
 func TestHTTP_SessionCreateSetsCookieAndCaptures(t *testing.T) {
 	cookieStore := historystore.NewCookieSessionStore(10 * time.Minute)
 	defer cookieStore.Stop()
@@ -518,13 +510,6 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tier 1 framework additions: Features #6, #7, #8
-// ---------------------------------------------------------------------------
-
-// TestHTTP_RawBodyFirst8KB verifies that bodies larger than RawBodyCapBytes
-// are truncated to exactly 8192 bytes, and that smaller bodies are captured
-// verbatim, under the <svc>.raw_body_first_8kb key.
 func TestHTTP_RawBodyFirst8KB(t *testing.T) {
 	cookieStore := historystore.NewCookieSessionStore(time.Hour)
 	defer cookieStore.Stop()

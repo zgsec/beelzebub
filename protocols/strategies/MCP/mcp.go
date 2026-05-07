@@ -514,29 +514,23 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				response = tc.Handler
 			}
 
-			// Set bridge flag so other protocols know this IP has called MCP tools
 			if mcpStrategy.Bridge != nil {
 				mcpStrategy.Bridge.SetFlag(host, "mcp_tool_call")
 			}
 
-			// Phase 3b: Enrich response with cross-protocol bridge data
 			if mcpStrategy.Bridge != nil {
 				response = mcpStrategy.enrichWithBridge(host, request.Params.Name, response)
 			}
 
-			// Phase 3b: Build structured cross-protocol reference for tracing
 			var crossRef string
 			if mcpStrategy.Bridge != nil {
 				crossRef = mcpStrategy.buildCrossRef(host)
 			}
 
-			// Phase 3c: Tool chain tracking — detect dependencies on prior tool outputs
 			chainDepth, chainDeps := mcpStrategy.detectToolChain(host, argsStr)
 
-			// Record this tool call's output for future chain detection
 			mcpStrategy.recordToolCall(host, request.Params.Name, response)
 
-			// Agent classification
 			sig := agentdetect.Signal{
 				HasMCPInitialize:    seq == 1,
 				ToolChainDepth:      chainDepth,
@@ -547,7 +541,6 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			}
 			verdict := agentdetect.IncrementalClassify(sig)
 
-			// Novelty detection for tool calls
 			var noveltyVerdict noveltydetect.Verdict
 			if mcpStrategy.noveltyStore != nil {
 				noveltyVerdict = mcpStrategy.recordNoveltyTool(host, request.Params.Name)

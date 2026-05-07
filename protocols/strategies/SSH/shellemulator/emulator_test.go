@@ -30,10 +30,6 @@ func defaultEmulator() (*Emulator, *Session) {
 	return newTestEmulator(parser.ShellEmulator{Enabled: true})
 }
 
-// === Stub Dispatcher Tests ===
-// Phase D.2: the handler matrix has been deleted. Every command now returns
-// "bash: <cmd>: command not found" until D.3 wires the LLM bridge.
-
 func TestEmptyCommand(t *testing.T) {
 	e, s := defaultEmulator()
 	out, handled := e.Execute("", s)
@@ -70,9 +66,6 @@ func TestFirstWordUsedInNotFound(t *testing.T) {
 	out, _ := e.Execute("docker ps --format table", s)
 	assert.Contains(t, out, "bash: docker: command not found")
 }
-
-// === BuildPromptContext Tests ===
-// BuildPromptContext is the D.3 entry point — must survive D.2 intact.
 
 func TestBuildPromptContextNotEmpty(t *testing.T) {
 	e, _ := defaultEmulator()

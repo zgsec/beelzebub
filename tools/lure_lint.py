@@ -1,43 +1,20 @@
 """Lure deception-leak linter.
 
-Catches the classes of fingerprint leak discovered in the 2026-05-06
-sniff-test conformance run before they ship to a sensor:
+Rules:
+  R1  Server header value not in lure_realism.yaml allowlist.
+  R2  Banned headers (X-Platform, X-Honeypot, etc.) on any command.
+  R3  Hardcoded X-Request-Id literals — must use ${request.uuid*} or omit.
+  R4  Method-gating gaps on known POST-only / GET-only product endpoints.
+  R5  Missing catch-all 404 — every commands list must end with `.*` or `^.*$`
+      returning 4xx (defends against "200 to a random path" honeypot detector).
+  R6  Jinja2 `{{ ... }}` in rendered output. Source configs are exempt.
+  R7  Unrendered Beelzebub runtime tokens (`${session.*}`, `${captured.*}`,
+      `${request.*}`) outside header/body fields — they emit literally.
 
-  R1  Fictional Server header — value not in lure_realism.yaml allowlist.
-  R2  Banned headers (X-Platform, X-Honeypot, etc.) appear on any command.
-  R3  Hardcoded X-Request-Id literals — must use ${request.uuid*} runtime
-      substitution or omit the header entirely.
-  R4  Method-gating gaps — a command whose path matches a known POST-only
-      or GET-only endpoint of the real product (per lure_realism.yaml)
-      must declare `method:`.
-  R5  Catch-all 404 — every commands list must end with a `.*` or `^.*$`
-      regex matching all unmatched paths and returning 4xx (defaults the
-      404 against the "200 to a random path" Censys honeypot detector).
-  R6  Jinja2 in rendered output — `configurations-rendered/` files must be
-      free of `{{ ... }}`; literal templates would leak to attackers if
-      the render step didn't substitute. Source configs ARE permitted to
-      have templates (they go through bzb persona render).
-  R7  Unrendered Beelzebub runtime tokens — `${session.*}` / `${captured.*}`
-      / `${request.*}` outside header/body fields (e.g., in `regex:` or
-      `name:`) will never substitute and emit literally.
+Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule.
 
-Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule on
-that line. Use sparingly and document why.
-
-Usage:
-    python tools/lure_lint.py [path ...]
-    python tools/lure_lint.py --help
-
-Exit code:
-    0  no violations
-    1  one or more violations (CI gate fails)
-
-If no paths given, lints every `*.yaml` under `configurations/services/` and
-`personas/<persona>/lures/`. Each violation prints one line with
-`file:line: rule  message`. Add `--summary` for a final pass/fail rollup.
-
-Designed to run pre-commit, in CI, and as a hard gate inside
-`bzb persona render`. Stdlib + PyYAML only.
+Exit 0 on clean, 1 on violations. With no paths, lints every YAML under
+`configurations/services/` and `personas/<persona>/lures/`.
 """
 from __future__ import annotations
 
@@ -75,16 +52,7 @@ def load_realism() -> dict:
     return yaml.safe_load(REALISM_YAML.read_text())
 
 
-# ---------------------------------------------------------------------------
-# Rule helpers
-# ---------------------------------------------------------------------------
-
-# A header line in a lure config: matches the YAML pattern
-#     - "Header-Name: value"
-# inside a `headers:` block.
 HEADER_LINE_RE = re.compile(r'^\s*-\s*"([A-Za-z][A-Za-z0-9-]*):\s*([^"]*)"')
-
-# regex line: matches `- regex: "..."` capturing the regex content.
 REGEX_LINE_RE = re.compile(r'^\s*-\s*regex:\s*"((?:[^"\\]|\\.)*)"')
 
 # method line: matches `    method: "GET"` etc.
@@ -130,10 +98,6 @@ def iter_yaml_files(paths: list[Path]) -> Iterator[Path]:
                     continue
                 yield sub
 
-
-# ---------------------------------------------------------------------------
-# Rules
-# ---------------------------------------------------------------------------
 
 def rule_r1_server(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
     """Server: header value must contain a known-real product name."""

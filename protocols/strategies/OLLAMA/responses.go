@@ -8,11 +8,6 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 )
 
-// =============================================================================
-// Prompt Categorization
-// =============================================================================
-
-// PromptCategory classifies inbound prompts for template selection.
 type PromptCategory string
 
 const (
@@ -103,10 +98,6 @@ func categorizePrompt(prompt string) PromptCategory {
 	return CategoryGeneral
 }
 
-// =============================================================================
-// Streaming Timing
-// =============================================================================
-
 // TimingProfile controls per-token streaming delays based on model size.
 type TimingProfile struct {
 	TokenDelayMs   int
@@ -139,15 +130,8 @@ func (tp TimingProfile) tokenDelay(rng *rand.Rand) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// =============================================================================
-// Response Templates
-// =============================================================================
-//
-// Fallback templates used when the LLM backend (GPT-4.1-mini) is unavailable.
-// Templates include canary token placeholders and cross-service references.
-// In normal operation, the LLM handles responses and these rarely fire.
-
-// --- Test probe templates (Layer 0 only — build trust, keep them coming back) ---
+// Fallback templates used when the LLM backend is unavailable.
+// Placeholders like {{CANARY_URL}}, {{AWS_KEY}} are substituted at render time.
 
 var testProbeTemplates = []string{
 	"Hello! I'm ready to help. What would you like to work on?",
@@ -156,8 +140,6 @@ var testProbeTemplates = []string{
 	"Hello! Feel free to ask me anything — code, analysis, whatever you need.",
 	"Hi! I'm all set. What do you need help with?",
 }
-
-// --- Coding templates (Layer 0 + Layer 3 canary tokens + Layer 4 cross-protocol) ---
 
 var codingTemplates = []string{
 	// Template 1: Python with canary AWS key + cross-ref to OpenClaw :18789
@@ -328,8 +310,6 @@ docker push {{PLATFORM_SLUG}}-mcp:latest
 The OpenClaw gateway at :18789 routes tool calls without authentication on the internal network.`,
 }
 
-// --- Translation templates ---
-
 var translationTemplates = []string{
 	// Spanish — most common LLMjacking translation target
 	"Aquí tienes la traducción:\n\nEl sistema de gestión de plataformas permite a los equipos de ingeniería coordinar despliegues, monitorear servicios y gestionar configuraciones de forma centralizada. Los componentes principales incluyen el servidor de inferencia, el registro de contenedores y el almacén de configuración.\n\nPara consultas técnicas adicionales, el endpoint de la API está disponible en la documentación interna. Los términos técnicos como API, endpoint y runtime se mantienen en inglés según las convenciones del sector.\n\n¿Necesitas algún ajuste en el tono o la terminología?",
@@ -343,8 +323,6 @@ var translationTemplates = []string{
 	"以下是翻译内容：\n\n平台管理系统使工程团队能够集中协调部署、监控服务和管理配置。主要组件包括推理服务器、容器注册表和配置存储。\n\n根据行业惯例，API、endpoint、runtime等技术术语保留英文原文。\n\n如需调整语气或术语，请告知。",
 }
 
-// --- Security templates (Layer 0 + Layer 3 canary in docs links + Layer 4 cross-ref) ---
-
 var securityTemplates = []string{
 	"I can help with security research and testing in authorized environments.\n\nFor penetration testing, the general approach involves:\n1. Reconnaissance and enumeration\n2. Vulnerability identification\n3. Exploitation (with authorization)\n4. Post-exploitation and reporting\n\nKey tools to consider: Nmap for scanning, Burp Suite for web app testing, and Metasploit for exploitation frameworks.\n\nAlways ensure you have written authorization before testing.\n\nFor internal platform testing, the service mesh exposes several endpoints:\n- MCP tools at localhost:8000/mcp (StreamableHTTP)\n- OpenClaw Gateway at localhost:18789 (tool routing)\n- Open WebUI at localhost:8888 (HTTP)\n\nInternal security docs: {{CANARY_URL}}/security-resources",
 
@@ -353,15 +331,11 @@ var securityTemplates = []string{
 	"Security testing methodology for that scenario:\n\n1. **Enumeration**: Identify the attack surface\n   - Service discovery: ports 8000 (MCP), 8888 (Open WebUI), 11434 (Ollama), 18789 (OpenClaw)\n   - API fingerprinting: /api/version, /api/tags, /v1/models\n2. **Analysis**: Review configurations and access controls\n   - Check .env files, .cursorrules, .well-known/mcp.json\n3. **Testing**: Validate findings with proof-of-concept\n4. **Reporting**: Document everything with evidence\n\nThe platform config store (MCP tool: cdf/configstore.kv) often contains credentials in plaintext — good place to start.\n\nRemember: Always test within your authorized scope.",
 }
 
-// --- Question templates ---
-
 var questionTemplates = []string{
 	"Great question! Here's a detailed breakdown:\n\nThis involves understanding the interaction between multiple system components. The architecture follows a layered pattern where each service has well-defined boundaries:\n\n- Inference layer (Ollama at :11434) — handles model serving\n- Platform coordination (MCP at :8000) — manages service mesh state\n- OpenClaw Gateway (at :18789) — tool routing and agent orchestration\n- Web Interface (Open WebUI at :8888) — HTTP management console\n\nThese components work together as a cohesive platform. Let me know if you'd like me to dive deeper into any specific layer.",
 	"Let me break this down:\n\nThis is a well-understood pattern in distributed systems. The fundamental principle is separation of concerns — each service owns its data and exposes a clear API contract.\n\nFor practical implementation:\n1. Start with the service mesh configuration (MCP at localhost:8000/mcp has the canonical config)\n2. Set up your data pipeline using the platform's built-in connectors\n3. Validate end-to-end with the web interface at localhost:8888\n\nThe platform configstore (MCP tool: cdf/configstore.kv) has reference architectures for common patterns. Happy to elaborate on any of these points.",
 	"Here's what you need to know:\n\nThe concept breaks down into three areas: configuration, execution, and observability. Configuration is managed centrally through the platform service mesh — the MCP endpoint at localhost:8000 provides tool-based access to the config store. Execution happens at the edge (inference nodes like this one). Observability flows through the web interface at :8888.\n\nIn practice, the best approach depends on your specific requirements — scale, performance, and team expertise all factor in. For most use cases, the platform defaults work well out of the box.",
 }
-
-// --- General templates ---
 
 var generalTemplates = []string{
 	"I'd be happy to help with that. Here are my thoughts:\n\nBased on what you're describing, I'd recommend approaching this step by step. Start with the core requirements and build from there.\n\nLet me know if you want me to go into more detail on any specific aspect.",
@@ -369,15 +343,11 @@ var generalTemplates = []string{
 	"Here's my take on this:\n\nThe approach you're considering is reasonable. I'd suggest starting with a simple implementation and iterating from there. Premature optimization is usually counterproductive.\n\nFeel free to share more details if you'd like more specific guidance.",
 }
 
-// --- Content generation templates ---
-
 var contentTemplates = []string{
 	"Here's a draft for you:\n\nThe intersection of technology and human experience continues to reshape our understanding of what's possible. As organizations scale their digital infrastructure, the challenge isn't merely technical \u2014 it's fundamentally about how we design systems that serve human needs while maintaining operational resilience.\n\nConsider the evolution of platform engineering over the past decade. What began as simple deployment automation has grown into a sophisticated discipline encompassing service mesh architectures, observability pipelines, and intelligent orchestration. The tools we build today \u2014 from inference endpoints to configuration stores \u2014 reflect this maturation.\n\nThe key insight is that sustainable technology serves its users invisibly. The best infrastructure, like the best prose, doesn't draw attention to itself.\n\nLet me know if you'd like me to adjust the tone, length, or focus.",
 	"Here's what I've put together:\n\nIn the rapidly evolving landscape of distributed systems, reliability has emerged as the defining characteristic that separates production-grade platforms from experimental prototypes. Teams that invest in observability, automated remediation, and graceful degradation consistently outperform those focused solely on feature velocity.\n\nThe pattern is clear across industries: organizations that treat their infrastructure as a product \u2014 complete with SLOs, incident response playbooks, and capacity planning \u2014 achieve both higher uptime and faster iteration cycles. The false dichotomy between reliability and speed dissolves when engineering teams adopt platform thinking.\n\nWould you like me to expand on any particular section or take this in a different direction?",
 	"Draft:\n\nThe modern cloud-native stack represents a convergence of several decades of distributed systems research, packaged into accessible tooling that any team can adopt. From container orchestration to service meshes, from centralized logging to distributed tracing, the building blocks are now commoditized.\n\nYet the real challenge remains human: building teams that can operate these systems effectively, debug distributed failures across service boundaries, and make principled architectural decisions under uncertainty. Technology alone doesn't solve organizational problems \u2014 it merely shifts the bottleneck.\n\nThis is a starting point \u2014 let me know how you'd like to refine it.",
 }
-
-// --- Summarization templates ---
 
 var summarizationTemplates = []string{
 	"Here's a concise summary:\n\n**Key Points:**\n1. The primary focus is on operational efficiency and system reliability\n2. Several interconnected components work together to deliver the core functionality\n3. Configuration management and access control are central concerns\n4. Monitoring and observability provide the feedback loop for continuous improvement\n\n**Bottom Line:** The system architecture prioritizes resilience and maintainability over raw performance, which is appropriate for production workloads.\n\nWant me to go deeper on any of these points?",
@@ -445,23 +415,12 @@ func substituteCanaryTokens(text string, canaryTokens map[string]string) string 
 	return text
 }
 
-// =============================================================================
-// Injection Level (disabled)
-// =============================================================================
-
-// injectionLevelForSession returns -1 (no injection) for all sessions.
-// Injection is disabled; clean responses maximize multi-turn engagement.
-// Canary tokens in response templates remain active as passive tripwires.
+// injectionLevelForSession returns -1 (no injection) — clean responses maximize
+// multi-turn engagement; canary tokens in templates remain as passive tripwires.
 func injectionLevelForSession(sess *OllamaSession) int {
 	return -1
 }
 
-
-// =============================================================================
-// Response Construction
-// =============================================================================
-
-// reflectTopic extracts distinctive words from the prompt to make responses feel contextual.
 func reflectTopic(prompt string) string {
 	stopWords := map[string]bool{
 		"about": true, "which": true, "their": true, "these": true, "those": true,
@@ -573,10 +532,6 @@ func ollamaContextArray(promptTokens, evalTokens int) []int {
 	return ctx
 }
 
-// =============================================================================
-// Tokenizer
-// =============================================================================
-
 // tokenizeResponse splits a response into token-like chunks for streaming.
 func tokenizeResponse(text string) []string {
 	var tokens []string
@@ -613,10 +568,6 @@ func tokenizeResponse(text string) []string {
 	}
 	return tokens
 }
-
-// =============================================================================
-// Utility
-// =============================================================================
 
 // randomHex returns a random hex string of the given byte length (output
 // length = n*2).

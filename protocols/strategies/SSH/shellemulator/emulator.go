@@ -9,20 +9,18 @@ import (
 	"github.com/mariocandela/beelzebub/v3/parser"
 )
 
-// Session tracks per-connection state.
 type Session struct {
 	User        string
 	CWD         string
 	CmdCount    int
-	PIDOffset   int               // random 0-200, shifts non-system PIDs per session
-	ShellPID    int               // unique shell PID per session
-	LoginTime   time.Time         // when session started
-	FileOverlay map[string]string // path → content (written files)
-	DirOverlay  map[string][]string // dir → additional entries
-	Deleted     map[string]bool   // path → true (rm'd files)
+	PIDOffset   int
+	ShellPID    int
+	LoginTime   time.Time
+	FileOverlay map[string]string
+	DirOverlay  map[string][]string
+	Deleted     map[string]bool
 }
 
-// initOverlays ensures overlay maps are allocated.
 func (s *Session) initOverlays() {
 	if s.FileOverlay == nil {
 		s.FileOverlay = make(map[string]string)
@@ -35,28 +33,19 @@ func (s *Session) initOverlays() {
 	}
 }
 
-// Emulator dispatches shell commands against a persona.
-//
-// Phase D.3: commands are routed through the LLMShell bridge for context-aware,
-// persona-grounded responses. Falls back to "command not found" if the LLM
-// bridge is not wired (nil) or returns an error / trips the injection guard.
 type Emulator struct {
 	persona  *Persona
 	llmShell *LLMShell
 }
 
-// SetLLMShell wires the LLM bridge into the emulator. Call this after
-// NewEmulator when an LLM client is available (e.g. in SSHStrategy.Init).
-// Safe to call with nil (disables LLM routing, falls back to stub).
+// SetLLMShell wires the LLM bridge. nil disables LLM routing; falls back to stub.
 func (e *Emulator) SetLLMShell(s *LLMShell) {
 	e.llmShell = s
 }
 
-// NewEmulator creates an emulator from config, merging with defaults.
 func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 	p := MergeConfig(DefaultPersona(), cfg)
 
-	// Resolve canary tokens and substitute into persona
 	tokens := resolveTokens(cfg.CanaryTokens)
 	for path, content := range p.Lures {
 		p.Lures[path] = substituteTokens(content, tokens)
@@ -65,7 +54,6 @@ func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 		p.EnvVars[key] = substituteTokens(val, tokens)
 	}
 
-	// Set BootTime from config UptimeDays (default 23)
 	uptimeDays := cfg.UptimeDays
 	if uptimeDays <= 0 {
 		uptimeDays = 23
@@ -75,10 +63,6 @@ func NewEmulator(cfg parser.ShellEmulator) *Emulator {
 	return &Emulator{persona: p}
 }
 
-// Execute handles the command via the LLM bridge (D.3) when available.
-// Returns (output, true) — always handled; callers never fall through to
-// the legacy LLM path.  Falls back to "command not found" if the LLM
-// bridge is nil, errors, or trips the injection guard.
 func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
@@ -100,18 +84,15 @@ func (e *Emulator) Execute(cmd string, sess *Session) (string, bool) {
 	return fmt.Sprintf("bash: %s: command not found\n", base), true
 }
 
-// BuildPromptContext serializes the world state for injection into LLM system prompt.
-// D.3 will consume this to ground the LLM shell responses in persona data.
+// BuildPromptContext serializes world state for the LLM system prompt.
 func (e *Emulator) BuildPromptContext() string {
 	p := e.persona
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("SYSTEM: %s | %s | %s x86_64 | %s/24\n", p.Hostname, p.OS, p.Kernel, p.IP))
 
-	// Processes summary
 	var procs []string
 	for _, proc := range p.Processes {
-		// Extract base name
 		name := proc.Cmd
 		if idx := strings.LastIndex(name, "/"); idx >= 0 {
 			name = name[idx+1:]
@@ -123,14 +104,12 @@ func (e *Emulator) BuildPromptContext() string {
 	}
 	b.WriteString(fmt.Sprintf("PROCESSES: %s\n", strings.Join(procs, " ")))
 
-	// Listeners
 	var listeners []string
 	for _, l := range p.Listeners {
 		listeners = append(listeners, fmt.Sprintf("%s(%s)", l.Program, l.Local))
 	}
 	b.WriteString(fmt.Sprintf("LISTENERS: %s\n", strings.Join(listeners, " ")))
 
-	// Env vars (selected)
 	var envParts []string
 	for k, v := range p.EnvVars {
 		if k == "PATH" || k == "HOME" || k == "SHELL" || k == "LANG" || k == "TERM" || k == "LOGNAME" || k == "USER" {
@@ -141,7 +120,6 @@ func (e *Emulator) BuildPromptContext() string {
 	sort.Strings(envParts)
 	b.WriteString(fmt.Sprintf("ENV: %s\n", strings.Join(envParts, " ")))
 
-	// Lure files
 	var lureFiles []string
 	for path := range p.Lures {
 		lureFiles = append(lureFiles, path)
@@ -149,7 +127,6 @@ func (e *Emulator) BuildPromptContext() string {
 	sort.Strings(lureFiles)
 	b.WriteString(fmt.Sprintf("FILES: %s\n", strings.Join(lureFiles, " ")))
 
-	// Users from /etc/passwd
 	b.WriteString(fmt.Sprintf("USERS: %s(uid=0) ubuntu(uid=1000) www-data(uid=33) postgres(uid=113) sshd(uid=110)\n", p.User))
 
 	return b.String()
@@ -185,7 +162,6 @@ func appendUnique(slice []string, entry string) []string {
 }
 
 // formatUptime formats a duration as Linux uptime output.
-// Kept for use by D.3 LLM context injection.
 func formatUptime(d time.Duration) string {
 	days := int(d.Hours()) / 24
 	hours := int(d.Hours()) % 24
