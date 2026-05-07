@@ -115,7 +115,7 @@ fi
 chmod 600 "$TARGET_ENV"
 
 # Legacy name mappings — map old var names → v8 names if v8 name is missing.
-# Specifically catches the IP_SALT → COLLECTOR_IP_SALT drift that bit us on ewr/fra.
+# Specifically catches the IP_SALT → COLLECTOR_IP_SALT drift observed during the v7→v8 rollout.
 declare -A LEGACY_MAP=(
   [IP_SALT]="COLLECTOR_IP_SALT"
 )

@@ -11,7 +11,7 @@ Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. T
 - **Fault injection** (`faults/`): grace-period-gated failure simulation.
 - **Novelty scoring** (`noveltydetect/`): per-session novelty distinct from agent classification.
 
-Deployed on **`sensor-ewr`** (Newark) and **`sensor-fra`** (Frankfurt). Stock upstream runs on `sensor-sea` and `sensor-jp` — do not confuse the two deployments. Current tag: `v3.6.7`.
+Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Current tag: `v3.6.7`.
 
 ## Layout
 

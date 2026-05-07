@@ -4,7 +4,7 @@
 # Curated from observed real-world deployments + upstream product docs.
 # Read by tools/lure_lint.py to catch leaks at edit time.
 #
-# Updated:  2026-05-06  (br0) — initial extract from Phase A+C lessons
+# Updated:  2026-05-06 — initial extract from Phase A+C lessons
 
 # ---------------------------------------------------------------------------
 # Server / X-Powered-By / X-Generator etc. — values that look like a real

@@ -5,8 +5,8 @@ Walks every personas/*/canaries.yaml and emits (or updates)
 tools/canary-registry.yaml — the single source of truth that the
 webhook receiver uses to resolve a fire's `token_reminder` to
 (owner, sensor, slot_name, status). Without this, slot-level attribution
-depends on a human-typed memo alone; one typo (see `ffra-ollama-…` on
-2026-04-19) breaks the chain silently.
+depends on a human-typed memo alone; one typo (e.g. duplicated leading
+char in a sensor-id slug) breaks the chain silently.
 
 Registry schema (single entry):
 
@@ -15,7 +15,7 @@ Registry schema (single entry):
     reminder:           primary lookup key — already 1:1 unique per slot
                          across the whole fleet and operator-controlled
     owner:              who minted the token
-    sensor:             fra | ewr | sea | jp
+    sensor:             abstract sensor id (operator-controlled)
     slot_name:          AWS_KEY_MCP, DNS_OLLAMA_SUBDOMAIN, …
     type:               aws_keys | dns | web | email
     version:            rotation version (2, 3, …)
@@ -74,7 +74,7 @@ def _manifest_to_registry_entries(manifest: dict[str, Any]) -> list[dict[str, An
     Decoy-estate manifests (e.g., personas/meridian-edge/canaries.yaml) set a
     top-level `decoy_company` that propagates to every slot, plus optional
     per-slot `decoy_asset` / `placement` / `content_lineage`. Per-sensor
-    manifests (ewr/fra/sin/coop) leave decoy_* unset.
+    manifests (one per sensor / partner-operator) leave decoy_* unset.
     """
     sensor = manifest.get("sensor")
     version = manifest.get("version")
