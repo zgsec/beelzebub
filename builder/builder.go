@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
@@ -142,6 +143,20 @@ Honeypot Framework, happy hacking!`)
 
 	// Init shared cross-protocol bridge
 	protocolBridge := bridge.NewBridge()
+
+	// Periodically prune stale bridge state. Without this, discoveredCreds and
+	// sessionFlags grow unboundedly — the bug Track 5 surfaced. 5-minute tick
+	// + 60-minute TTL matches the cleanup cadence used by HTTP / TCP / TELNET
+	// session stores. The ticker has no shutdown channel today; that's
+	// consistent with every other singleton-style cleaner in the codebase
+	// (see HTTP/http.go startHTTPSessionCleanup and TCP/tcp.go cleanAgentState).
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			protocolBridge.Clean(60 * time.Minute)
+		}
+	}()
 
 	// Init Protocol strategies
 	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}
