@@ -116,13 +116,40 @@ func (pb *ProtocolBridge) LastActivity(ip string) time.Time {
 	return latest
 }
 
-// Clean removes all state for IPs not seen since maxAge.
+// Clean removes all state for IPs not seen since maxAge. An IP is considered
+// "active" if its newest credential discovery OR its newest session flag is
+// after the cutoff; otherwise both maps are pruned for that IP.
+//
+// Pre-fix this only iterated discoveredCreds and pruned both maps in lockstep,
+// which meant any IP that set flags without ever recording a credential
+// discovery (a common pattern: every authenticated SSH session sets the
+// `ssh_authenticated` flag, but most of them never trigger checkCredentialDiscovery)
+// stayed in sessionFlags forever — an unbounded memory leak in long-lived sensors.
 func (pb *ProtocolBridge) Clean(maxAge time.Duration) {
 	cutoff := time.Now().Add(-maxAge)
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
-	for ip, creds := range pb.discoveredCreds {
-		if len(creds) > 0 && creds[len(creds)-1].FoundAt.Before(cutoff) {
+
+	// Build the union of IPs across both maps so we don't miss flag-only IPs.
+	ips := make(map[string]struct{}, len(pb.discoveredCreds)+len(pb.sessionFlags))
+	for ip := range pb.discoveredCreds {
+		ips[ip] = struct{}{}
+	}
+	for ip := range pb.sessionFlags {
+		ips[ip] = struct{}{}
+	}
+
+	for ip := range ips {
+		var latest time.Time
+		if creds := pb.discoveredCreds[ip]; len(creds) > 0 {
+			latest = creds[len(creds)-1].FoundAt
+		}
+		for _, t := range pb.sessionFlags[ip] {
+			if t.After(latest) {
+				latest = t
+			}
+		}
+		if latest.IsZero() || latest.Before(cutoff) {
 			delete(pb.discoveredCreds, ip)
 			delete(pb.sessionFlags, ip)
 		}

@@ -77,3 +77,45 @@ func TestClean_RemovesStaleEntries(t *testing.T) {
 		t.Error("discoveries survived Clean(0)")
 	}
 }
+
+// TestClean_PrunesFlagOnlyIPs guards a fixed memory leak: pre-fix Clean only
+// iterated discoveredCreds, so an IP that set a flag without ever recording
+// a credential discovery (the common path — most authenticated sessions
+// never trigger checkCredentialDiscovery) was never pruned from sessionFlags.
+func TestClean_PrunesFlagOnlyIPs(t *testing.T) {
+	b := NewBridge()
+	b.SetFlag("flag.only", "authenticated")
+
+	// Backdate the flag so it falls outside the cutoff window.
+	b.mu.Lock()
+	b.sessionFlags["flag.only"]["authenticated"] = time.Now().Add(-2 * time.Hour)
+	b.mu.Unlock()
+
+	b.Clean(1 * time.Hour)
+
+	if b.HasFlag("flag.only", "authenticated") {
+		t.Error("flag-only IP should be pruned after Clean")
+	}
+	b.mu.RLock()
+	_, present := b.sessionFlags["flag.only"]
+	b.mu.RUnlock()
+	if present {
+		t.Error("sessionFlags entry for flag-only IP should be removed")
+	}
+}
+
+// TestClean_RetainsRecentlyActiveIPs ensures the cleaner doesn't over-prune.
+func TestClean_RetainsRecentlyActiveIPs(t *testing.T) {
+	b := NewBridge()
+	b.RecordDiscovery("recent.cred", "test", "aws_key", "k", "v")
+	b.SetFlag("recent.flag", "authenticated")
+
+	b.Clean(1 * time.Hour)
+
+	if !b.HasDiscovered("recent.cred", "aws_key") {
+		t.Error("recent discovery should survive Clean")
+	}
+	if !b.HasFlag("recent.flag", "authenticated") {
+		t.Error("recent flag should survive Clean")
+	}
+}
