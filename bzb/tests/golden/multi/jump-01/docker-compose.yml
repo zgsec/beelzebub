@@ -5,12 +5,20 @@ services:
     container_name: beelzebub
     restart: unless-stopped
     network_mode: host
+    # Mount layout mirrors tools/docker-compose.baseline.yml exactly so dev-VM
+    # baseline capture and prod sensors load the same bytes from the same paths.
+    # - beelzebub.yaml at /configurations/beelzebub.yaml (default -confCore).
+    # - persona/lures at /configurations/services (default -confServices).
+    # - persona/ at /configurations/persona (resolved via PERSONA_DIR).
     volumes:
-      - ./persona:/configurations:ro
+      - ./beelzebub.yaml:/configurations/beelzebub.yaml:ro
+      - ./persona/lures:/configurations/services:ro
+      - ./persona:/configurations/persona:ro
       - beelzebub-logs:/var/log/beelzebub
     environment:
       - SENSOR_ID=${SENSOR_ID}
       - PERSONA_SLUG=${PERSONA_SLUG}
+      - PERSONA_DIR=/configurations/persona
       - OPEN_AI_SECRET_KEY=${OPEN_AI_SECRET_KEY}
     logging:
       driver: json-file

@@ -31,6 +31,7 @@ bzb = [
     "templates/persona-skeleton/**/*",
     "templates/persona-skeleton/**/.gitkeep",
     "templates/sensor-compose.yml.j2",
+    "templates/beelzebub.yaml",
 ]
 
 [tool.pytest.ini_options]

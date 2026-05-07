@@ -150,6 +150,12 @@ def render_node(
                       extra_exporter_env=[k for k in bundle.nodes[node_id].env_overrides])
     )
 
+    # beelzebub.yaml — core config mounted at /configurations/beelzebub.yaml.
+    # Shipped from a framework-default in templates/ so every rendered tree
+    # is self-contained and matches the dev-VM baseline harness layout.
+    core_tmpl = Path(__file__).parent.parent / "templates" / "beelzebub.yaml"
+    (out / "beelzebub.yaml").write_text(core_tmpl.read_text())
+
     # .env
     (out / ".env").write_text(
         render_env_file(bundle, node_id,
