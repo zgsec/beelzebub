@@ -61,6 +61,52 @@ func TestIPIsolation(t *testing.T) {
 	assert.Empty(t, b.GetFlags("5.6.7.8"))
 }
 
+// TestRecordDiscovery_CapsPerIPSlice is the Track-5 regression: an
+// attacker pounding a single IP with credential-shaped payloads must
+// not be able to grow the per-IP discoveredCreds slice without bound.
+// Pre-fix the slice grew on every RecordDiscovery call; post-fix it
+// stops at maxCredsPerIP and drops oldest-first.
+func TestRecordDiscovery_CapsPerIPSlice(t *testing.T) {
+	b := NewBridge()
+	const ip = "10.0.0.1"
+
+	// Spam well past the cap.
+	for i := 0; i < maxCredsPerIP*5; i++ {
+		b.RecordDiscovery(ip, "ssh", "aws_key", "k", "v")
+	}
+
+	got := len(b.GetDiscoveries(ip))
+	if got != maxCredsPerIP {
+		t.Errorf("len(discoveries) = %d, want exactly %d", got, maxCredsPerIP)
+	}
+}
+
+// TestRecordDiscovery_FIFOEviction asserts that the oldest discovery
+// is the one dropped when the cap is hit, so the most recent activity
+// is always preserved (which is what HasDiscovered/LastActivity rely on).
+func TestRecordDiscovery_FIFOEviction(t *testing.T) {
+	b := NewBridge()
+	const ip = "10.0.0.1"
+
+	// First discovery has a marker we can recognize.
+	b.RecordDiscovery(ip, "ssh", "first_marker", "k0", "v0")
+
+	// Spam past the cap with a different type.
+	for i := 0; i < maxCredsPerIP+5; i++ {
+		b.RecordDiscovery(ip, "http", "filler", "k", "v")
+	}
+
+	creds := b.GetDiscoveries(ip)
+	if len(creds) != maxCredsPerIP {
+		t.Fatalf("len = %d, want %d", len(creds), maxCredsPerIP)
+	}
+	for _, c := range creds {
+		if c.Type == "first_marker" {
+			t.Errorf("oldest entry survived eviction; FIFO not honored")
+		}
+	}
+}
+
 func TestCrossProtocolFlow(t *testing.T) {
 	b := NewBridge()
 

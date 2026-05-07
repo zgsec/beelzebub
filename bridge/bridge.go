@@ -5,12 +5,27 @@ import (
 	"time"
 )
 
+// maxCredsPerIP caps the per-IP credential history. Without this cap, an
+// attacker pounding a single IP with credential-shaped payloads (e.g.
+// repeated SSH-login probes that all match the AWS-key regex) would grow
+// the per-IP slice without bound. The HasDiscovered() lookup short-circuits
+// on first match so duplicates after the first hit are harmless to detection;
+// the bound exists purely to bound memory.
+//
+// 100 was chosen because no realistic legitimate flow records >100 distinct
+// credentials per IP — every actual credential discovery is a (source,
+// type, key) triple, and the persona surface emits at most a few dozen
+// distinct triples across SSH+HTTP+MCP. 100 leaves headroom while
+// staying small enough that even 10k tracked IPs × 100 creds × ~120 B
+// per Credential is ≈120 MB worst case (vs unbounded).
+const maxCredsPerIP = 100
+
 // Credential represents a credential discovered via any protocol.
 type Credential struct {
-	Source  string    // "ssh", "http", "mcp"
-	Type   string    // "aws_key", "db_password", "api_token"
-	Key    string
-	Value  string
+	Source  string // "ssh", "http", "mcp"
+	Type    string // "aws_key", "db_password", "api_token"
+	Key     string
+	Value   string
 	FoundAt time.Time
 }
 
@@ -18,8 +33,8 @@ type Credential struct {
 // Credentials or flags set from one protocol handler are visible to others.
 type ProtocolBridge struct {
 	mu              sync.RWMutex
-	discoveredCreds map[string][]Credential         // IP → credentials
-	sessionFlags    map[string]map[string]time.Time  // IP → flag → when set (v8: timestamp for gap computation)
+	discoveredCreds map[string][]Credential         // IP → credentials (capped at maxCredsPerIP, FIFO-evicted)
+	sessionFlags    map[string]map[string]time.Time // IP → flag → when set (v8: timestamp for gap computation)
 }
 
 // NewBridge creates an initialized ProtocolBridge.
@@ -31,10 +46,23 @@ func NewBridge() *ProtocolBridge {
 }
 
 // RecordDiscovery records that an IP discovered a credential via a protocol.
+// The per-IP slice is capped at maxCredsPerIP entries; older entries are
+// dropped FIFO when the cap is hit. This prevents an attacker from growing
+// the slice without bound by spamming credential-shaped payloads from a
+// single IP. The IP-keyed map itself is bounded by the periodic Clean()
+// ticker (see builder/builder.go); together they cap the bridge's worst-
+// case memory at maxCredsPerIP × (max active IPs in window).
 func (pb *ProtocolBridge) RecordDiscovery(ip, source, credType, key, value string) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
-	pb.discoveredCreds[ip] = append(pb.discoveredCreds[ip], Credential{
+	creds := pb.discoveredCreds[ip]
+	if len(creds) >= maxCredsPerIP {
+		// Drop the oldest entry (FIFO). We keep the slice length stable
+		// at the cap to avoid repeated grow-then-trim allocations under
+		// sustained attack.
+		creds = append(creds[:0], creds[len(creds)-maxCredsPerIP+1:]...)
+	}
+	pb.discoveredCreds[ip] = append(creds, Credential{
 		Source:  source,
 		Type:    credType,
 		Key:     key,
