@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"os"
 	"regexp"
@@ -28,6 +29,11 @@ const (
 	LLMPluginName                       = "LLMHoneypot"
 	openAIEndpoint                      = "https://api.openai.com/v1/chat/completions"
 	ollamaEndpoint                      = "http://localhost:11434/api/chat"
+	// llmCallTimeout caps any single outbound LLM call. Without this, an attacker
+	// can pin protocol-handler goroutines indefinitely by triggering LLM calls
+	// while the upstream provider is slow or unreachable, exhausting LLM budget
+	// and leaking goroutines.
+	llmCallTimeout = 10 * time.Second
 )
 
 var ErrRateLimited = errors.New("rate limited")
@@ -144,8 +150,9 @@ func BuildHoneypot(
 }
 
 func InitLLMHoneypot(config LLMHoneypot) *LLMHoneypot {
-	// Inject the dependencies
-	config.client = resty.New()
+	// Inject the dependencies. The client carries a request-level timeout to
+	// bound outbound calls — see llmCallTimeout for the rationale.
+	config.client = resty.New().SetTimeout(llmCallTimeout)
 
 	if os.Getenv("OPEN_AI_SECRET_KEY") != "" {
 		config.OpenAIKey = os.Getenv("OPEN_AI_SECRET_KEY")
