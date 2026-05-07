@@ -1,34 +1,8 @@
-"""bzb aggregator {deploy, dump} — cross-repo aggregator-side operations."""
+"""bzb aggregator dump — cross-repo aggregator-side operations."""
 import subprocess
 import sys
 
 import click
-
-
-@click.command("deploy")
-@click.argument("target", metavar="HOST")
-@click.option("--with-public-api", is_flag=True,
-              help="Also deploy api/public.py + nginx (operator's display layer)")
-@click.option("--setup-script",
-              default="~/projects/honeypot-research/ops/setup-aggregator.sh",
-              help="Path to setup-aggregator.sh on target or local path to copy")
-def deploy(target, with_public_api, setup_script):
-    """Bring up FastAPI ingest + canary webhook + Postgres on aggregator host.
-
-    For MVP this shells over ssh to run the setup-aggregator.sh script at the
-    target. The script lives in the honeypot-research repo. Operator must
-    pre-stage the script on the target or use --setup-script to point at a
-    local copy.
-    """
-    flag = "--with-public-api" if with_public_api else ""
-    cmd = ["ssh", target,
-           f"bash {setup_script} {flag}".strip()]
-    click.echo(f"ssh → bash {setup_script} {flag}".rstrip())
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        click.echo(f"setup failed: {r.stderr}", err=True)
-        raise SystemExit(1)
-    click.echo(f"OK: aggregator deployed on {target}")
 
 
 @click.command("dump")
