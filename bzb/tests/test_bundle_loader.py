@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bzb.models.bundle import Bundle, load_bundle
+from bzb.models.bundle import load_bundle
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -1,5 +1,5 @@
 """Tests for `bzb aggregator deploy/dump`."""
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 from click.testing import CliRunner
 

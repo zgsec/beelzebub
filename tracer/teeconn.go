@@ -132,11 +132,6 @@ func (c *TeeConn) Release() {
 // Stateless stop functions (like SSHStopFunc) can use StopFuncLiteral.
 type StopFuncFactory func() StopFunc
 
-// StopFuncLiteral wraps a stateless StopFunc as a factory.
-func StopFuncLiteral(fn StopFunc) StopFuncFactory {
-	return func() StopFunc { return fn }
-}
-
 // TeeListener wraps a net.Listener to return TeeConn from Accept().
 // Each accepted connection gets its own StopFunc instance from the factory.
 type TeeListener struct {

@@ -569,17 +569,6 @@ func tokenizeResponse(text string) []string {
 	return tokens
 }
 
-// randomHex returns a random hex string of the given byte length (output
-// length = n*2).
-func randomHex(n int) string {
-	const hex = "0123456789abcdef"
-	b := make([]byte, n*2)
-	for i := range b {
-		b[i] = hex[rand.Intn(len(hex))]
-	}
-	return string(b)
-}
-
 // randomHexN returns exactly n lowercase hex characters. Used for OpenAI-
 // style identifiers whose real length is not a multiple of 2 (x-request-id
 // 29 chars, system_fingerprint 10 chars).

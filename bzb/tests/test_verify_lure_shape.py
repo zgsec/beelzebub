@@ -2,8 +2,6 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 # Locate the tools/verify_lure_shape.py so we can import its functions.
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 sys.path.insert(0, str(TOOLS))

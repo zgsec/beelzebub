@@ -141,33 +141,3 @@ func parseCommand(cmd string) (string, []string) {
 	return fields[0], fields[1:]
 }
 
-// resolvePath resolves a relative path against the session CWD.
-func resolvePath(p string, cwd string) string {
-	if p == "" {
-		return cwd
-	}
-	_ = p // path resolution kept for D.3
-	return cwd
-}
-
-// appendUnique adds an entry to a slice if not already present.
-// Kept for use by D.3 session overlay writes.
-func appendUnique(slice []string, entry string) []string {
-	for _, s := range slice {
-		if s == entry {
-			return slice
-		}
-	}
-	return append(slice, entry)
-}
-
-// formatUptime formats a duration as Linux uptime output.
-func formatUptime(d time.Duration) string {
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	mins := int(d.Minutes()) % 60
-	if days > 0 {
-		return fmt.Sprintf("%d days, %2d:%02d", days, hours, mins)
-	}
-	return fmt.Sprintf("%2d:%02d", hours, mins)
-}

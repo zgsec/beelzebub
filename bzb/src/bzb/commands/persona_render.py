@@ -7,7 +7,6 @@ emergencies (document why in a journal entry).
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path

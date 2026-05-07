@@ -44,7 +44,6 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 from verify_lure_shape import (  # noqa: E402
     Probe,
     check_static_expectations,
-    check_timestamp_realism,
 )
 
 SERVICES_YAML = REPO_ROOT / "tools" / "lure_verify" / "services.yaml"
