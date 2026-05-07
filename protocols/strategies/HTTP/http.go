@@ -260,6 +260,14 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 		}
 		srv := &http.Server{
 			Handler: serverMux,
+			// ReadHeaderTimeout closes the Slowloris vector (a single attacker
+			// dripping request-line / header bytes, holding the goroutine open).
+			// 30s is generous enough that a legitimately slow probe still lands
+			// while a Slowloris drip is dropped before it can pin a worker.
+			// We deliberately do NOT set ReadTimeout / WriteTimeout — those
+			// would break long-lived persona traffic (slow attackers, long
+			// LLM-backed responses) which is intel we want to capture.
+			ReadHeaderTimeout: 30 * time.Second,
 			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 				return context.WithValue(ctx, tracer.TeeConnKey, c)
 			},

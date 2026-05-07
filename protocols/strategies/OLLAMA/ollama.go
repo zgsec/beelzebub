@@ -369,6 +369,10 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		}
 		srv := &http.Server{
 			Handler: mux,
+			// ReadHeaderTimeout closes the Slowloris vector. We deliberately
+			// do not set ReadTimeout / WriteTimeout — they would break the
+			// streaming chat/completion responses this lure simulates.
+			ReadHeaderTimeout: 30 * time.Second,
 			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 				return context.WithValue(ctx, tracer.TeeConnKey, c)
 			},

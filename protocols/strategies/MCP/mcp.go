@@ -646,6 +646,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		}
 		srv := &http.Server{
 			Handler: mux,
+			// ReadHeaderTimeout closes the Slowloris vector. 30s is permissive
+			// enough that legitimately slow MCP/HTTP probes still land. We
+			// deliberately do not set ReadTimeout / WriteTimeout — they would
+			// break the /sse long-lived stream and any long-running tool call.
+			ReadHeaderTimeout: 30 * time.Second,
 			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 				return context.WithValue(ctx, tracer.TeeConnKey, c)
 			},
