@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"os"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/mariocandela/beelzebub/v3/internal/cache"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 	log "github.com/sirupsen/logrus"
@@ -34,11 +34,28 @@ const (
 	// while the upstream provider is slow or unreachable, exhausting LLM budget
 	// and leaking goroutines.
 	llmCallTimeout = 10 * time.Second
+
+	// rateLimiterMaxEntries caps the global per-IP rate-limiter map. An
+	// attacker rotating source IPs would otherwise grow this map without
+	// bound — every new IP allocates a *rate.Limiter that lives forever.
+	// 10k entries is roughly 4 MB at ~400 B/limiter, generous for legit
+	// traffic on any single sensor while still bounding the worst case.
+	rateLimiterMaxEntries = 10_000
+
+	// rateLimiterMaxAge times out idle limiters. After this much silence,
+	// the next request from that IP gets a fresh limiter — equivalent to
+	// the previous behavior on a cold sensor restart, just faster. One
+	// hour is well past any rate-limit window we configure (which are in
+	// seconds), so this can't accidentally relax enforcement.
+	rateLimiterMaxAge = time.Hour
 )
 
 var ErrRateLimited = errors.New("rate limited")
-var globalRateLimiters = make(map[string]*rate.Limiter)
-var globalRateLimiterMutex sync.RWMutex
+
+// globalRateLimiters holds per-client-IP rate limiters. Bounded by both
+// a TTL and an LRU cap (see rateLimiterMaxEntries / rateLimiterMaxAge)
+// so a flood of unique source IPs cannot grow the map without bound.
+var globalRateLimiters = cache.New[*rate.Limiter](rateLimiterMaxEntries, rateLimiterMaxAge)
 
 type LLMHoneypot struct {
 	Histories               []Message
@@ -381,27 +398,17 @@ func (llmHoneypot *LLMHoneypot) ollamaCaller(messages []Message) (string, error)
 	return removeQuotes(response.Result().(*Response).Message.Content), nil
 }
 
-// getRateLimiter returns a rate limiter for the given client IP and if it doesn't exist,
-// it creates a new one based on the honeypot configuration. It uses a double-checked locking pattern to minimize lock contention.
+// getRateLimiter returns a rate limiter for the given client IP, creating
+// one on first sight per the honeypot's configured request/window. The
+// underlying map is bounded by ttlmap (LRU + TTL), so a flood of unique
+// source IPs evicts old idle limiters rather than growing without bound.
+// SetIfAbsent guarantees the limiter is constructed exactly once per IP
+// per entry-lifetime even under concurrent contention.
 func (llmHoneypot *LLMHoneypot) getRateLimiter(clientIP string) *rate.Limiter {
-	globalRateLimiterMutex.RLock()
-	limiter, exists := globalRateLimiters[clientIP]
-	globalRateLimiterMutex.RUnlock()
-
-	if exists {
-		return limiter
-	}
-
-	globalRateLimiterMutex.Lock()
-	defer globalRateLimiterMutex.Unlock()
-
-	if limiter, exists = globalRateLimiters[clientIP]; !exists {
+	return globalRateLimiters.SetIfAbsent(clientIP, func() *rate.Limiter {
 		limit := rate.Limit(float64(llmHoneypot.RateLimitRequests) / float64(llmHoneypot.RateLimitWindowSeconds))
-		limiter = rate.NewLimiter(limit, llmHoneypot.RateLimitRequests)
-		globalRateLimiters[clientIP] = limiter
-	}
-
-	return limiter
+		return rate.NewLimiter(limit, llmHoneypot.RateLimitRequests)
+	})
 }
 
 // checkRateLimit verifies if the client IP is within rate limits.
