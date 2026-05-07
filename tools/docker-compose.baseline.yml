@@ -2,9 +2,19 @@
 # Ports remapped to 1XXXX to avoid conflicts with the host's SSH (22), Redis (6379), etc.
 # This file is operator-side; do not deploy to a real sensor.
 #
-# All CANARY env vars are set to safe placeholder values so the production
-# service configs load without errors.  The placeholder strings are
-# intentionally non-functional tokens that do not trigger real canary alerts.
+# Mount layout matches the production sensor-compose template (bzb deploy):
+#   - The rendered persona tree is mounted directly; no Python staging step.
+#   - Set RENDER_OUT to a node directory produced by `bzb persona render`,
+#     e.g. /tmp/render-bluespark/bluespark-labs/lighthouse-1.
+#   - configurations/beelzebub.yaml is mounted in directly so beelzebub finds
+#     its core config at the default path.
+#   - persona/lures/ is mounted as /configurations/services/ so beelzebub's
+#     -confServices default picks up the rendered persona-bearing lures.
+#   - persona/ is mounted as /configurations/persona/ so PERSONA_DIR resolves
+#     persona.yaml + canaries.yaml from the rendered bundle.
+#
+# All CANARY env vars are set to safe placeholder values so any non-persona
+# Jinja substitutions fall back to non-functional tokens.
 services:
   beelzebub:
     build:
@@ -24,18 +34,21 @@ services:
       - "18888:8888"    # HTTP
       - "11434:11434"   # Ollama (no remap; rare on dev VMs)
     volumes:
-      # PERSONA_STAGE_DIR: set to the output of tools/stage_persona_configs.py
-      # when running persona-swappability tests. Defaults to the raw Jinja
-      # template tree for backward-compat (service configs load but persona vars
-      # won't be substituted without a rendered bundle).
-      - ${PERSONA_STAGE_DIR:-../configurations}:/configurations:ro
+      # Core config — same beelzebub.yaml for every persona.
+      - ../configurations/beelzebub.yaml:/configurations/beelzebub.yaml:ro
+      # Service configs — the rendered persona-bearing lures become the
+      # entire services/ tree. Non-persona services from configurations/
+      # services/ are not mounted here intentionally; production deploys
+      # are pure persona-driven (sensor-compose.yml.j2 mirrors this).
+      - ${RENDER_OUT:?set RENDER_OUT to a bzb persona render output dir}/persona/lures:/configurations/services:ro
+      # Persona dir — persona.yaml, node.yaml, canaries.yaml, coherence/
+      - ${RENDER_OUT}/persona:/configurations/persona:ro
     tmpfs:
       - /var/log/beelzebub
     environment:
       - OPEN_AI_SECRET_KEY=${OPEN_AI_SECRET_KEY:-}
-      # PERSONA_DIR: set to /configurations/persona when using a staged persona bundle
-      # (tools/stage_persona_configs.py puts persona.yaml there). Default is empty
-      # which causes beelzebub to fall back to reading persona.yaml from confServices dir.
+      # PERSONA_DIR points beelzebub at the rendered persona/ subdir for
+      # persona.yaml resolution. This matches production behavior.
       - PERSONA_DIR=${PERSONA_DIR:-/configurations/persona}
       # Canary placeholder values — safe non-functional tokens for local baseline capture
       - CANARY_SSH_API_KEY=BASELINE_PLACEHOLDER

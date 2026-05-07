@@ -14,13 +14,14 @@ Example (local docker-compose):
   pytest bzb/tests/test_persona_regression.py -v -m regression
 
 The workflow requires:
-  1. Render + stage Crestfield persona, bring up beelzebub, set PERSONA_REGRESSION_TARGET
-  2. Run test_crestfield_persona_regression
-  3. Tear down Crestfield, render + stage Globex, bring up beelzebub, set PERSONA_SWAP_TARGET
-  4. Run test_persona_swap_no_bleed
-  5. Tear down Globex
-
-See tools/stage_persona_configs.py for staging helper.
+  1. Render Crestfield persona (`bzb persona render`), bring up beelzebub via
+     tools/docker-compose.baseline.yml (mounts the rendered tree directly via
+     RENDER_OUT), set PERSONA_REGRESSION_TARGET.
+  2. Run test_crestfield_persona_regression.
+  3. Tear down Crestfield, render Globex, point RENDER_OUT at the new tree,
+     bring up beelzebub, set PERSONA_SWAP_TARGET.
+  4. Run test_persona_swap_no_bleed.
+  5. Tear down Globex.
 """
 from __future__ import annotations
 
