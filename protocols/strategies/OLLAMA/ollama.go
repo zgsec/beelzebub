@@ -22,6 +22,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
+	"github.com/mariocandela/beelzebub/v3/lifecycle"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
@@ -276,22 +277,21 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.modelDigests[m.Name] = "sha256:" + hex.EncodeToString(h[:])
 	}
 
-	// Session cleanup goroutine
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		for range ticker.C {
-			s.sessionsMu.Lock()
-			for ip, sess := range s.ipSessions {
-				sess.mu.Lock()
-				age := time.Since(sess.FirstSeen)
-				sess.mu.Unlock()
-				if age > time.Hour {
-					delete(s.ipSessions, ip)
-				}
+	// Session cleanup goroutine. context.Background() preserves the
+	// previous no-shutdown behavior; when the strategy gains a lifecycle
+	// context, this is the seam to thread it through.
+	go lifecycle.Cleaner(context.Background(), 5*time.Minute, "ollama.session.cleanup", func() {
+		s.sessionsMu.Lock()
+		defer s.sessionsMu.Unlock()
+		for ip, sess := range s.ipSessions {
+			sess.mu.Lock()
+			age := time.Since(sess.FirstSeen)
+			sess.mu.Unlock()
+			if age > time.Hour {
+				delete(s.ipSessions, ip)
 			}
-			s.sessionsMu.Unlock()
 		}
-	}()
+	})
 
 	mux := http.NewServeMux()
 

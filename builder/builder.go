@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
+	"github.com/mariocandela/beelzebub/v3/lifecycle"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/MCP"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/OLLAMA"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/TELNET"
@@ -147,16 +149,12 @@ Honeypot Framework, happy hacking!`)
 	// Periodically prune stale bridge state. Without this, discoveredCreds and
 	// sessionFlags grow unboundedly — the bug Track 5 surfaced. 5-minute tick
 	// + 60-minute TTL matches the cleanup cadence used by HTTP / TCP / TELNET
-	// session stores. The ticker has no shutdown channel today; that's
-	// consistent with every other singleton-style cleaner in the codebase
-	// (see HTTP/http.go startHTTPSessionCleanup and TCP/tcp.go cleanAgentState).
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			protocolBridge.Clean(60 * time.Minute)
-		}
-	}()
+	// session stores. context.Background() preserves the previous
+	// no-shutdown behavior; when builder gains a real lifecycle context, this
+	// is the seam to thread it through.
+	go lifecycle.Cleaner(context.Background(), 5*time.Minute, "bridge.clean", func() {
+		protocolBridge.Clean(60 * time.Minute)
+	})
 
 	// Init Protocol strategies
 	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}

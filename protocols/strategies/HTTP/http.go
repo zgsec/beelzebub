@@ -17,6 +17,7 @@ import (
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
 	"github.com/mariocandela/beelzebub/v3/historystore"
+	"github.com/mariocandela/beelzebub/v3/lifecycle"
 	"github.com/mariocandela/beelzebub/v3/noveltydetect"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
@@ -43,24 +44,27 @@ var (
 )
 
 // startHTTPSessionCleanup launches a goroutine that prunes stale sessions every 5 minutes.
+//
+// Once-protected: the singleton is intentional — every HTTP service in
+// configurations/services/ initializes the same HTTPStrategy and we only
+// want one cleaner across the process. context.Background() preserves
+// the previous no-shutdown behavior. When the strategy gains a lifecycle
+// context, the seam is here.
 func startHTTPSessionCleanup() {
 	httpCleanupOnce.Do(func() {
-		go func() {
-			for {
-				time.Sleep(5 * time.Minute)
-				cutoff := time.Now().Add(-30 * time.Minute)
-				httpSessions.Range(func(key, value any) bool {
-					state := value.(*httpSessionState)
-					state.mu.Lock()
-					stale := state.lastSeen.Before(cutoff)
-					state.mu.Unlock()
-					if stale {
-						httpSessions.Delete(key)
-					}
-					return true
-				})
-			}
-		}()
+		go lifecycle.Cleaner(context.Background(), 5*time.Minute, "http.session.cleanup", func() {
+			cutoff := time.Now().Add(-30 * time.Minute)
+			httpSessions.Range(func(key, value any) bool {
+				state := value.(*httpSessionState)
+				state.mu.Lock()
+				stale := state.lastSeen.Before(cutoff)
+				state.mu.Unlock()
+				if stale {
+					httpSessions.Delete(key)
+				}
+				return true
+			})
+		})
 	})
 }
 
@@ -72,13 +76,10 @@ func startHTTPNoveltyCleanup(ns *noveltydetect.FingerprintStore, windowDays int)
 		return
 	}
 	httpNoveltyCleanupOnce.Do(func() {
-		go func() {
-			maxAge := time.Duration(windowDays) * 24 * time.Hour
-			for {
-				time.Sleep(5 * time.Minute)
-				ns.Clean(maxAge)
-			}
-		}()
+		maxAge := time.Duration(windowDays) * 24 * time.Hour
+		go lifecycle.Cleaner(context.Background(), 5*time.Minute, "http.novelty.cleanup", func() {
+			ns.Clean(maxAge)
+		})
 	})
 }
 
