@@ -1,6 +1,7 @@
 package TCP
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -23,6 +24,13 @@ import (
 )
 
 const maxLineLength = 8192 // Prevent unbounded memory growth from binary junk or malicious input
+
+// maxConcurrentConns caps in-flight TCP handler goroutines per listener. Each
+// accepted connection holds a per-conn buffer (~1KB read buffer + per-handler
+// stack); without a cap, 100k+ connections fill memory and degrade the sensor.
+// Surface as config if/when sensors with very different traffic profiles need
+// it; until then a fixed const keeps the surface area small.
+const maxConcurrentConns = 1024
 
 type TCPStrategy struct {
 	Sessions *historystore.HistoryStore
@@ -52,53 +60,45 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	interactive := len(servConf.Commands) > 0
 
-	go func() {
-		for {
-			conn, err := listen.Accept()
-			if err != nil {
-				continue
+	go acceptLoop(listen, func(c net.Conn) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("panic in TCP handler: %v", r)
 			}
-			go func(c net.Conn) {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Errorf("panic in TCP handler: %v", r)
-					}
-				}()
-				c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
+		}()
+		c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
 
-				// serviceProtocol dispatch: purpose-built binary protocol
-				// handlers that own the whole connection lifecycle and
-				// bypass banner / interactive / banner-only entirely.
-				switch servConf.ServiceProtocol {
-				case "mysql-handshake-v10":
-					// Per-connection rng: thread-safe by construction,
-					// cheap to seed, avoids sharing a lock across
-					// concurrent MySQL probes.
-					localRng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
-					dispatchMysqlHandshake(c, servConf, tr, localRng)
-					return
-				}
-
-				// Send banner exactly as configured — no appended newline.
-				// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
-				// ${request.*} placeholders authored in YAML are substituted per-connection
-				// so banners can carry e.g. "${request.uuid_short}" without leaking a
-				// fleet-identical string across sensors.
-				if servConf.Banner != "" {
-					banner, _ := responsesubs.Apply(servConf.Banner, nil, nil)
-					if _, err := c.Write([]byte(banner)); err != nil {
-						return
-					}
-				}
-
-				if interactive {
-					handleInteractiveConnection(c, servConf, tr, tcpStrategy)
-				} else {
-					handleBannerOnly(c, servConf, tr)
-				}
-			}(conn)
+		// serviceProtocol dispatch: purpose-built binary protocol
+		// handlers that own the whole connection lifecycle and
+		// bypass banner / interactive / banner-only entirely.
+		switch servConf.ServiceProtocol {
+		case "mysql-handshake-v10":
+			// Per-connection rng: thread-safe by construction,
+			// cheap to seed, avoids sharing a lock across
+			// concurrent MySQL probes.
+			localRng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+			dispatchMysqlHandshake(c, servConf, tr, localRng)
+			return
 		}
-	}()
+
+		// Send banner exactly as configured — no appended newline.
+		// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
+		// ${request.*} placeholders authored in YAML are substituted per-connection
+		// so banners can carry e.g. "${request.uuid_short}" without leaking a
+		// fleet-identical string across sensors.
+		if servConf.Banner != "" {
+			banner, _ := responsesubs.Apply(servConf.Banner, nil, nil)
+			if _, err := c.Write([]byte(banner)); err != nil {
+				return
+			}
+		}
+
+		if interactive {
+			handleInteractiveConnection(c, servConf, tr, tcpStrategy)
+		} else {
+			handleBannerOnly(c, servConf, tr)
+		}
+	})
 
 	mode := "banner-only"
 	if interactive {
@@ -812,5 +812,45 @@ func (s *TCPStrategy) cleanAgentState() {
 			}
 		}
 		s.agentMu.Unlock()
+	}
+}
+
+// acceptLoop is the shared Accept-loop body for the TCP strategy. It bounds
+// concurrent in-flight handler goroutines to maxConcurrentConns via a buffered
+// semaphore, drops connections that arrive while the cap is full instead of
+// queueing (queueing under DoS is the bug we're fixing), and returns cleanly
+// when the listener is closed instead of CPU-spinning on permanent errors.
+//
+// The handler closure carries all per-connection logic — banner, dispatch,
+// interactive loop. acceptLoop owns only the accept / cap / spawn lifecycle.
+func acceptLoop(listener net.Listener, handle func(net.Conn)) {
+	sem := make(chan struct{}, maxConcurrentConns)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.WithError(err).Warn("accept error in TCP strategy")
+			// Small fixed backoff: avoids a tight CPU spin if Accept returns
+			// errors back-to-back (e.g., transient EMFILE under load) without
+			// adding latency once the system recovers. Not exponential —
+			// Accept errors should be rare and transient.
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		select {
+		case sem <- struct{}{}:
+			go func(c net.Conn) {
+				defer func() { <-sem }()
+				handle(c)
+			}(conn)
+		default:
+			// Cap reached. Drop the connection rather than queue —
+			// queueing under DoS is the bug we're fixing.
+			log.WithField("remoteAddr", conn.RemoteAddr().String()).
+				Warn("TCP connection cap reached, dropping")
+			_ = conn.Close()
+		}
 	}
 }

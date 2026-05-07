@@ -2,6 +2,7 @@ package TELNET
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -35,6 +36,12 @@ const (
 	SUPPRESS_GO_AHEAD = 3   // Suppress Go Ahead option
 )
 
+// maxConcurrentConns caps in-flight TELNET handler goroutines per listener.
+// Each accepted connection holds a per-conn buffer plus the LLM history-store
+// path; without a cap, 100k+ connections fill memory and degrade the sensor.
+// Same value and rationale as the TCP strategy — see TCP/tcp.go.
+const maxConcurrentConns = 1024
+
 type TelnetStrategy struct {
 	Sessions *historystore.HistoryStore
 	Bridge   *bridge.ProtocolBridge
@@ -62,25 +69,18 @@ func (telnetStrategy *TelnetStrategy) Init(servConf parser.BeelzebubServiceConfi
 		}
 		defer listener.Close()
 
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Errorf("error accepting TELNET connection: %s", err.Error())
-				continue
-			}
-
-			// Set deadline timeout
-			conn.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
-
-			go func(c net.Conn) {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Errorf("panic in TELNET handler: %v", r)
-					}
-				}()
-				handleTelnetConnection(c, servConf, tr, telnetStrategy)
-			}(conn)
-		}
+		acceptLoop(listener, func(c net.Conn) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("panic in TELNET handler: %v", r)
+				}
+			}()
+			// Set deadline timeout — preserved from the pre-cap behavior;
+			// applied per-connection inside the handler so a dropped /
+			// rejected connection (sem full) doesn't pay this cost.
+			c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
+			handleTelnetConnection(c, servConf, tr, telnetStrategy)
+		})
 	}()
 
 	log.WithFields(log.Fields{
@@ -547,6 +547,39 @@ func (s *TelnetStrategy) cleanAgentState() {
 			}
 		}
 		s.agentMu.Unlock()
+	}
+}
+
+// acceptLoop is the shared Accept-loop body for the TELNET strategy. It bounds
+// concurrent in-flight handler goroutines to maxConcurrentConns via a buffered
+// semaphore, drops connections that arrive while the cap is full, and returns
+// cleanly when the listener is closed instead of CPU-spinning on permanent
+// errors. Mirrors the TCP strategy's acceptLoop — kept package-local rather
+// than shared because the two protocol packages otherwise have no shared
+// utilities and a one-function shared package isn't justified yet.
+func acceptLoop(listener net.Listener, handle func(net.Conn)) {
+	sem := make(chan struct{}, maxConcurrentConns)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.WithError(err).Warn("accept error in TELNET strategy")
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		select {
+		case sem <- struct{}{}:
+			go func(c net.Conn) {
+				defer func() { <-sem }()
+				handle(c)
+			}(conn)
+		default:
+			log.WithField("remoteAddr", conn.RemoteAddr().String()).
+				Warn("TELNET connection cap reached, dropping")
+			_ = conn.Close()
+		}
 	}
 }
 
