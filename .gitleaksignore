@@ -51,6 +51,12 @@ protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
 # .env.example — documented example values, not real secrets
 configurations/.env.example:generic-api-key:51
 
+# lure_lint.py BANNED_LITERALS — these are the strings the linter scans for
+# in OTHER files. They live here as a defensive blocklist, not as live secrets.
+# Line numbers shift when banned-literal entries are added/removed.
+tools/lure_lint.py:github-pat:353
+tools/lure_lint.py:aws-access-token:347
+
 # Persona lure_content in persona.yaml — Crestfield deception credentials (all fake/honeypot)
 personas/crestfield-data-systems/persona.yaml:generic-api-key:31
 

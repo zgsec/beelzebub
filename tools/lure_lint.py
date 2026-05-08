@@ -10,8 +10,17 @@ Rules:
   R6  Jinja2 `{{ ... }}` in rendered output. Source configs are exempt.
   R7  Unrendered Beelzebub runtime tokens (`${session.*}`, `${captured.*}`,
       `${request.*}`) outside header/body fields — they emit literally.
+  R8  Banned credential literals — AWS docs example AKIA + secret pair, and
+      other strings that secret scanners flag as fake-by-default. Anything
+      shipped under one of these names is a tell, not a tripwire.
+  R9  Same canary placeholder reused across N+ leak points in one file.
+      When render-canaries.sh substitutes a single ${VAR}, every leak point
+      emits the *same* secret value — that uniformity is itself the tell.
+      Use distinct canary placeholders per leak path, or 404 the redundant
+      ones. Threshold: 5+ uses across distinct `handler:` / response bodies.
 
-Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule.
+Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule
+(works for R1..R10+).
 
 Exit 0 on clean, 1 on violations. With no paths, lints every YAML under
 `configurations/services/` and `personas/<persona>/lures/`.
@@ -326,6 +335,103 @@ def rule_r7_runtime_token_misplaced(lines: list[str], path: Path, realism: dict)
             )
 
 
+# R8: Banned credential literals.
+# Map of (literal-or-regex, severity-message) — strings that, when shipped in
+# a lure, immediately tell secret-scanners (and observant attackers) the
+# credential is fake. Add freely as new "fake-by-default" patterns are found.
+BANNED_LITERALS: dict[str, str] = {
+    "AKIAIOSFODNN7EXAMPLE":
+        "AWS documentation example access key — on every secret-scanner blocklist",
+    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY":
+        "AWS documentation example secret key — on every secret-scanner blocklist",
+    "AKIAJDOEAEEXAMPLEKEY":
+        "AWS docs example AKIA — on every secret-scanner blocklist",
+    "12345678-1234-1234-1234-123456789012":
+        "Microsoft docs placeholder GUID — on every secret-scanner blocklist",
+    "00000000-0000-0000-0000-000000000000":
+        "null GUID — recognized as placeholder by every scanner",
+    "ghp_1234567890abcdefghijklmnopqrstuvwxyz":
+        "GitHub PAT example shape — used in docs, recognized as placeholder",
+    "xK9mN2pR5sT8vW1yA4bC7dE0fG3hI6jK":
+        "JWT/encryption-key shape that has shipped in our own configs as a static literal — replace with a real canary or remove",
+    "aB3cD5eF7gH9iJ1kL3mN5oP7qR9sT1uV":
+        "encryption-key shape that has shipped as a static literal in our configs — replace with a real canary or remove",
+}
+
+
+def rule_r8_banned_literals(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
+    """Scan every non-comment line for known fake-by-default credential
+    literals. Even one occurrence breaks the deception — secret scanners
+    (gitleaks, trufflehog) match these patterns by name as "tutorial
+    examples", not real keys, so attackers never bother trying them.
+    """
+    for i, raw in enumerate(lines, 1):
+        # Skip pure comment lines; embedded '#' inside a string is fine.
+        stripped = raw.lstrip()
+        if stripped.startswith("#"):
+            continue
+        for literal, why in BANNED_LITERALS.items():
+            if literal in raw:
+                yield Violation(
+                    path, i, "R8",
+                    f"banned literal `{literal}` — {why}",
+                )
+
+
+# R9: same canary placeholder reused excessively in one file.
+PLACEHOLDER_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+R9_THRESHOLD = 5
+# Some placeholders are inherently single-value-per-env (DNS subdomain,
+# vault address); reuse across many leak points is realism, not a tell.
+# Skip these from R9 reuse-counting.
+R9_REUSE_OK = {
+    # DNS-token-as-hostname is a single canary by design.
+    re.compile(r".*_CANARY_DNS$"),
+    re.compile(r".*_CANARY_DOMAIN$"),
+    # Web-bug URLs are single canaries by design.
+    re.compile(r".*_CANARY_WEB(_BUG)?(_[A-Z]+)?$"),
+}
+
+
+def _r9_skip(name: str) -> bool:
+    return any(p.match(name) for p in R9_REUSE_OK)
+
+
+def rule_r9_placeholder_reuse(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
+    """Count how many lines reference each ${PLACEHOLDER}. Above the
+    threshold, render emits the *same* secret value at all those points —
+    a real ops env almost never reuses one credential across more than a
+    handful of distinct config files / formats.
+
+    Counting by line is a proxy for distinct leak points; one handler with
+    multiple placeholder references on its line counts once.
+    """
+    counts: dict[str, list[int]] = {}
+    for i, raw in enumerate(lines, 1):
+        stripped = raw.lstrip()
+        if stripped.startswith("#"):
+            continue
+        seen_on_line: set[str] = set()
+        for m in PLACEHOLDER_RE.finditer(raw):
+            name = m.group(1)
+            if _r9_skip(name):
+                continue
+            if name in seen_on_line:
+                continue
+            seen_on_line.add(name)
+            counts.setdefault(name, []).append(i)
+    for name, line_nums in counts.items():
+        if len(line_nums) >= R9_THRESHOLD:
+            yield Violation(
+                path, line_nums[0], "R9",
+                f"${{{name}}} reused across {len(line_nums)} leak points "
+                f"(lines {','.join(str(n) for n in line_nums[:6])}"
+                f"{'...' if len(line_nums) > 6 else ''}); "
+                f"render produces the same value at all of them — "
+                f"introduce distinct canary placeholders or 404 the redundant paths",
+            )
+
+
 RULES = [
     rule_r1_server,
     rule_r2_banned_headers,
@@ -334,6 +440,8 @@ RULES = [
     rule_r5_catchall_404,
     rule_r6_jinja_in_rendered,
     rule_r7_runtime_token_misplaced,
+    rule_r8_banned_literals,
+    rule_r9_placeholder_reuse,
 ]
 
 # Per-rule severity. CRITICAL fires on every check; WARN can be downgraded
@@ -347,10 +455,13 @@ SEVERITY = {
     "R5": "CRITICAL",
     "R6": "CRITICAL",
     "R7": "CRITICAL",
+    "R8": "CRITICAL",
+    "R9": "WARN",
 }
 
 
-WAIVER_RE = re.compile(r"#\s*lure-lint:\s*ignore-(R\d)")
+# Waiver matches R<digits> — supports R8, R9, R10+ as new rules land.
+WAIVER_RE = re.compile(r"#\s*lure-lint:\s*ignore-(R\d+)")
 
 
 def lint_file(path: Path, realism: dict) -> list[Violation]:
