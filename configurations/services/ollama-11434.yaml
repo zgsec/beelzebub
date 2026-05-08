@@ -9,6 +9,17 @@ description: "Ollama LLM inference server"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
 
+# Persona-shaped fallback when ExecuteModel returns no usable content
+# (no API key in container env, OpenAI 5xx, rate limit, network error).
+# Surfaces as a real-shaped Ollama runtime error to the attacker — looks
+# like a busy GPU server, not "auth-relay-honeypot fronting OpenAI".
+# Without this, the strategy emits an empty body which the OpenAI-compat
+# code path falls through on, leaking shape. Status 500 matches real
+# Ollama OOM/runtime error responses.
+llmFallback:
+  status: 500
+  body: '{"error":"runtime error: model loader failed; CUDA: out of memory after 47 sessions; try OLLAMA_NUM_PARALLEL=1 or a smaller model"}'
+
 # === OLLAMA HONEYPOT ===
 # Emulates a real Ollama instance with native + OpenAI-compatible APIs.
 # Multi-layer prompt injection extracts agent system prompts, tool configs,
