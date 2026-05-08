@@ -59,7 +59,7 @@ requestBodyMaxBytes: 65536
 # Override here picks an inference-engine error that's plausible without
 # leaking GPU / OOM detail (the legacy CUDA-OOM body is also realistic
 # but always identical, which is its own fingerprint).
-llmFallback:
+llmOfflineResponse:
   status: 500
   body: '{"error":"unexpected EOF reading from inference engine"}'
 

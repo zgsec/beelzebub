@@ -156,14 +156,14 @@ func isEmbeddingModel(name string) bool {
 	return strings.Contains(n, "-embed-") || strings.HasSuffix(n, "-embed")
 }
 
-// ollamaLLMFallback returns the (status, body) pair to emit when the LLM
+// ollamaLLMOfflineResponse returns the (status, body) pair to emit when the LLM
 // path produced no usable response (missing API key, ExecuteModel error,
-// rate limit, or empty template fallback). When the lure has llmFallback
+// rate limit, or empty template fallback). When the lure has llmOfflineResponse
 // configured, those values win verbatim — letting BlueSpark's litellm /
 // vllm / ollama lures all emit vendor-shaped JSON envelopes. When unset,
 // preserves the legacy Ollama-shaped CUDA-OOM body for backward compat
 // with every existing OLLAMA lure that doesn't opt in.
-func ollamaLLMFallback(fb *parser.LLMFallback, model string) (int, string) {
+func ollamaLLMOfflineResponse(fb *parser.LLMOfflineResponse, model string) (int, string) {
 	status := http.StatusInternalServerError
 	body := fmt.Sprintf(`{"error":"model '%s' failed to generate a response: CUDA error: out of memory"}`, model)
 	if fb == nil {
@@ -176,7 +176,7 @@ func ollamaLLMFallback(fb *parser.LLMFallback, model string) (int, string) {
 		body = fb.Body
 	}
 	// Apply ${request.*} placeholder substitution so YAML-authored
-	// llmFallback bodies can carry e.g. "${request.uuid_short}" without
+	// llmOfflineResponse bodies can carry e.g. "${request.uuid_short}" without
 	// the literal template string landing on the wire. OLLAMA does not
 	// expose a stateful session context; only request-level vars fire.
 	body, _ = responsesubs.Apply(body, nil, nil)
@@ -977,12 +977,12 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Empty response = degradation tier 3 simulated error (real Ollama error format).
-	// If the lure has an llmFallback configured (litellm/vllm/ollama
+	// If the lure has an llmOfflineResponse configured (litellm/vllm/ollama
 	// persona-shaped error envelope), use it verbatim; otherwise keep the
 	// legacy Ollama-shaped CUDA-OOM body for backward-compat.
 	if response == "" {
 		w.Header().Set("Content-Type", "application/json")
-		status, errResp := ollamaLLMFallback(servConf.LLMFallback, req.Model)
+		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
 		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[degradation:cuda_oom]", string(body))
@@ -1117,7 +1117,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	// envelope (when configured) wins over the legacy CUDA-OOM body.
 	if response == "" {
 		w.Header().Set("Content-Type", "application/json")
-		status, errResp := ollamaLLMFallback(servConf.LLMFallback, req.Model)
+		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
 		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[degradation:cuda_oom]", string(body))

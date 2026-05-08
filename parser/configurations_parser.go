@@ -165,7 +165,7 @@ type NoveltyDetection struct {
 	VariantThreshold int  `yaml:"variantThreshold"`
 }
 
-// LLMFallback configures the persona-shaped error envelope returned when
+// LLMOfflineResponse configures the persona-shaped error envelope returned when
 // ExecuteModel fails (missing OPEN_AI_SECRET_KEY, network error,
 // rate limit, model crash, etc). Empty (zero-value) preserves the legacy
 // bare-text "500 Internal Server Error" behavior — backward-compatible.
@@ -178,7 +178,7 @@ type NoveltyDetection struct {
 //
 // Used by HTTP and OLLAMA strategies. Not used by MCP — its error
 // envelopes are JSON-RPC-shaped already and don't go through this path.
-type LLMFallback struct {
+type LLMOfflineResponse struct {
 	// Status is the HTTP status code to return. Zero = 500 (default).
 	Status int `yaml:"status,omitempty" json:",omitempty"`
 	// Body is the response body verbatim. Empty = legacy bare-text
@@ -288,7 +288,7 @@ type BeelzebubServiceConfiguration struct {
 	// services that don't use the stateful-HTTP feature.
 	// Spec: docs/superpowers/specs/2026-04-30-stateful-http-cve-lure-framework-design.md.
 	State *State `yaml:"state,omitempty" json:",omitempty"`
-	// LLMFallback configures the response shape returned when ExecuteModel
+	// LLMOfflineResponse configures the response shape returned when ExecuteModel
 	// errors (missing API key, network error, rate limit). Nil (default)
 	// preserves the legacy bare-text "500 Internal Server Error" body.
 	// Set on chat-LLM lures (LiteLLM proxy, vLLM, Ollama) so a probe that
@@ -296,7 +296,7 @@ type BeelzebubServiceConfiguration struct {
 	// vendor-shaped JSON error envelope rather than bare text. Pointer so
 	// json omitempty skips the field entirely when nil, keeping HashCode()
 	// stable for existing services.
-	LLMFallback *LLMFallback `yaml:"llmFallback,omitempty" json:",omitempty"`
+	LLMOfflineResponse *LLMOfflineResponse `yaml:"llmOfflineResponse,omitempty" json:",omitempty"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {

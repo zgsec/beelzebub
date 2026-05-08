@@ -634,14 +634,14 @@ func TestHTTP_CookieForgery_JWT(t *testing.T) {
 }
 
 // TestHTTP_CookieForgery_Classifier exercises classifyForgedCookie across a
-// TestHTTP_LLMFallback_BackwardCompatBareText — when no llmFallback is
+// TestHTTP_LLMOfflineResponse_BackwardCompatBareText — when no llmOfflineResponse is
 // configured on the lure (the legacy path for every existing service),
 // the ExecuteModel-error fallback emits the bare-text 500 it always has.
 // This is the backward-compat gate: stock services / non-LLM lures must
 // see no behavior change from before this feature landed.
-func TestHTTP_LLMFallback_BackwardCompatBareText(t *testing.T) {
+func TestHTTP_LLMOfflineResponse_BackwardCompatBareText(t *testing.T) {
 	resp := httpResponse{StatusCode: 200, Body: "ignored"}
-	applyLLMFallback(&resp, nil)
+	applyLLMOfflineResponse(&resp, nil)
 	if resp.StatusCode != 500 {
 		t.Errorf("StatusCode = %d, want 500", resp.StatusCode)
 	}
@@ -650,19 +650,19 @@ func TestHTTP_LLMFallback_BackwardCompatBareText(t *testing.T) {
 	}
 }
 
-// TestHTTP_LLMFallback_PersonaShapedBodyOverrides — when the lure has
-// llmFallback configured (LiteLLM / vLLM / Ollama persona-shaped JSON
+// TestHTTP_LLMOfflineResponse_PersonaShapedBodyOverrides — when the lure has
+// llmOfflineResponse configured (LiteLLM / vLLM / Ollama persona-shaped JSON
 // envelope), the configured Status + Body win verbatim. This is the
 // motivated-actor probe path: hitting POST /v1/chat/completions without
 // a working LLM should look like the impersonated service's real error,
 // not bare text.
-func TestHTTP_LLMFallback_PersonaShapedBodyOverrides(t *testing.T) {
-	fb := &parser.LLMFallback{
+func TestHTTP_LLMOfflineResponse_PersonaShapedBodyOverrides(t *testing.T) {
+	fb := &parser.LLMOfflineResponse{
 		Status: 503,
 		Body:   `{"error":{"message":"upstream timeout","type":"APIError","code":"503"}}`,
 	}
 	resp := httpResponse{StatusCode: 200, Body: "ignored"}
-	applyLLMFallback(&resp, fb)
+	applyLLMOfflineResponse(&resp, fb)
 	if resp.StatusCode != 503 {
 		t.Errorf("StatusCode = %d, want 503", resp.StatusCode)
 	}
@@ -671,13 +671,13 @@ func TestHTTP_LLMFallback_PersonaShapedBodyOverrides(t *testing.T) {
 	}
 }
 
-// TestHTTP_LLMFallback_ZeroFieldsKeepLegacy — partial config support:
+// TestHTTP_LLMOfflineResponse_ZeroFieldsKeepLegacy — partial config support:
 // status==0 keeps the 500 default, body=="" keeps the bare-text default.
 // Lets a lure override one field without specifying the other.
-func TestHTTP_LLMFallback_ZeroFieldsKeepLegacy(t *testing.T) {
+func TestHTTP_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
 	// status=0 + body set → custom body, default 500 status
 	resp := httpResponse{}
-	applyLLMFallback(&resp, &parser.LLMFallback{Body: `{"error":"x"}`})
+	applyLLMOfflineResponse(&resp, &parser.LLMOfflineResponse{Body: `{"error":"x"}`})
 	if resp.StatusCode != 500 {
 		t.Errorf("StatusCode = %d, want 500 (default kept)", resp.StatusCode)
 	}
@@ -687,7 +687,7 @@ func TestHTTP_LLMFallback_ZeroFieldsKeepLegacy(t *testing.T) {
 
 	// status set + body empty → custom status, default bare text
 	resp = httpResponse{}
-	applyLLMFallback(&resp, &parser.LLMFallback{Status: 502})
+	applyLLMOfflineResponse(&resp, &parser.LLMOfflineResponse{Status: 502})
 	if resp.StatusCode != 502 {
 		t.Errorf("StatusCode = %d, want 502", resp.StatusCode)
 	}

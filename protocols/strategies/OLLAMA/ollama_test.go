@@ -900,12 +900,12 @@ func TestModelModifiedAt_FallsBackToUTCOnInvalidTZ(t *testing.T) {
 	}
 }
 
-// TestOllama_LLMFallback_BackwardCompatCUDABody — when the lure has no
-// llmFallback configured (every existing OLLAMA service config), the
+// TestOllama_LLMOfflineResponse_BackwardCompatCUDABody — when the lure has no
+// llmOfflineResponse configured (every existing OLLAMA service config), the
 // empty-response fallback emits the legacy Ollama-shaped CUDA-OOM JSON
 // body and returns 500. Backward-compat gate.
-func TestOllama_LLMFallback_BackwardCompatCUDABody(t *testing.T) {
-	status, body := ollamaLLMFallback(nil, "llama3.1:8b")
+func TestOllama_LLMOfflineResponse_BackwardCompatCUDABody(t *testing.T) {
+	status, body := ollamaLLMOfflineResponse(nil, "llama3.1:8b")
 	if status != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", status)
 	}
@@ -915,16 +915,16 @@ func TestOllama_LLMFallback_BackwardCompatCUDABody(t *testing.T) {
 	}
 }
 
-// TestOllama_LLMFallback_PersonaShapedBodyOverrides — when the lure has
-// llmFallback configured (e.g. BlueSpark's ollama-11434 lure), the
+// TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides — when the lure has
+// llmOfflineResponse configured (e.g. BlueSpark's ollama-11434 lure), the
 // configured envelope wins verbatim. The model parameter is ignored
 // because the configured body is taken as-is from YAML.
-func TestOllama_LLMFallback_PersonaShapedBodyOverrides(t *testing.T) {
-	fb := &parser.LLMFallback{
+func TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides(t *testing.T) {
+	fb := &parser.LLMOfflineResponse{
 		Status: 500,
 		Body:   `{"error":"unexpected EOF reading from inference engine"}`,
 	}
-	status, body := ollamaLLMFallback(fb, "aurora-7b")
+	status, body := ollamaLLMOfflineResponse(fb, "aurora-7b")
 	if status != 500 {
 		t.Errorf("status = %d, want 500", status)
 	}
@@ -933,13 +933,13 @@ func TestOllama_LLMFallback_PersonaShapedBodyOverrides(t *testing.T) {
 	}
 }
 
-// TestOllama_LLMFallback_ZeroFieldsKeepLegacy — partial config: zero
+// TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy — partial config: zero
 // status keeps the 500 default; empty body keeps the legacy CUDA-OOM
 // envelope. Lets a lure tweak just one field without re-specifying the
 // other.
-func TestOllama_LLMFallback_ZeroFieldsKeepLegacy(t *testing.T) {
+func TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
 	// Only body set → status defaults to 500
-	status, body := ollamaLLMFallback(&parser.LLMFallback{Body: `{"error":"x"}`}, "m1")
+	status, body := ollamaLLMOfflineResponse(&parser.LLMOfflineResponse{Body: `{"error":"x"}`}, "m1")
 	if status != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 (default)", status)
 	}
@@ -948,7 +948,7 @@ func TestOllama_LLMFallback_ZeroFieldsKeepLegacy(t *testing.T) {
 	}
 
 	// Only status set → body defaults to CUDA-OOM with the model name
-	status, body = ollamaLLMFallback(&parser.LLMFallback{Status: 503}, "m2")
+	status, body = ollamaLLMOfflineResponse(&parser.LLMOfflineResponse{Status: 503}, "m2")
 	if status != 503 {
 		t.Errorf("status = %d, want 503", status)
 	}

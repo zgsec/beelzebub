@@ -31,7 +31,7 @@ requestBodyMaxBytes: 65536
 # server emits OpenAI-compat error JSON with object="error" and code
 # as integer (not string, unlike LiteLLM). Matching this shape avoids
 # burning the lure on /v1/chat/completions when the LLM path errors.
-llmFallback:
+llmOfflineResponse:
   status: 500
   body: '{"object":"error","message":"Internal server error","type":"InternalServerError","param":null,"code":500}'
 

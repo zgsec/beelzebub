@@ -34,11 +34,11 @@ responseBodyMaxBytes: 65536
 # Persona-shaped fallback when ExecuteModel returns no usable content
 # (no API key in container env, OpenAI 5xx, rate limit, network error).
 # vLLM real wire shape on engine error: 500 + {"object":"error",...}.
-# Without this, HTTPStrategy.applyLLMFallback emits the legacy bare-text
+# Without this, HTTPStrategy.applyLLMOfflineResponse emits the legacy bare-text
 # "500 Internal Server Error" — wrong shape, leaks "this is a generic
 # HTTP responder" to anyone fingerprinting the inference path. With this,
 # the attacker sees what a saturated vLLM gateway would emit.
-llmFallback:
+llmOfflineResponse:
   status: 500
   body: '{"object":"error","message":"InternalServerError - inference engine: CUDA OOM after 47 sessions, KV cache 100% utilized; try a smaller model or wait for sessions to drain","type":"server_error","param":null,"code":null}'
 

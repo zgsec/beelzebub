@@ -33,7 +33,7 @@ requestBodyMaxBytes: 65536
 # on the /v1/chat/completions path. Without this, the framework would
 # emit bare-text "500 Internal Server Error" which doesn't match
 # LiteLLM's wire shape.
-llmFallback:
+llmOfflineResponse:
   status: 500
   body: '{"error":{"message":"litellm.APIError: An unexpected error occurred. Please try again.","type":"APIError","param":null,"code":"500"}}'
 

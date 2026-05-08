@@ -16,7 +16,7 @@ responseBodyMaxBytes: 65536
 # Without this, the strategy emits an empty body which the OpenAI-compat
 # code path falls through on, leaking shape. Status 500 matches real
 # Ollama OOM/runtime error responses.
-llmFallback:
+llmOfflineResponse:
   status: 500
   body: '{"error":"runtime error: model loader failed; CUDA: out of memory after 47 sessions; try OLLAMA_NUM_PARALLEL=1 or a smaller model"}'
 

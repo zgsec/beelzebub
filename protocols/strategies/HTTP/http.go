@@ -136,15 +136,15 @@ type httpResponse struct {
 	Body       string
 }
 
-// applyLLMFallback writes a persona-shaped error envelope into resp when
-// the lure has llmFallback configured. Without llmFallback, behavior is
+// applyLLMOfflineResponse writes a persona-shaped error envelope into resp when
+// the lure has llmOfflineResponse configured. Without llmOfflineResponse, behavior is
 // identical to the legacy bare-text "500 Internal Server Error" — that
 // matters for backward-compat with every non-LLM lure (CVE bait, Redis
 // banner-only, etc.) and for the chat-LLM lures we haven't migrated yet.
 //
 // status==0 keeps the legacy 500. body=="" keeps the legacy bare text.
 // Non-empty Body wins; non-zero Status wins.
-func applyLLMFallback(resp *httpResponse, fb *parser.LLMFallback) {
+func applyLLMOfflineResponse(resp *httpResponse, fb *parser.LLMOfflineResponse) {
 	resp.StatusCode = 500
 	resp.Body = "500 Internal Server Error"
 	if fb == nil {
@@ -232,7 +232,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
-					applyLLMFallback(&resp, servConf.LLMFallback)
+					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
 				}
 				break
 			}
@@ -245,7 +245,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
-					applyLLMFallback(&resp, servConf.LLMFallback)
+					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
 				}
 			}
 		}
