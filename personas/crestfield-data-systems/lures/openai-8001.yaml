@@ -761,13 +761,6 @@ commands:
 
   # --- Docker Compose dev/override variants ---
 
-  - regex: "^/secrets\\.json$"
-    handler: '{"database_password":"","aws_access_key_id":"${OPENAI_CANARY_AWS_KEY}","aws_secret_access_key":"${OPENAI_CANARY_AWS_SECRET}","openai_api_key":"","anthropic_api_key":"","stripe_secret_key":"","jwt_secret":"xK9mN2pR5sT8vW1yA4bC7dE0fG3hI6jK","encryption_key":"aB3cD5eF7gH9iJ1kL3mN5oP7qR9sT1uV","github_pat":"","internal_registry_password":""}'
-    headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: uvicorn"
-    statusCode: 200
-
   - regex: "^/settings\\.js$"
     handler: |
       window.__SETTINGS__ = {
