@@ -1110,16 +1110,25 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 			event.RequestBody = body
 		}
 	}
-	tr.TraceEvent(event)
 
-	// Write response. Apply ${request.*} (and any future ${session.*})
-	// placeholder substitution before emitting bytes so YAML lures stay
+	// Compute the substituted response body BEFORE TraceEvent so the
+	// response-body sha256 can land on the event. ${request.*} (and any
+	// future ${session.*}) placeholders fire here so YAML lures stay
 	// wire-compatible whether the request lands on the HTTP strategy or
 	// here on the MCP HTTP-fallback path. MCP does not yet expose a
 	// stateful per-request session context, so sessionVars=nil — only
 	// request-level vars fire. Substitution is non-mutating; the parser
 	// command pointer is shared across requests.
-	body, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil)
+	respBody, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil)
+
+	// WS-4 Slice B: hash both directions from raw wire bytes (pre-truncation).
+	// Runs unconditionally (Q5). No multipart parsing — MCP carries
+	// JSON-RPC only (Q2).
+	event.RequestBodySha256 = tracer.Sha256HexString(body)
+	event.ResponseBodySha256 = tracer.Sha256HexString(respBody)
+	tr.TraceEvent(event)
+
+	// Write the (pre-computed) substituted response.
 	for _, h := range headers {
 		parts := strings.SplitN(h, ":", 2)
 		if len(parts) == 2 {
@@ -1129,7 +1138,7 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	if matchedCommand.StatusCode > 0 {
 		w.WriteHeader(matchedCommand.StatusCode)
 	}
-	fmt.Fprint(w, body)
+	fmt.Fprint(w, respBody)
 }
 
 // defaultMCPRequestBodyMaxBytes is applied when CaptureRequestBody=true but

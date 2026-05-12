@@ -725,6 +725,22 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 			event.RequestBody = body
 		}
 	}
+
+	// WS-4 Slice B: hash full raw body bytes BEFORE any truncation has
+	// influenced what's stored. Runs unconditionally — the hash always
+	// reflects what was on the wire, regardless of whether CaptureRequestBody
+	// or CaptureResponseBody is on (Slice B Q5).
+	event.RequestBodySha256 = tracer.Sha256HexString(body)
+	event.ResponseBodySha256 = tracer.Sha256HexString(responseBody)
+
+	// WS-4 Slice B: parse multipart request bodies into structured parts so
+	// uploaded filenames + content-types + per-part hashes are queryable
+	// downstream. HTTP-only by design (Slice B Q2).
+	if reqCT := request.Header.Get("Content-Type"); tracer.IsMultipartContentType(reqCT) {
+		if parts := tracer.ParseMultipart(body, reqCT); len(parts) > 0 {
+			event.RequestBodyParts = parts
+		}
+	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {
 		event.Msg = "HTTPS New Request"

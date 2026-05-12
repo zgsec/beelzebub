@@ -562,6 +562,13 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 			event.RequestBody = body
 		}
 	}
+	// WS-4 Slice B: hash both directions from raw wire bytes (pre-truncation).
+	// Runs unconditionally — hash always reflects what was on the wire (Q5).
+	// commandOutput is OLLAMA's response payload (the substituted LLM response
+	// emitted to the client), so it serves as the response-body hash source.
+	// No multipart parsing — OLLAMA carries JSON only (Slice B Q2).
+	event.RequestBodySha256 = tracer.Sha256HexString(body)
+	event.ResponseBodySha256 = tracer.Sha256HexString(commandOutput)
 	tr.TraceEvent(event)
 }
 

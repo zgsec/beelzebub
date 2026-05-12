@@ -168,6 +168,24 @@ type Event struct {
 	// dot-namespaced by service to avoid collision: "screenconnect.operator_user".
 	// Propagates through to the aggregator's deception_metadata JSONB column.
 	Captured map[string]string `json:"Captured,omitempty"`
+
+	// WS-4 Slice B (2026-05-12): body-capture integrity fields. Hashes are
+	// computed over the FULL raw body bytes BEFORE any truncation, so the
+	// hash is forensic identity even when RequestBody / ResponseBody are
+	// truncated for storage. Empty when the body was empty (per Slice B Q1
+	// — see docs/strategy/2026-05-12-ws4-slice-b-body-capture-design.md in
+	// the honeypot-research repo). Hashing runs unconditionally on every
+	// body the wire carried — independent of CaptureRequestBody — so the
+	// hash field always reflects "what was on the wire" (Slice B Q5).
+	RequestBodySha256  string `json:"RequestBodySha256,omitempty"`
+	ResponseBodySha256 string `json:"ResponseBodySha256,omitempty"`
+
+	// RequestBodyParts is populated by the HTTP strategy when a request
+	// arrives with a multipart/* Content-Type. JSON / opaque to all
+	// downstream consumers — see MultipartPart struct in tracer/multipart.go.
+	// Nil for non-multipart traffic and for protocols other than HTTP
+	// (Slice B Q2: MCP/OLLAMA/openai never carry multipart in practice).
+	RequestBodyParts []MultipartPart `json:"RequestBodyParts,omitempty"`
 }
 
 type (
