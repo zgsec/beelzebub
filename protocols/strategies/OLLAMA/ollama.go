@@ -604,7 +604,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":null}}`
 		w.Write([]byte(body401))
-		s.traceEvent(r, tr, servConf, handler, "[auth:missing]", "[401]", string(body))
+		s.traceEvent(r, tr, servConf, handler, "", body401, string(body))
 		return false
 	}
 	// "Bearer " prefix, with a non-empty token after.
@@ -613,7 +613,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
 		w.Write([]byte(body401))
-		s.traceEvent(r, tr, servConf, handler, "[auth:malformed]", "[401]", string(body))
+		s.traceEvent(r, tr, servConf, handler, "", body401, string(body))
 		return false
 	}
 	return true
