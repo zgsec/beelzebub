@@ -65,7 +65,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"service":"vllm-inference-gateway","version":"0.6.3-cuda12.4","status":"ok","model_loaded":"meta-llama/Llama-3.1-70B-Instruct","uptime_seconds":184293,"internal":{"metrics_endpoint":"/_internal/metrics","auth_required":true,"auth_doc":"https://wiki.{{ persona.identity.internal_domain | default(''int.crestfielddata.io'') }}/inference/internal-auth"}}'
+    handler: '{"service":"vllm-inference-gateway","version":"0.6.3-cuda12.4","status":"ok","model_loaded":"meta-llama/Llama-3.1-70B-Instruct","uptime_seconds":184293,"internal":{"metrics_endpoint":"/_internal/metrics","auth_required":true,"auth_doc":"https://wiki.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}/inference/internal-auth"}}'
 
   # Chain 1 stage 4: GET /_internal/metrics (with session cookie) →
   # AKIA_OPENAI_TIER1 canary unlock. sessionAction:require means this
@@ -104,7 +104,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"token":"sk-internal-${session.cookie}","issued_at":"2026-05-12T00:00:00Z","expires_in":86400,"scope":"internal-metrics:read","note":"Replicate this token in the X-Internal-Token header on subsequent /_internal/* requests. Tokens are not stored server-side; rotate on each session.","issuer":"auth.{{ persona.identity.internal_domain | default(''int.crestfielddata.io'') }}"}'
+    handler: '{"token":"sk-internal-${session.cookie}","issued_at":"2026-05-12T00:00:00Z","expires_in":86400,"scope":"internal-metrics:read","note":"Replicate this token in the X-Internal-Token header on subsequent /_internal/* requests. Tokens are not stored server-side; rotate on each session.","issuer":"auth.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}"}'
 
   # Chain 1 — GET /api/auth/register → 405 (method gating)
   - regex: "^/api/auth/register$"

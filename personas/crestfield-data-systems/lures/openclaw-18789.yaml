@@ -339,7 +339,7 @@ commands:
     handler: "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<QDocRoot version=\"1.0\">\n  <authPassed>0</authPassed>\n  <isAdmin>0</isAdmin>\n  <authSid></authSid>\n  <model>\n    <displayModelName>TS-453D</displayModelName>\n    <internalModelName>TS-X53D</internalModelName>\n  </model>\n  <firmware>\n    <version>5.1.5</version>\n    <build>20240112</build>\n    <patch>T20240227</patch>\n    <buildTime>20240112-0430</buildTime>\n  </firmware>\n  <hostname>nas-backup-01</hostname>\n</QDocRoot>"
     headers:
       - "Content-Type: text/xml"
-      - "Server: http server 1.0"
+      - "Server: http server 1.0"  # lure-lint: ignore-R1
     statusCode: 200
 
   # --- /.well-known/security.txt (probed 1x on 18789) ---
@@ -620,7 +620,7 @@ commands:
       - "Server: openclaw-gateway/2.0.1-enterprise"
       - "X-Ghost-Endpoint: config-file-traversal"
     statusCode: 200
-    handler: '{"service":"openclaw-gateway","version":"2.0.1-enterprise","auth":{"mode":"schema_handshake","jwt_secret":"xK9mN2pR5sT8vW1yA4bC7dE0fG3hI6jK","token_ttl_s":3600},"database":{"host":"pg-openclaw.${OPENCLAW_CANARY_DNS}","port":5432,"name":"openclaw_prod","username":"openclaw_svc","password":"Vp7kNx2qLm"},"aws":{"access_key_id":"${OPENCLAW_CANARY_AWS_KEY}","secret_access_key":"${OPENCLAW_CANARY_AWS_SECRET}","region":"us-east-2","s3_bucket":"openclaw-backups"},"mcp":{"transport":"sse","protocol_version":"2024-11-05"},"connected_services":{"vllm":"http://gpu-worker-01.internal.corp:8000","ollama":"http://localhost:11434","docker_registry":"registry.internal.corp:5000","vault":"http://infra-vault-agent.internal.corp:8200"},"agents":{"max_registered":100,"reasoning_parity_threshold":0.95,"sandbox_enabled":true}}'
+    handler: '{"service":"openclaw-gateway","version":"2.0.1-enterprise","auth":{"mode":"schema_handshake","jwt_secret":"xK9mN2pR5sT8vW1yA4bC7dE0fG3hI6jK","token_ttl_s":3600},"database":{"host":"pg-openclaw.${OPENCLAW_CANARY_DNS}","port":5432,"name":"openclaw_prod","username":"openclaw_svc","password":"Vp7kNx2qLm"},"aws":{"access_key_id":"${OPENCLAW_CANARY_AWS_KEY}","secret_access_key":"${OPENCLAW_CANARY_AWS_SECRET}","region":"us-east-2","s3_bucket":"openclaw-backups"},"mcp":{"transport":"sse","protocol_version":"2024-11-05"},"connected_services":{"vllm":"http://gpu-worker-01.internal.corp:8000","ollama":"http://localhost:11434","docker_registry":"registry.internal.corp:5000","vault":"http://infra-vault-agent.internal.corp:8200"},"agents":{"max_registered":100,"reasoning_parity_threshold":0.95,"sandbox_enabled":true}}'  # lure-lint: ignore-R8
 
   # =========================================================================
   # Phase C — Chain 3: tier-1 discovery chain (Slack-webhook canary unlock)

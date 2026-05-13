@@ -156,5 +156,6 @@ lures:
   - lures/ollama-11434.yaml
   - lures/openai-8001.yaml
   - lures/http-8888.yaml
+  - lures/openclaw-18789.yaml
 canary_slots: []
 env_overrides: {}
