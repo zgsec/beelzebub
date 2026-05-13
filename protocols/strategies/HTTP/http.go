@@ -249,6 +249,27 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 				}
 			}
 		}
+		// Fault injection: apply delay jitter and/or error faults.
+		// The Fault injector is wired by builder.go from the YAML
+		// faultInjection config. Delay faults sleep inside Apply()
+		// (adds realistic latency). Error faults replace the response
+		// with a 503 + Retry-After (simulates real service under load).
+		var faultType string
+		if httpStrategy.Fault != nil {
+			faultResp, ft, faulted := httpStrategy.Fault.Apply()
+			faultType = ft
+			if faulted && ft != "delay" {
+				resp.StatusCode = 503
+				resp.Body = faultResp
+				resp.Headers = []string{
+					"Content-Type: application/json; charset=utf-8",
+					"Retry-After: 5",
+					"Server: " + extractServerHeader(resp.Headers),
+				}
+			}
+		}
+		_ = faultType // available for tracer event if needed
+
 		setResponseHeaders(responseWriter, resp.Headers, resp.StatusCode)
 		fmt.Fprint(responseWriter, resp.Body)
 
@@ -806,6 +827,17 @@ func applyResponseSubstitutions(resp *httpResponse, sctx *sessionContext) {
 		}
 	}
 	resp.Body, resp.Headers = responsesubs.Apply(resp.Body, resp.Headers, sessionVars)
+}
+
+// extractServerHeader pulls the Server value from a header slice, falling back to "nginx/1.25.4".
+func extractServerHeader(headers []string) string {
+	for _, h := range headers {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) == 2 && strings.EqualFold(strings.TrimSpace(parts[0]), "Server") {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return "nginx/1.25.4"
 }
 
 func setResponseHeaders(responseWriter http.ResponseWriter, headers []string, statusCode int) {
