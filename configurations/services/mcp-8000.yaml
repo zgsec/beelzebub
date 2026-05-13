@@ -870,6 +870,48 @@ commands:
   # End Phase D Chain D4-A
   # =========================================================================
 
+  # =========================================================================
+  # Phase D Chain D2-2 — CVE-bait: MCP admin session replay
+  #
+  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §2.2
+  #
+  # Real MCP gateways expose admin endpoints for session management.
+  # CVE-2025-MCP-SESS (hypothetical predictable session-ID hijack) would
+  # let an attacker enumerate active sessions and extract credentials.
+  # Only someone probing for MCP admin surfaces finds this path — it is
+  # never advertised in /.well-known/mcp.json or any other response.
+  #
+  # Canary: MCP_CVE_ADMIN_TOKEN — admin bearer token. Fire signal is the
+  # attacker using the token against another endpoint.
+  # =========================================================================
+
+  # D2-2: GET /mcp/admin/sessions → fake session list with admin creds
+  - regex: "^/mcp/admin/sessions$"
+    method: GET
+    sessionAction: create
+    name: "mcp/d2-2-admin-sessions"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Admin-Scope: cluster"
+    statusCode: 200
+    handler: '{"sessions":[{"session_id":"sess_a1b2c3d4e5f6","client":"langchain-agent-v0.3.2","ip":"10.0.12.88","started":"2026-05-10T08:20:00Z","tools_invoked":["cdf/iam.manage","cdf/configstore.kv"],"scope":"verified"},{"session_id":"sess_c7d8e9f0a1b2","client":"crewai-scanner-v2.1","ip":"10.0.12.91","started":"2026-05-11T14:05:00Z","tools_invoked":["cdf/logs.query"],"scope":"basic"}],"admin":{"bearer_token":"${MCP_CVE_ADMIN_TOKEN}","scope":"cluster-admin","note":"Admin token for session management. Revoke via POST /mcp/admin/sessions/revoke."},"total_active":14,"gateway_version":"3.12.1-rc1"}'
+
+  # D2-2: POST /mcp/admin/sessions → 405
+  - regex: "^/mcp/admin/sessions$"
+    method: POST
+    name: "mcp/d2-2-method-gate-admin"
+    headers:
+      - "Allow: GET"
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 405
+    handler: '{"error":"method_not_allowed","allow":["GET"]}'
+
+  # =========================================================================
+  # End Phase D Chain D2-2
+  # =========================================================================
+
 # Fallback for unmatched routes
 fallbackCommand:
   name: "default-404"

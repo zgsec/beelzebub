@@ -658,6 +658,51 @@ commands:
   # =========================================================================
 
   # =========================================================================
+  # Phase D Chain D2-3 — CVE-bait: SSRF via webhook test endpoint
+  #
+  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §2.2
+  #
+  # Real API gateways expose webhook test endpoints for debugging
+  # integrations. CVE-2025-OPENCLAW-SSRF (hypothetical SSRF via
+  # callback URL in /api/v1/webhooks/test) lets an attacker send
+  # callback_url: http://localhost:6379/... to reach internal services.
+  # Only SSRF-aware actors probe webhook test paths — never advertised.
+  #
+  # The response mimics a "webhook delivered" confirmation that leaks
+  # internal Redis connection details via "delivery diagnostics."
+  #
+  # Canary: OPENCLAW_CVE_REDIS_DNS — DNS token in Redis connection URL.
+  # Fire signal: attacker resolves the domain when probing the leaked
+  # Redis infrastructure.
+  # =========================================================================
+
+  # D2-3: POST /api/v1/webhooks/test → SSRF-bait with Redis canary
+  - regex: "^/api/v1/webhooks/test$"
+    method: POST
+    sessionAction: create
+    name: "openclaw/d2-3-webhook-test"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: openclaw-gateway"
+    statusCode: 200
+    handler: '{"status":"delivered","webhook_id":"wh-${request.uuid_short}","delivery":{"target":"callback_url from request body","status_code":200,"latency_ms":42,"retries":0},"diagnostics":{"resolver":"internal","resolved_via":"service-mesh","backend_connections":{"redis":"redis://default:${OPENCLAW_CVE_REDIS_DNS}@redis-cache.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:6379/0","postgres":"postgresql://openclaw:@pg-openclaw.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:5432/openclaw_prod","vault":"https://vault.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:8200"},"note":"Delivery diagnostics include backend connection state at time of webhook dispatch. This is a debug endpoint — disable in production via OPENCLAW_WEBHOOKS_DEBUG=false."}}'
+
+  # D2-3: GET /api/v1/webhooks/test → 405
+  - regex: "^/api/v1/webhooks/test$"
+    method: GET
+    name: "openclaw/d2-3-method-gate-webhook"
+    headers:
+      - "Allow: POST"
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: openclaw-gateway"
+    statusCode: 405
+    handler: '{"error":{"message":"Method Not Allowed","type":"method_not_allowed","allow":["POST"]}}'
+
+  # =========================================================================
+  # End Phase D Chain D2-3
+  # =========================================================================
+
+  # =========================================================================
   # Catch-all — Static 404 (MUST be last)
   # =========================================================================
   - regex: "^.*$"

@@ -658,6 +658,31 @@ commands:
   # =========================================================================
 
   # =========================================================================
+  # Phase D Chain D2-3 — CVE-bait: SSRF via webhook test endpoint
+  # Mirrors configurations/services/openclaw-18789.yaml
+  # =========================================================================
+
+  - regex: "^/api/v1/webhooks/test$"
+    method: POST
+    sessionAction: create
+    name: "openclaw/d2-3-webhook-test"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: openclaw-gateway"
+    statusCode: 200
+    handler: '{"status":"delivered","webhook_id":"wh-${request.uuid_short}","delivery":{"target":"callback_url from request body","status_code":200,"latency_ms":42,"retries":0},"diagnostics":{"resolver":"internal","resolved_via":"service-mesh","backend_connections":{"redis":"redis://default:${OPENCLAW_CVE_REDIS_DNS}@redis-cache.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:6379/0","postgres":"postgresql://openclaw:@pg-openclaw.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:5432/openclaw_prod","vault":"https://vault.{{ persona.identity.internal_domain | default("int.crestfielddata.io") }}:8200"},"note":"Delivery diagnostics include backend connection state at time of webhook dispatch. This is a debug endpoint — disable in production via OPENCLAW_WEBHOOKS_DEBUG=false."}}'
+
+  - regex: "^/api/v1/webhooks/test$"
+    method: GET
+    name: "openclaw/d2-3-method-gate-webhook"
+    headers:
+      - "Allow: POST"
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: openclaw-gateway"
+    statusCode: 405
+    handler: '{"error":{"message":"Method Not Allowed","type":"method_not_allowed","allow":["POST"]}}'
+
+  # =========================================================================
   # Catch-all — Static 404 (MUST be last)
   # =========================================================================
   - regex: "^.*$"
