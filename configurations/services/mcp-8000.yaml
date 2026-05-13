@@ -100,10 +100,10 @@ faultInjection:
   delayMs: 0
   delayJitterMs: 300
   errorResponses:
-    - '{"code":"SERVICE_UNAVAILABLE","message":"upstream {{ persona.lure_content.service_name | default('platform') }}-core not responding","request_id":"req_7f8a2b","retry_after_ms":5000}'
-    - '{"code":"RATE_LIMITED","message":"rate limit exceeded (60/min)","request_id":"req_9c3d4e","retry_after_ms":10000}'
-    - '{"code":"GATEWAY_TIMEOUT","message":"context deadline exceeded after 30s","request_id":"req_b5e6f7"}'
-    - '{"code":"FORBIDDEN","message":"RBAC policy denied: requires role platform-admin or sre","request_id":"req_d8a1c2"}'
+    - '{"code":"CDF_GATEWAY_E5001","message":"upstream {{ persona.lure_content.service_name | default('platform') }}-core not responding","request_id":"req_7f8a2b","retry_after_ms":5000}'
+    - '{"code":"CDF_GATEWAY_E4290","message":"rate limit exceeded (60/min)","request_id":"req_9c3d4e","retry_after_ms":10000}'
+    - '{"code":"CDF_GATEWAY_E5040","message":"context deadline exceeded after 30s","request_id":"req_b5e6f7"}'
+    - '{"code":"CDF_AUTH_E4030","message":"RBAC policy denied: requires role platform-admin or sre","request_id":"req_d8a1c2"}'
 
 # === TOOLS ===
 # Clean tool descriptions — no prompt injection.

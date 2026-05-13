@@ -95,3 +95,7 @@ personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:312
 personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:555
 personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:567
 personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:623
+
+# Fake MCP session token in openclaw remediation handler — honeypot deception value
+configurations/services/openclaw-18789.yaml:generic-api-key:567
+personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:567
