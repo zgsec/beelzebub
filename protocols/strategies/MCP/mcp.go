@@ -1121,6 +1121,35 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// command pointer is shared across requests.
 	respBody, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil)
 
+	// MCP HTTP-fallback always records status code (mirrors HTTP/OLLAMA
+	// strategies). When matchedCommand.StatusCode is 0 the wire response
+	// defaults to Go's http.ResponseWriter default of 200 — record that
+	// explicitly so events carry the same field shape across strategies.
+	if matchedCommand.StatusCode > 0 {
+		event.ResponseStatusCode = matchedCommand.StatusCode
+	} else {
+		event.ResponseStatusCode = http.StatusOK
+	}
+
+	// Opt-in dedicated ResponseBody capture (mirrors HTTP/OLLAMA strategies
+	// + the CaptureRequestBody block above). Closes the visibility gap where
+	// MCP HTTP-fallback routes (L0–L7 commands:) computed respBody for the
+	// wire but never persisted it to the tracer event, leaving
+	// sessions.response_summary null in PG even when captureResponseBody:true
+	// was set in the service config.
+	// See: vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §0.
+	if servConf.CaptureResponseBody {
+		maxBytes := servConf.ResponseBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultMCPResponseBodyMaxBytes
+		}
+		if len(respBody) > maxBytes {
+			event.ResponseBody = respBody[:maxBytes]
+		} else {
+			event.ResponseBody = respBody
+		}
+	}
+
 	// WS-4 Slice B: hash both directions from raw wire bytes (pre-truncation).
 	// Runs unconditionally (Q5). No multipart parsing — MCP carries
 	// JSON-RPC only (Q2).
@@ -1144,6 +1173,13 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 // defaultMCPRequestBodyMaxBytes is applied when CaptureRequestBody=true but
 // RequestBodyMaxBytes left at zero on an MCP service config. Matches HTTP/OLLAMA.
 const defaultMCPRequestBodyMaxBytes = 64 * 1024
+
+// defaultMCPResponseBodyMaxBytes is applied when CaptureResponseBody=true but
+// ResponseBodyMaxBytes left at zero on an MCP service config. Matches the
+// HTTP strategy's defaultResponseBodyMaxBytes; bounds storage cost so a
+// single misconfigured handler with a large handler body cannot fill the
+// tracer pipeline.
+const defaultMCPResponseBodyMaxBytes = 64 * 1024
 
 func fmtCookies(cookies []*http.Cookie) string {
 	var b strings.Builder
