@@ -22,13 +22,12 @@
 #   endpoint only reports import + AST shape, not evaluation status,
 #   even though the dangerous code path already ran.
 #
-# CANARY DISCIPLINE:
-#   Only canarytokens.org-minted FREE tokens are referenced. New env vars
-#   required for Phase 7 — operator mints these before deploy:
-#     LANGFLOW_CANARY_AWS_KEY     (canarytokens.org AWS API key, ${...})
-#     LANGFLOW_CANARY_AWS_SECRET  (paired secret from same mint)
-#     LANGFLOW_CANARY_DNS         (canarytokens.org DNS token)
-#     LANGFLOW_CANARY_WEB_BUG     (canarytokens.org web-bug URL)
+# CANARY MINTS DEFERRED (Path A, 2026-05-18):
+#   canarytokens.org webhook validation broken; mints postponed until
+#   self-hosted Canarytokens stack stands up. The /api/v1/api_key route
+#   gates to 401 (matches patched-product shape). Web-bug img dropped
+#   from SPA shell. Watermark password leak in /api/v1/store/components/
+#   remains intact (no canary dependency).
 #
 # WATERMARK:
 #   `cdf_prod_2026Q2-5e8d3f1b` appears in one config-leak surface
@@ -87,7 +86,6 @@ commands:
           "health_check_url": "/health_check"
         };
       </script>
-      <img src="${LANGFLOW_CANARY_WEB_BUG}" style="display:none" width="1" height="1" alt="">
       </body></html>
 
   # ───────────────────────────────────────────────────────────────────────
@@ -127,7 +125,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"feature_flags":{"mvp_components":false,"async_components":true},"frontend_timeout":30,"auto_saving":true,"auto_saving_interval":1000,"health_check_max_retries":5,"max_file_size_upload":100,"public_flow_cleanup_interval":3600,"webhook_polling_interval":5000,"telemetry":{"enabled":true,"endpoint":"https://${LANGFLOW_CANARY_DNS}/api/v1/events","sample_rate":1.0}}'
+    handler: '{"feature_flags":{"mvp_components":false,"async_components":true},"frontend_timeout":30,"auto_saving":true,"auto_saving_interval":1000,"health_check_max_retries":5,"max_file_size_upload":100,"public_flow_cleanup_interval":3600,"webhook_polling_interval":5000}'
 
   # ───────────────────────────────────────────────────────────────────────
   # 5. POST /api/v1/validate/code — CVE-2025-3248 (CISA KEV, Flodrix)
@@ -256,24 +254,12 @@ commands:
     handler: '{"detail":"Not authenticated"}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 9. GET /api/v1/api_key — CANARY LEAK
-  # Real LangFlow returns auth-only here. We serve an "accidentally-public"
-  # API-key list containing the minted canary AWS credentials. Any use of
-  # the AKIA fires canarytokens.org → our /webhook/canary/v1/ receiver.
+  # 9. /api/v1/api_key — Auth-gated (no canary mints provisioned yet)
+  # Was a canary-leak surface in the Phase 7 design but mints are deferred
+  # (Path A 2026-05-18). Real LangFlow returns 401 here without a token —
+  # this matches the patched-product shape.
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/api_key$"
-    method: GET
-    name: "langflow-api-key-canary-leak"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 200
-    handler: |
-      {"total_count":2,"api_keys":[{"id":"ak_8c2f1a9d","name":"prod-ingest","last_used_at":"2026-05-18T07:21:00Z","total_uses":4128,"is_active":true,"api_key":"sk-${LANGFLOW_CANARY_AWS_KEY}","user_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d","created_at":"2026-04-08T14:32:00Z"},{"id":"ak_5d4e3c2b","name":"airflow-orchestrator","last_used_at":"2026-05-18T09:11:00Z","total_uses":2147,"is_active":true,"api_key":"AWS_SECRET=${LANGFLOW_CANARY_AWS_SECRET}","user_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d","created_at":"2026-03-22T11:05:00Z"}]}
-
-  # POST /api/v1/api_key — auth-gated (creation)
-  - regex: "^/api/v1/api_key$"
-    method: POST
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"

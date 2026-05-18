@@ -14,8 +14,10 @@
 # INTENTIONAL BAIT (preserve):
 #   - "{{ persona.coherence.world.product.service_name }}-prod" in INFO replication
 #     role/repl_id, CLIENT LIST, GET keys
-#   - ${REDIS_CANARY_AWS_KEY} in CONFIG GET masterauth + GET api_key:* values
-#     (substituted at sensor render time by render-canaries.sh from .env)
+#   - CANARY MINTS DEFERRED (Path A, 2026-05-18): masterauth + api_key:*
+#     surfaces previously held canarytokens.org AWS-key placeholders;
+#     now return empty / nil-bulk. Self-hosted Canarytokens stack
+#     standup will restore these.
 #   - WATERMARK `{{ persona.coherence.world.watermark_passwords.redis }}` in
 #     CONFIG GET requirepass. Real-world ops mistake: setting a requirepass
 #     and leaking it via an open CONFIG endpoint. Cross-pollination POC:
@@ -412,7 +414,7 @@ commands:
     replyFormat: "redis-array"
     replyBulks:
       - "masterauth"
-      - "${REDIS_CANARY_AWS_KEY}"
+      - ""
 
   # WATERMARK: requirepass returns the per-lure watermark password.
   # Real-world ops mistake — leaked via open CONFIG endpoint.
@@ -461,7 +463,7 @@ commands:
       - "save"
       - "3600 1 300 100 60 10000"
       - "masterauth"
-      - "${REDIS_CANARY_AWS_KEY}"
+      - ""
       - "requirepass"
       - "{{ persona.coherence.world.watermark_passwords.redis }}"
       - "bind"
@@ -629,9 +631,11 @@ commands:
   # ---------------------------------------------------------------------------
   # GET — bait values for the specific keys we advertise.
   # ---------------------------------------------------------------------------
+  # api_key:{{ persona.coherence.world.product.service_name }}-prod — was a
+  # canary surface; mints deferred, return nil-bulk (key doesn't exist).
   - regex: "^(?i)GET\\s+api_key:{{ persona.coherence.world.product.service_name }}-prod$"
-    replyFormat: "redis-bulk"
-    handler: "${REDIS_CANARY_AWS_KEY}"
+    replyFormat: "redis-nil-bulk"
+    handler: ""
 
   - regex: "^(?i)GET\\s+api_key:litellm-proxy$"
     replyFormat: "redis-bulk"

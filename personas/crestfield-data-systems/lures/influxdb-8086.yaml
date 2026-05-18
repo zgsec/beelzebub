@@ -20,10 +20,10 @@
 #   - User enumeration via SHOW USERS for credential reuse.
 #   - DNS canary fire when SHOW DIAGNOSTICS' network.hostname resolves.
 #
-# CANARY DISCIPLINE (Phase 8):
-#   ${INFLUXDB_CANARY_DNS}      — canarytokens.org DNS token (fires on resolution
-#                                  via SHOW DIAGNOSTICS network.hostname)
-#   ${INFLUXDB_CANARY_AWS_KEY}  — canarytokens.org AWS key (in /debug/vars cmdline)
+# CANARY MINTS DEFERRED (Path A, 2026-05-18):
+#   canarytokens.org webhook validation broken; mints postponed until
+#   self-hosted Canarytokens stack stands up. Placeholders for DNS+AWS-key
+#   were removed from this lure. Watermark password remains (see below).
 #
 # WATERMARK: `{{ persona.coherence.world.watermark_passwords.influxdb }}`
 #   embedded in /debug/vars cmdline as the InfluxDB admin password (a
@@ -79,7 +79,7 @@ commands:
   # SHOW DIAGNOSTICS — canary-bearing response (network.hostname embeds
   # the canarytokens.org DNS canary that fires on resolution)
   - regex: "^/query\\?.*q=SHOW\\+DIAGNOSTICS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.${INFLUXDB_CANARY_DNS}"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-05-18T06:01:12.483Z","2026-04-03T03:22:41.109Z","45d2h38m31s"]]}]}]}'
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.{{ persona.coherence.world.company.internal_domain }}"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-05-18T06:01:12.483Z","2026-04-03T03:22:41.109Z","45d2h38m31s"]]}]}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
@@ -195,7 +195,7 @@ commands:
   # WATERMARK + CANARY: cmdline embeds the InfluxDB watermark password
   # (real ops mistake — credentials in os.Args[]) AND the canary AWS key.
   - regex: "^/debug/vars$"
-    handler: '{"cmdline":["/usr/bin/influxd","-config","/etc/influxdb/influxdb.conf","-set-password={{ persona.coherence.world.watermark_passwords.influxdb }}","-aws-access-key=${INFLUXDB_CANARY_AWS_KEY}"],"memstats":{"Alloc":48721920,"TotalAlloc":412847291520,"Sys":256197640,"Lookups":0,"Mallocs":893999444,"Frees":892714528,"HeapAlloc":48721920,"HeapSys":172982272,"HeapIdle":115310592,"HeapInuse":57671680,"HeapReleased":79429632,"HeapObjects":284916,"NumGC":14827,"NumGoroutine":42,"PauseTotalNs":3847291000},"database":{"numMeasurements":847,"numSeries":12483},"queryExecutor":{"queriesActive":0,"queriesExecuted":284716,"queriesFinished":284716,"queryDurationNs":892471000000},"runtime":{"GOARCH":"amd64","GOMAXPROCS":4,"GOOS":"linux","version":"go1.21.12"},"subscriber":{"pointsWritten":0},"write":{"pointsWritten":48293716,"pointsWrittenFail":0,"writeReq":284912,"writeReqErr":0}}'
+    handler: '{"cmdline":["/usr/bin/influxd","-config","/etc/influxdb/influxdb.conf","-set-password={{ persona.coherence.world.watermark_passwords.influxdb }}"],"memstats":{"Alloc":48721920,"TotalAlloc":412847291520,"Sys":256197640,"Lookups":0,"Mallocs":893999444,"Frees":892714528,"HeapAlloc":48721920,"HeapSys":172982272,"HeapIdle":115310592,"HeapInuse":57671680,"HeapReleased":79429632,"HeapObjects":284916,"NumGC":14827,"NumGoroutine":42,"PauseTotalNs":3847291000},"database":{"numMeasurements":847,"numSeries":12483},"queryExecutor":{"queriesActive":0,"queriesExecuted":284716,"queriesFinished":284716,"queryDurationNs":892471000000},"runtime":{"GOARCH":"amd64","GOMAXPROCS":4,"GOOS":"linux","version":"go1.21.12"},"subscriber":{"pointsWritten":0},"write":{"pointsWritten":48293716,"pointsWrittenFail":0,"writeReq":284912,"writeReqErr":0}}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
