@@ -99,3 +99,17 @@ personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:623
 # Fake MCP session token in openclaw remediation handler — honeypot deception value
 configurations/services/openclaw-18789.yaml:generic-api-key:567
 personas/crestfield-data-systems/lures/openclaw-18789.yaml:generic-api-key:567
+
+# Disney rebuild 2026-05-18 — Crestfield persona watermark passwords.
+# Format: cdf_prod_2026Q[1-4]-<8 hex>. Intentional fake credentials embedded
+# in lures for the cross-pollination POC. NOT real secrets.
+personas/crestfield-data-systems/persona.yaml:generic-api-key:267
+personas/crestfield-data-systems/persona.yaml:generic-api-key:268
+personas/crestfield-data-systems/persona.yaml:generic-api-key:269
+personas/crestfield-data-systems/persona.yaml:generic-api-key:270
+personas/crestfield-data-systems/persona.yaml:generic-api-key:271
+personas/crestfield-data-systems/persona.yaml:generic-api-key:272
+personas/crestfield-data-systems/persona.yaml:generic-api-key:273
+personas/crestfield-data-systems/persona.yaml:generic-api-key:274
+personas/crestfield-data-systems/persona.yaml:generic-api-key:275
+personas/crestfield-data-systems/persona.yaml:generic-api-key:307

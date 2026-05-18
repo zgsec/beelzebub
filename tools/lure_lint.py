@@ -18,6 +18,14 @@ Rules:
       emits the *same* secret value — that uniformity is itself the tell.
       Use distinct canary placeholders per leak path, or 404 the redundant
       ones. Threshold: 5+ uses across distinct `handler:` / response bodies.
+  R10 Other template-fingerprint leaks in rendered output:
+        - `{% ... %}` Jinja statement blocks (R6 only catches expressions)
+        - `<% ... %>` ERB-style templating
+        - `{name.attr}` Python str.format style (e.g., `{canaryTokens.aws_key}`)
+      These read as half-rendered templates to attentive observers / AI agents.
+      Source configs are exempt; rendered output (`configurations-rendered/`,
+      `out/<slug>/<node>/persona/lures/`) must be clean. Caught the 2026-05-18
+      operator-flagged `{canaryTokens.X}` leak in SSH-2222 LLM prompt.
 
 Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule
 (works for R1..R10+).
@@ -293,14 +301,49 @@ def rule_r5_catchall_404(lines: list[str], path: Path, realism: dict) -> Iterato
         )
 
 
-def rule_r6_jinja_in_rendered(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
-    """Files under `configurations-rendered/` are mounted directly into the
-    container — they must NOT contain unsubstituted `{{ ... }}` templates.
+def _is_rendered_output(path: Path) -> bool:
+    """A path is 'rendered output' if it lives under any post-render dir.
 
-    Source configs (configurations/services/, personas/.../lures/) are
-    expected to contain Jinja2 — they go through bzb persona render.
+    Two known render targets:
+      - `configurations-rendered/...`  — final, on-sensor (post envsubst)
+      - `out/<slug>/<node>/persona/lures/...` — bzb persona render output
+                                                (post Jinja, pre envsubst)
+
+    Source-of-truth dirs (`personas/<slug>/lures/`, `configurations/services/`)
+    are NOT rendered output — they're EXPECTED to contain Jinja + ${VAR}.
+    The fingerprint rules (R6, R10) only fire on rendered output.
+
+    The 2026-05-18 operator catch found that R6 was only checking
+    configurations-rendered/, so {{ }} leaks in bzb-render output skipped
+    the gate. Path check now covers both layers.
     """
-    if "configurations-rendered" not in str(path):
+    p = str(path)
+    if "configurations-rendered" in p:
+        return True
+    # bzb persona render: `out/<slug>/<node>/persona/lures/<lure>.yaml`
+    parts = path.parts
+    try:
+        out_idx = parts.index("out")
+    except ValueError:
+        return False
+    # Expect: out / <slug> / <node> / persona / lures / <file>
+    return len(parts) > out_idx + 4 and parts[out_idx + 3] == "persona" \
+        and parts[out_idx + 4] == "lures"
+
+
+def rule_r6_jinja_in_rendered(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
+    """Rendered output must NOT contain unsubstituted `{{ ... }}` Jinja
+    expressions. Source configs (personas/.../lures/, configurations/services/)
+    are expected to contain Jinja — they go through `bzb persona render`.
+
+    Covers both layers:
+      - configurations-rendered/ (post envsubst, final on-sensor)
+      - out/<slug>/<node>/persona/lures/ (post bzb Jinja render, pre envsubst)
+
+    A `{{ }}` leak at either layer means the render step skipped or broke
+    on this template — half-rendered output to the wire is a Disney tell.
+    """
+    if not _is_rendered_output(path):
         return
     for i, line in enumerate(lines, 1):
         if "{{" not in line or "}}" not in line:
@@ -432,6 +475,67 @@ def rule_r9_placeholder_reuse(lines: list[str], path: Path, realism: dict) -> It
             )
 
 
+# R10: additional template-fingerprint leaks in rendered output.
+# R6 catches the `{{ expression }}` Jinja shape. R10 catches the OTHER
+# half-rendered template fingerprints that show up when a templating
+# layer fails or wasn't wired:
+#
+#   {% statement %}     — Jinja control-flow leftover (block/raw/etc.)
+#   <% erb %>           — ERB-style templating (Ruby / EJS / etc.)
+#   {name.attribute}    — Python str.format / Mustache field access. The
+#                         2026-05-18 catch found `{canaryTokens.aws_key}`
+#                         in SSH-2222's LLM prompt — `substituteTokens()`
+#                         only handles {{UPPER}} on Lures/EnvVars maps,
+#                         NOT on plugin.prompt, so these leaked literally.
+#
+# All three are "doesn't look like real production output" signals.
+
+R10_PATTERNS = [
+    # Jinja control-flow (R6's sibling — expression vs statement)
+    (re.compile(r"\{%[^%]*%\}"), "Jinja statement"),
+    # ERB-style
+    (re.compile(r"<%[^%]*%>"), "ERB-style"),
+    # Python str.format-style field access:  `{ident.attr}`  (1+ digits OK).
+    # Must avoid matching:
+    #   - JSON `{"key":"value"}` shapes — those don't have `ident.ident`
+    #   - Legitimate Beelzebub runtime tokens `${request.X}` / `${session.X}` /
+    #     `${captured.X}` — exclude via negative lookbehind on `$`
+    # Restrict to lowercase-letter-starts, no nested braces, no whitespace,
+    # no quotes — covers the 2026-05-18 `{canaryTokens.aws_key}` leak shape.
+    (
+        re.compile(r"(?<!\$)\{[a-z][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\}"),
+        "Python format field access",
+    ),
+]
+
+
+def rule_r10_template_fingerprints(
+    lines: list[str], path: Path, realism: dict
+) -> Iterator[Violation]:
+    """Additional template-fingerprint leaks beyond R6's `{{ }}` shape.
+
+    Only fires in rendered output (post Jinja, post envsubst). Source
+    configs may legitimately contain `{% raw %}` blocks or other Jinja
+    statements; rendered output should not.
+    """
+    if not _is_rendered_output(path):
+        return
+    for i, line in enumerate(lines, 1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        for pat, kind in R10_PATTERNS:
+            m = pat.search(line)
+            if not m:
+                continue
+            yield Violation(
+                path, i, "R10",
+                f"{kind} template fingerprint `{m.group(0)}` in rendered output "
+                f"— reads as half-rendered template; the renderer's substitution "
+                f"step skipped this or the wrong placeholder syntax was used",
+            )
+
+
 RULES = [
     rule_r1_server,
     rule_r2_banned_headers,
@@ -442,6 +546,7 @@ RULES = [
     rule_r7_runtime_token_misplaced,
     rule_r8_banned_literals,
     rule_r9_placeholder_reuse,
+    rule_r10_template_fingerprints,
 ]
 
 # Per-rule severity. CRITICAL fires on every check; WARN can be downgraded
@@ -457,6 +562,7 @@ SEVERITY = {
     "R7": "CRITICAL",
     "R8": "CRITICAL",
     "R9": "WARN",
+    "R10": "CRITICAL",
 }
 
 

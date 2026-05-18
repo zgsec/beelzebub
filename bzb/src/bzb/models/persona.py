@@ -28,7 +28,18 @@ class NodeRef(_Strict):
     peers: list[str] = Field(default_factory=list)
 
 
-class Coherence(_Strict):
+class Coherence(BaseModel):
+    # NOTE: this model uses extra="allow" rather than the strict default
+    # so the `world` sub-block introduced 2026-05-18 (Disney rebuild) can
+    # carry the full canonical persona-identity tree without each new
+    # sub-key requiring a Pydantic class. Once the world schema settles
+    # (post Phase 4 of the rebuild — when every lure references it via
+    # Jinja and the field set stops churning), replace `extra="allow"`
+    # with a typed `World` BaseModel.
+    #
+    # See: vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §1
+    model_config = ConfigDict(extra="allow", frozen=False)
+
     hosts_file_template: str
     ssh_history_seeds: dict[str, list[str]] = Field(default_factory=dict)
     vault_addr: str | None = None
