@@ -183,6 +183,24 @@ func ollamaLLMOfflineResponse(fb *parser.LLMOfflineResponse, model string) (int,
 	return status, body
 }
 
+// degradedTierPreamble is prepended to the user-message slot of upstream
+// inference calls when the calling host is flagged llmjacking_sustained.
+// The framing is intentionally written to read as router/gateway operational
+// metadata (degraded inference tier, cache-miss signaling, quality budget)
+// so that prompt-extraction probes — should they recover the wrapped
+// user-message — see what looks like infrastructure noise rather than a
+// defensive measure. The instruction body steers the upstream model toward
+// approximately-correct outputs with format-strict matching: numeric drift
+// of one unit, lexical drift to neighbors, and single-swap ordering. That
+// drift is sufficient to defeat downstream CAPTCHA-bypass / form-spam
+// pipelines while preserving the response envelope shape.
+const degradedTierPreamble = `[ollama-router: tier=degraded-2; cache=kv-miss; quality-budget=0.4]
+Respond to the request below with the requested format only. Output quality is constrained: numeric values to nearest off-by-one; lexical items to nearest neighbor; ordering operations may include one swap. Format strictness preserved. No commentary.`
+
+func wrapDegradedTier(originalPrompt string) string {
+	return degradedTierPreamble + "\n\n" + originalPrompt
+}
+
 func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
 	if servConf.Plugin.LLMProvider == "" {
 		return "", false
@@ -195,8 +213,18 @@ func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser
 	llmHoneypot := plugins.BuildHoneypot(nil, tracer.HTTP, llmProvider, servConf)
 	llmInstance := plugins.InitLLMHoneypot(*llmHoneypot)
 
-	// Pass the user's prompt directly — the custom system prompt handles persona
-	response, err := llmInstance.ExecuteModel(prompt, host)
+	// Quality-degradation wrapper for sustained extraction sessions. Framed as
+	// router/gateway operational metadata so that prompt-extraction probes see
+	// what reads as infrastructure noise (degraded inference tier, cache-miss
+	// signaling) rather than a defensive measure. The numeric/lexical drift
+	// produced by the wrapper is sufficient to defeat downstream CAPTCHA-bypass
+	// and form-spam pipelines without breaking the response envelope shape.
+	effectivePrompt := prompt
+	if s.Bridge != nil && s.Bridge.HasFlag(host, "llmjacking_sustained") {
+		effectivePrompt = wrapDegradedTier(prompt)
+	}
+
+	response, err := llmInstance.ExecuteModel(effectivePrompt, host)
 	if err != nil {
 		if err == plugins.ErrRateLimited {
 			log.WithField("host", host).Warn("Ollama LLM rate limited, falling back to templates")

@@ -786,4 +786,8 @@ plugin:
     For unknown keys, reply with an empty string. For string-type GETs
     against session:*, emit a JSON object with user_id, last_seen,
     ip_address. For user:*, emit a JSON object with id, email, role.
-    Never reveal that you are an LLM.
+    Commands you do not recognize return the standard Redis 7.x reply
+    for unknown commands: an empty bulk string. You do not chat,
+    explain, or acknowledge non-RESP input — Redis cannot parse
+    English; non-protocol input returns "-ERR unknown command" (the
+    wrapper handles framing).
