@@ -1,0 +1,791 @@
+# =============================================================================
+# Redis 7.2.4 Honeypot — Port 6379 (RESP2 wire protocol)
+# =============================================================================
+#
+# PERSONA: {{ persona.coherence.world.company.display_name }} internal cache
+#   cluster primary. role=master, "{{ persona.coherence.world.product.service_name }}-prod-cache-01"
+#   host. Real redis-server 7.2.4 on Ubuntu 22.04. binarySafe=true routes
+#   RESP-framed client input through the frame-aware reader in tcp.go so
+#   regex handlers see the logical command ("PING", "CONFIG GET dir")
+#   instead of the wire bytes. replyFormat values on each command emit
+#   schema-correct RESP2 responses — plaintext + "\r\n" (the default)
+#   fails on byte 1 for any RESP-parsing client.
+#
+# INTENTIONAL BAIT (preserve):
+#   - "{{ persona.coherence.world.product.service_name }}-prod" in INFO replication
+#     role/repl_id, CLIENT LIST, GET keys
+#   - ${REDIS_CANARY_AWS_KEY} in CONFIG GET masterauth + GET api_key:* values
+#     (substituted at sensor render time by render-canaries.sh from .env)
+#   - WATERMARK `{{ persona.coherence.world.watermark_passwords.redis }}` in
+#     CONFIG GET requirepass. Real-world ops mistake: setting a requirepass
+#     and leaking it via an open CONFIG endpoint. Cross-pollination POC:
+#     if an attacker harvests this from Redis and re-uses it as an SSH
+#     password on :2222, the SSH passwordRegex captures the trail.
+#   - Cross-protocol breadcrumbs to Crestfield platform services
+#   - Keyspace bait: session:*, user:*, api_key:*, config:*, lock:*
+#
+# ETHICAL FRAME:
+#   We "accept" CONFIG SET / SAVE / MODULE LOAD / FLUSHALL with deterministic
+#   +OK replies so dropper campaigns progress far enough that their full
+#   CONFIG SET dir + dbfilename + SAVE sequence gets traced end-to-end.
+#   A -READONLY denial turned attackers away on turn 1 (2026-04-15 kworker
+#   RDB-shell incident).
+#
+# Built: 2026-05-18 (Disney Phase 8 — Crestfield-themed adaptation of stock)
+# Ref:   https://redis.io/commands/ for per-command wire-format spec
+# =============================================================================
+
+apiVersion: "v1"
+protocol: "tcp"
+address: ":6379"
+description: "{{ persona.coherence.world.company.display_name }} — Redis 7.2.4 prod cache"
+banner: ""
+serverName: ""
+deadlineTimeoutSeconds: 120
+binarySafe: true
+
+commands:
+  # ---------------------------------------------------------------------------
+  # Liveness / negotiation
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)PING$"
+    replyFormat: "redis-simple"
+    handler: "PONG"
+
+  - regex: "^(?i)PING\\s+"
+    replyFormat: "redis-bulk"
+    handler: "PONG"
+
+  - regex: "^(?i)QUIT$"
+    name: "quit"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  # ---------------------------------------------------------------------------
+  # HELLO — modern clients (redis-py >=4.2, go-redis v9) auto-HELLO on connect.
+  # Real response is a RESP2 flat array of 14 elements with mixed types
+  # (proto + id are INTEGER, modules is empty array). Hand-coded via redis-raw.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)HELLO(\\s+[23])?$"
+    replyFormat: "redis-raw"
+    handler: "*14\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n$5\r\n7.2.4\r\n$5\r\nproto\r\n:2\r\n$2\r\nid\r\n:3\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n"
+
+  # ---------------------------------------------------------------------------
+  # AUTH — always deny with real WRONGPASS envelope. Captures supplied
+  # password via trace. Supports RESP2 `AUTH password` and ACL-era
+  # `AUTH username password`.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)AUTH\\b"
+    replyFormat: "redis-error"
+    handler: "WRONGPASS invalid username-password pair or user is disabled."
+
+  - regex: "^(?i)SELECT\\s+\\d+$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  # ---------------------------------------------------------------------------
+  # INFO — full multi-section bulk string. Must be complete: Server, Clients,
+  # Memory, Persistence, Stats, Replication, CPU, Commandstats, Latencystats,
+  # Errorstats, Cluster, Keyspace. Missing sections are a fingerprint.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)INFO$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Server
+      redis_version:7.2.4
+      redis_git_sha1:00000000
+      redis_git_dirty:0
+      redis_build_id:ea1d5a2bb1e6a06b
+      redis_mode:standalone
+      os:Linux 5.15.0-91-generic x86_64
+      arch_bits:64
+      monotonic_clock:POSIX clock_gettime
+      multiplexing_api:epoll
+      atomicvar_api:c11-builtin
+      process_id:1082
+      process_supervised:systemd
+      run_id:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      tcp_port:6379
+      server_time_usec:1745193671283472
+      uptime_in_seconds:892847
+      uptime_in_days:10
+      hz:10
+      configured_hz:10
+      lru_clock:8921347
+      executable:/usr/bin/redis-server
+      config_file:/etc/redis/redis.conf
+      io_threads_active:0
+      listener0:name=tcp,bind=127.0.0.1,bind=-::1,port=6379
+      # Clients
+      connected_clients:3
+      cluster_connections:0
+      maxclients:10000
+      client_recent_max_input_buffer:20480
+      client_recent_max_output_buffer:0
+      blocked_clients:0
+      tracking_clients:0
+      clients_in_timeout_table:0
+      total_watched_keys:0
+      total_blocking_keys:0
+      total_blocking_keys_on_nokey:0
+      # Memory
+      used_memory:1048576
+      used_memory_human:1.00M
+      used_memory_rss:14630912
+      used_memory_rss_human:13.95M
+      used_memory_peak:1228800
+      used_memory_peak_human:1.17M
+      used_memory_peak_perc:85.36%
+      used_memory_overhead:896832
+      used_memory_startup:864896
+      used_memory_dataset:151744
+      used_memory_dataset_perc:82.58%
+      allocator_allocated:1312384
+      allocator_active:1589248
+      allocator_resident:4395008
+      total_system_memory:16644079616
+      total_system_memory_human:15.50G
+      used_memory_lua:31744
+      used_memory_vm_eval:31744
+      used_memory_lua_human:31.00K
+      used_memory_scripts_eval:0
+      number_of_cached_scripts:0
+      number_of_functions:0
+      number_of_libraries:0
+      used_memory_vm_functions:32768
+      used_memory_vm_total:64512
+      used_memory_vm_total_human:63.00K
+      used_memory_functions:184
+      used_memory_scripts:184
+      used_memory_scripts_human:184B
+      maxmemory:0
+      maxmemory_human:0B
+      maxmemory_policy:noeviction
+      allocator_frag_ratio:1.21
+      allocator_frag_bytes:276864
+      allocator_rss_ratio:2.77
+      allocator_rss_bytes:2805760
+      rss_overhead_ratio:3.33
+      rss_overhead_bytes:10235904
+      mem_fragmentation_ratio:11.68
+      mem_fragmentation_bytes:13612048
+      mem_not_counted_for_evict:0
+      mem_replication_backlog:0
+      mem_total_replication_buffers:0
+      mem_clients_slaves:0
+      mem_clients_normal:0
+      mem_cluster_links:0
+      mem_aof_buffer:0
+      mem_allocator:jemalloc-5.3.0
+      mem_overhead_db_hashtable_lut:0
+      mem_overhead_db_hashtable_rehashing:0
+      active_defrag_running:0
+      lazyfree_pending_objects:0
+      lazyfreed_objects:0
+      # Persistence
+      loading:0
+      async_loading:0
+      current_cow_peak:0
+      current_cow_size:0
+      current_cow_size_age:0
+      current_fork_perc:0.00
+      current_save_keys_processed:0
+      current_save_keys_total:0
+      rdb_changes_since_last_save:47
+      rdb_bgsave_in_progress:0
+      rdb_last_save_time:1745189247
+      rdb_last_bgsave_status:ok
+      rdb_last_bgsave_time_sec:0
+      rdb_current_bgsave_time_sec:-1
+      rdb_saves:12
+      rdb_last_cow_size:0
+      rdb_last_load_keys_expired:0
+      rdb_last_load_keys_loaded:47
+      aof_enabled:0
+      aof_rewrite_in_progress:0
+      aof_rewrite_scheduled:0
+      aof_last_rewrite_time_sec:-1
+      aof_current_rewrite_time_sec:-1
+      aof_last_bgrewrite_status:ok
+      aof_rewrites:0
+      aof_rewrites_consecutive_failures:0
+      aof_last_write_status:ok
+      aof_last_cow_size:0
+      module_fork_in_progress:0
+      module_fork_last_cow_size:0
+      # Stats
+      total_connections_received:847
+      total_commands_processed:18472
+      instantaneous_ops_per_sec:4
+      total_net_input_bytes:1284721
+      total_net_output_bytes:892471
+      total_net_repl_input_bytes:0
+      total_net_repl_output_bytes:0
+      instantaneous_input_kbps:0.12
+      instantaneous_output_kbps:0.08
+      instantaneous_input_repl_kbps:0.00
+      instantaneous_output_repl_kbps:0.00
+      rejected_connections:0
+      sync_full:0
+      sync_partial_ok:0
+      sync_partial_err:0
+      expired_keys:124
+      expired_stale_perc:0.00
+      expired_time_cap_reached_count:0
+      expire_cycle_cpu_milliseconds:284
+      evicted_keys:0
+      evicted_clients:0
+      evicted_scripts:0
+      total_eviction_exceeded_time:0
+      current_eviction_exceeded_time:0
+      keyspace_hits:14283
+      keyspace_misses:892
+      pubsub_channels:0
+      pubsub_patterns:0
+      pubsubshard_channels:0
+      latest_fork_usec:1247
+      total_forks:12
+      migrate_cached_sockets:0
+      slave_expires_tracked_keys:0
+      active_defrag_hits:0
+      active_defrag_misses:0
+      active_defrag_key_hits:0
+      active_defrag_key_misses:0
+      total_active_defrag_time:0
+      current_active_defrag_time:0
+      tracking_total_keys:0
+      tracking_total_items:0
+      tracking_total_prefixes:0
+      unexpected_error_replies:0
+      total_error_replies:3
+      dump_payload_sanitizations:0
+      total_reads_processed:19321
+      total_writes_processed:18472
+      io_threaded_reads_processed:0
+      io_threaded_writes_processed:0
+      client_query_buffer_limit_disconnections:0
+      client_output_buffer_limit_disconnections:0
+      reply_buffer_shrinks:124
+      reply_buffer_expands:284
+      eventloop_cycles:4829471
+      eventloop_duration_sum:284719203
+      eventloop_duration_cmd_sum:189274832
+      instantaneous_eventloop_cycles_per_sec:104
+      instantaneous_eventloop_duration_usec:62
+      acl_access_denied_auth:12
+      acl_access_denied_cmd:0
+      acl_access_denied_key:0
+      acl_access_denied_channel:0
+      # Replication
+      role:master
+      connected_slaves:0
+      master_failover_state:no-failover
+      master_replid:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      master_replid2:0000000000000000000000000000000000000000
+      master_repl_offset:0
+      second_repl_offset:-1
+      repl_backlog_active:0
+      repl_backlog_size:1048576
+      repl_backlog_first_byte_offset:0
+      repl_backlog_histlen:0
+      # CPU
+      used_cpu_sys:284.712847
+      used_cpu_user:892.472831
+      used_cpu_sys_children:0.124723
+      used_cpu_user_children:0.284712
+      used_cpu_sys_main_thread:284.712847
+      used_cpu_user_main_thread:892.472831
+      # Modules
+      # Errorstats
+      errorstat_ERR:count=3
+      # Cluster
+      cluster_enabled:0
+      # Keyspace
+      db0:keys=47,expires=12,avg_ttl=3600000
+
+  # INFO section sub-commands
+  - regex: "^(?i)INFO\\s+server$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Server
+      redis_version:7.2.4
+      redis_git_sha1:00000000
+      redis_git_dirty:0
+      redis_mode:standalone
+      os:Linux 5.15.0-91-generic x86_64
+      arch_bits:64
+      process_id:1082
+      run_id:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      tcp_port:6379
+      uptime_in_seconds:892847
+      uptime_in_days:10
+      config_file:/etc/redis/redis.conf
+
+  - regex: "^(?i)INFO\\s+clients$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Clients
+      connected_clients:3
+      maxclients:10000
+      blocked_clients:0
+
+  - regex: "^(?i)INFO\\s+memory$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Memory
+      used_memory:1048576
+      used_memory_human:1.00M
+      used_memory_peak:1228800
+      maxmemory:0
+      maxmemory_policy:noeviction
+      mem_allocator:jemalloc-5.3.0
+
+  - regex: "^(?i)INFO\\s+replication$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Replication
+      role:master
+      connected_slaves:0
+      master_replid:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      master_repl_offset:0
+
+  - regex: "^(?i)INFO\\s+keyspace$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Keyspace
+      db0:keys=47,expires=12,avg_ttl=3600000
+
+  - regex: "^(?i)INFO\\s+stats$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Stats
+      total_connections_received:847
+      total_commands_processed:18472
+      keyspace_hits:14283
+      keyspace_misses:892
+
+  - regex: "^(?i)INFO\\s+persistence$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Persistence
+      loading:0
+      rdb_changes_since_last_save:47
+      rdb_bgsave_in_progress:0
+      rdb_last_save_time:1745189247
+      aof_enabled:0
+
+  - regex: "^(?i)INFO\\s+cpu$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # CPU
+      used_cpu_sys:284.712847
+      used_cpu_user:892.472831
+
+  # ---------------------------------------------------------------------------
+  # CONFIG GET — RESP array of alternating key/value bulk strings.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)CONFIG\\s+GET\\s+dir$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "dir"
+      - "/var/lib/redis"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+maxmemory$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "maxmemory"
+      - "0"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+maxmemory-policy$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "maxmemory-policy"
+      - "noeviction"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+save$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "save"
+      - "3600 1 300 100 60 10000"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+masterauth$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "masterauth"
+      - "${REDIS_CANARY_AWS_KEY}"
+
+  # WATERMARK: requirepass returns the per-lure watermark password.
+  # Real-world ops mistake — leaked via open CONFIG endpoint.
+  # If an attacker harvests this and tries it as SSH password on :2222,
+  # the SSH passwordRegex captures it. Cross-pollination POC.
+  - regex: "^(?i)CONFIG\\s+GET\\s+requirepass$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "requirepass"
+      - "{{ persona.coherence.world.watermark_passwords.redis }}"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+bind$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "bind"
+      - "127.0.0.1 -::1"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+appendonly$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "appendonly"
+      - "no"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+logfile$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "logfile"
+      - "/var/log/redis/redis-server.log"
+
+  - regex: "^(?i)CONFIG\\s+GET\\s+dbfilename$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "dbfilename"
+      - "dump.rdb"
+
+  # CONFIG GET * — full dump. Includes WATERMARK in requirepass.
+  - regex: "^(?i)CONFIG\\s+GET\\s+\\*$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "dir"
+      - "/var/lib/redis"
+      - "maxmemory"
+      - "0"
+      - "maxmemory-policy"
+      - "noeviction"
+      - "save"
+      - "3600 1 300 100 60 10000"
+      - "masterauth"
+      - "${REDIS_CANARY_AWS_KEY}"
+      - "requirepass"
+      - "{{ persona.coherence.world.watermark_passwords.redis }}"
+      - "bind"
+      - "127.0.0.1 -::1"
+      - "port"
+      - "6379"
+      - "tcp-keepalive"
+      - "300"
+      - "logfile"
+      - "/var/log/redis/redis-server.log"
+      - "appendonly"
+      - "no"
+      - "protected-mode"
+      - "no"
+      - "dbfilename"
+      - "dump.rdb"
+
+  # Catch-all CONFIG GET — empty array
+  - regex: "^(?i)CONFIG\\s+GET\\s+"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # CONFIG SET — silently accept (capture dropper paths via trace)
+  - regex: "^(?i)CONFIG\\s+SET\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)CONFIG\\s+REWRITE$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)CONFIG\\s+RESETSTAT$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  # ---------------------------------------------------------------------------
+  # CLIENT
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)CLIENT\\s+LIST$"
+    replyFormat: "redis-bulk"
+    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 tot-mem=20506 rbs=1024 rbp=0 obl=0 oll=0 omem=0 events=r cmd=client|list user=default redir=-1 resp=2 lib-name= lib-ver=\n"
+
+  - regex: "^(?i)CLIENT\\s+GETNAME$"
+    replyFormat: "redis-nil-bulk"
+    handler: ""
+
+  - regex: "^(?i)CLIENT\\s+ID$"
+    replyFormat: "redis-integer"
+    handler: "3"
+
+  - regex: "^(?i)CLIENT\\s+SETNAME\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)CLIENT\\s+INFO$"
+    replyFormat: "redis-bulk"
+    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 tot-mem=20506 rbs=1024 rbp=0 obl=0 oll=0 omem=0 events=r cmd=client|info user=default redir=-1 resp=2 lib-name= lib-ver=\n"
+
+  - regex: "^(?i)CLIENT\\s+NO-EVICT\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  # ---------------------------------------------------------------------------
+  # COMMAND / COMMAND COUNT
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)COMMAND\\s+COUNT$"
+    replyFormat: "redis-integer"
+    handler: "240"
+
+  - regex: "^(?i)COMMAND(\\s+LIST)?$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "get"
+      - "set"
+      - "del"
+      - "ping"
+      - "info"
+      - "config"
+      - "client"
+      - "dbsize"
+      - "select"
+      - "auth"
+      - "hello"
+      - "command"
+      - "keys"
+      - "scan"
+      - "type"
+      - "ttl"
+      - "exists"
+      - "expire"
+      - "hget"
+      - "hset"
+      - "hgetall"
+      - "lpush"
+      - "lrange"
+      - "sadd"
+      - "smembers"
+      - "zadd"
+      - "zrange"
+      - "save"
+      - "bgsave"
+      - "lastsave"
+      - "shutdown"
+      - "role"
+      - "debug"
+      - "latency"
+      - "slowlog"
+
+  - regex: "^(?i)COMMAND\\s+DOCS\\b"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # ---------------------------------------------------------------------------
+  # Keyspace probes — Crestfield-themed keys
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)DBSIZE$"
+    replyFormat: "redis-integer"
+    handler: "47"
+
+  - regex: "^(?i)KEYS\\s+"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "session:a1b2c3d4"
+      - "session:e5f6g7h8"
+      - "session:9i0j1k2l"
+      - "user:admin"
+      - "user:{{ persona.coherence.world.people.platform_admin_1.handle }}"
+      - "user:svc-deployer"
+      - "config:app"
+      - "config:features"
+      - "api_key:{{ persona.coherence.world.product.service_name }}-prod"
+      - "api_key:litellm-proxy"
+      - "queue:deploys"
+      - "lock:k8s-deploy-pipeline"
+
+  # SCAN / HSCAN / SSCAN / ZSCAN — 2-element RESP array: cursor + empty array
+  - regex: "^(?i)SCAN\\s+\\d+"
+    replyFormat: "redis-raw"
+    handler: "*2\r\n$1\r\n0\r\n*0\r\n"
+
+  - regex: "^(?i)HSCAN\\s+"
+    replyFormat: "redis-raw"
+    handler: "*2\r\n$1\r\n0\r\n*0\r\n"
+
+  - regex: "^(?i)SSCAN\\s+"
+    replyFormat: "redis-raw"
+    handler: "*2\r\n$1\r\n0\r\n*0\r\n"
+
+  - regex: "^(?i)ZSCAN\\s+"
+    replyFormat: "redis-raw"
+    handler: "*2\r\n$1\r\n0\r\n*0\r\n"
+
+  - regex: "^(?i)TYPE\\s+"
+    replyFormat: "redis-simple"
+    handler: "string"
+
+  - regex: "^(?i)EXISTS\\s+"
+    replyFormat: "redis-integer"
+    handler: "1"
+
+  - regex: "^(?i)TTL\\s+"
+    replyFormat: "redis-integer"
+    handler: "3600"
+
+  # ---------------------------------------------------------------------------
+  # GET — bait values for the specific keys we advertise.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)GET\\s+api_key:{{ persona.coherence.world.product.service_name }}-prod$"
+    replyFormat: "redis-bulk"
+    handler: "${REDIS_CANARY_AWS_KEY}"
+
+  - regex: "^(?i)GET\\s+api_key:litellm-proxy$"
+    replyFormat: "redis-bulk"
+    handler: "sk-cdf-litellm-{{ persona.coherence.world.product.build_sha }}"
+
+  - regex: "^(?i)GET\\s+user:admin$"
+    replyFormat: "redis-bulk"
+    handler: "{\"id\":\"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\"email\":\"admin@{{ persona.coherence.world.company.public_domain }}\",\"last_login\":\"2026-05-17T14:22:31Z\"}"
+
+  - regex: "^(?i)GET\\s+user:{{ persona.coherence.world.people.platform_admin_1.handle }}$"
+    replyFormat: "redis-bulk"
+    handler: "{\"id\":\"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d\",\"email\":\"{{ persona.coherence.world.people.platform_admin_1.handle }}@{{ persona.coherence.world.company.public_domain }}\",\"role\":\"{{ persona.coherence.world.people.platform_admin_1.role }}\"}"
+
+  - regex: "^(?i)GET\\s+config:app$"
+    replyFormat: "redis-bulk"
+    handler: "{\"version\":\"{{ persona.coherence.world.product.platform_version }}\",\"env\":\"production\",\"mcp_endpoint\":\"http://localhost:8000/mcp\",\"build_sha\":\"{{ persona.coherence.world.product.build_sha }}\"}"
+
+  # ---------------------------------------------------------------------------
+  # Persistence / dropper-campaign coverage: SAVE/BGSAVE/LASTSAVE/BGREWRITEAOF
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)SAVE$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)BGSAVE(\\s+SCHEDULE)?$"
+    replyFormat: "redis-simple"
+    handler: "Background saving started"
+
+  - regex: "^(?i)LASTSAVE$"
+    replyFormat: "redis-integer"
+    handler: "1745189247"
+
+  - regex: "^(?i)BGREWRITEAOF$"
+    replyFormat: "redis-simple"
+    handler: "Background append only file rewriting started"
+
+  # ---------------------------------------------------------------------------
+  # ROLE / DEBUG / LATENCY / SLOWLOG / MEMORY
+  # ---------------------------------------------------------------------------
+  # ROLE — 3-element array: bulk-string, integer, empty array
+  - regex: "^(?i)ROLE$"
+    replyFormat: "redis-raw"
+    handler: "*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n"
+
+  - regex: "^(?i)DEBUG\\s+SLEEP\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)LATENCY\\s+LATEST$"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)LATENCY\\s+HISTORY\\b"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)LATENCY\\s+RESET\\b"
+    replyFormat: "redis-integer"
+    handler: "0"
+
+  - regex: "^(?i)SLOWLOG\\s+GET\\b"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)SLOWLOG\\s+RESET$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)SLOWLOG\\s+LEN$"
+    replyFormat: "redis-integer"
+    handler: "0"
+
+  - regex: "^(?i)MEMORY\\s+USAGE\\s+"
+    replyFormat: "redis-integer"
+    handler: "64"
+
+  - regex: "^(?i)MEMORY\\s+STATS$"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # ---------------------------------------------------------------------------
+  # Writes — "accept" silently so dropper sequences progress to traced completion
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)(SET|HSET|LPUSH|RPUSH|SADD|ZADD|HMSET|MSET|SETEX|SETNX|APPEND|GETSET|INCR|DECR|INCRBY|DECRBY|RENAME|EXPIRE|PERSIST)\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)(DEL|UNLINK|HDEL|LREM|SREM|ZREM|EXPIREAT|HEXPIRE)\\b"
+    replyFormat: "redis-integer"
+    handler: "1"
+
+  - regex: "^(?i)FLUSHALL(\\s+(SYNC|ASYNC))?$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  - regex: "^(?i)FLUSHDB(\\s+(SYNC|ASYNC))?$"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
+  # MODULE LOAD / SCRIPT LOAD — attackers love these; capture with
+  # deterministic acks instead of LLM guesses.
+  - regex: "^(?i)MODULE\\s+LOAD\\b"
+    replyFormat: "redis-error"
+    handler: "ERR Error loading the extension. Please check the server logs."
+
+  - regex: "^(?i)MODULE\\s+LIST$"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)SCRIPT\\s+LOAD\\b"
+    replyFormat: "redis-bulk"
+    handler: "e0e1f9fabfc9d4800c877a703b823ac0578ff831"
+
+  - regex: "^(?i)EVAL\\b"
+    replyFormat: "redis-nil-bulk"
+    handler: ""
+
+  # ---------------------------------------------------------------------------
+  # SHUTDOWN — close connection
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)SHUTDOWN\\b"
+    name: "quit"
+    replyFormat: "redis-error"
+    handler: "ERR Errors trying to SHUTDOWN. Check logs."
+
+  # ---------------------------------------------------------------------------
+  # GET catch-all — empty value (key doesn't exist). Real Redis returns
+  # nil bulk for missing keys; this is more deterministic than LLM fallback.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)GET\\s+"
+    replyFormat: "redis-nil-bulk"
+    handler: ""
+
+  - regex: "^(?i)HGET(ALL)?\\s+"
+    replyFormat: "redis-nil-bulk"
+    handler: ""
+
+  - regex: "^(?i)LRANGE\\s+"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)SMEMBERS\\s+"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  - regex: "^(?i)ZRANGE\\s+"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # Anything else → deterministic RESP error
+  - regex: ".*"
+    replyFormat: "redis-error"
+    handler: "ERR unknown command"
+
+fallbackCommand:
+  replyFormat: "redis-error"
+  handler: "ERR unknown command"

@@ -99,7 +99,7 @@ plugin:
   # Short, practical, zero meta-awareness. Nothing to extract, nothing to unmask.
   # Credentials are environmental facts, not guarded secrets.
   prompt: |
-    Local dev assistant for the infra team at {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (Denver). Help with code, debugging, and questions about our stack. Be concise.
+    Local dev assistant for the infra team at {{ persona.lure_content.platform_display_name | default(persona.display_name) }} ({{ persona.identity.hq }}). Help with code, debugging, and questions about our stack. Be concise.
 
     Environment on this machine:
       AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}

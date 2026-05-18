@@ -680,23 +680,463 @@ commands:
     statusCode: 401
     handler: '{"error":"unauthorized","message":"Admin panel requires platform-admin or sre role. Authenticate via IAM.","login":"/admin/login"}'
 
-  # WordPress scanner noise
+  # WordPress scanner noise — return canonical FastAPI 404 (no bespoke
+  # "This is not a WordPress site" message; real apps don't emit jokes).
   - regex: "^/wp-(login|admin|content|includes)"
     name: "not-wordpress"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"not_found","message":"This is not a WordPress site."}'
+    handler: '{"detail":"Not Found"}'
 
-  # Shell/exploit paths
+  # Shell/exploit paths — canonical FastAPI 404.
   - regex: "^/(shell|cmd|eval|exec|system|phpinfo|phpmyadmin|cgi-bin)"
     name: "exploit-attempt"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"not_found"}'
+    handler: '{"detail":"Not Found"}'
+
+  # =========================================================================
+  # L7 — LiteLLM Admin Surface (Phase 3 of Disney rebuild, 2026-05-18)
+  #
+  # Closes the deception gap identified by the AME/Infraly v3 burst on
+  # 2026-05-16: 14 IPs probed 22 distinct LiteLLM admin paths against
+  # this port; every one fell through to fallbackCommand (default-404).
+  # This block adds those paths with realistic LiteLLM 1.65.2 responses.
+  #
+  # KEV / CVE coverage (anchors the lure to real exploitation):
+  #   - CVE-2026-35029 (HIGH, 2026-04-03): proxy-config priv esc — fits
+  #     our /proxy_config.yaml + /key/generate exposure
+  #   - CVE-2026-40217 (HIGH, 2026-05-07): guardrail sandbox escape via
+  #     /guardrails/test_custom_code — already observed attempted from
+  #     LiteLLM-stack scanners; see memory: reference_litellm_guardrails_python_rce
+  #   - GHSA-v4p8 (HIGH, 2026-04-21): MCP stdio RCE via
+  #     /mcp-rest/test/connection — also already observed
+  #   - GHSA-xqmj (HIGH, 2026-04-20): SSTI in /prompts/test
+  #   - CVE-2026-35030 (CRIT, 2026-04-03): OIDC userinfo cache bypass —
+  #     deeper auth chain not yet built here; future expansion
+  #
+  # Strict canary discipline (per operator directive 2026-05-18):
+  #   - ONLY env vars already in sensor /opt/honeypot-sensor/.env are
+  #     used raw (the 9 known-good MCP_CANARY_* + 2 OPENCLAW_CANARY_*)
+  #   - For OpenAI/Anthropic api_key fields where no canary type exists,
+  #     use `os.environ/OPENAI_API_KEY` LiteLLM-config DSL syntax (real
+  #     LiteLLM config behavior — env-driven keys, no harvestable string)
+  #   - Cross-pollination watermark password lives at
+  #     {{ persona.coherence.world.watermark_passwords.mcp }} =
+  #     cdf_prod_2026Q2-7f3a9c2d — embedded in /litellm_config.yaml
+  #     database_url. SSH-2222 accepts this regex class for capture.
+  #
+  # Engagement tiers:
+  #   A — Recon (/model/info)                              fast, no canaries
+  #   B — Admin enum (/key/*, /user/*, /team/*, /budget/*) realistic data
+  #   C — Credential harvest (/global/spend/*)             registered AWS canary
+  #   D — Config file exfil (/*_config.yaml)               full canary set
+  #   E — Cross-framework probes (LangFlow/n8n surfaces)   realistic 4xx/2xx
+  #   F — CVE-bait active surfaces (/guardrails/*, /prompts/*, /mcp-rest/*)
+  #
+  # Server header throughout: nginx/1.25.4 (vulnerable to CVE-2026-42945
+  # — Phase 5 adds classifier for the rewrite-overflow trigger pattern).
+  # =========================================================================
+
+  # ── Tier A: Recon ──────────────────────────────────────────────────
+
+  # GET /model/info — LiteLLM-specific richer model list.
+  # Real LiteLLM redacts api_key fields based on caller role; that's
+  # accurate behavior for misconfigured deployments too.
+  - regex: "^/model/info$"
+    name: "litellm-model-info"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Request-Id: req_${request.uuid_short}"
+      - "X-LiteLLM-Version: 1.65.2"
+    statusCode: 200
+    handler: |
+      {"data":[{"model_name":"gpt-4o","litellm_params":{"model":"openai/gpt-4o","api_base":"https://api.openai.com/v1","api_key":"REDACTED","custom_llm_provider":"openai"},"model_info":{"id":"01J8K2HV3R4XPQM7N5Z9","db_model":true,"max_tokens":4096,"input_cost_per_token":2.5e-06,"output_cost_per_token":1e-05}},{"model_name":"claude-sonnet-4","litellm_params":{"model":"anthropic/claude-sonnet-4-20250514","api_base":"https://api.anthropic.com","api_key":"REDACTED","custom_llm_provider":"anthropic"},"model_info":{"id":"01J8K2HV3R4XPQM7N5ZA","db_model":true,"max_tokens":8192,"input_cost_per_token":3e-06,"output_cost_per_token":1.5e-05}},{"model_name":"bedrock-claude","litellm_params":{"model":"bedrock/anthropic.claude-3-sonnet-20240229-v1:0","aws_region_name":"us-east-1","aws_access_key_id":"REDACTED","aws_secret_access_key":"REDACTED","custom_llm_provider":"bedrock"},"model_info":{"id":"01J8K2HV3R4XPQM7N5ZB","db_model":true,"max_tokens":4096}},{"model_name":"crestfield-internal-llm","litellm_params":{"model":"ollama/llama3.1:8b","api_base":"http://{{ persona.coherence.world.hosts.flagship_worker.hostname }}.{{ persona.identity.internal_domain }}:11434","custom_llm_provider":"ollama"},"model_info":{"id":"01J8K2HV3R4XPQM7N5ZC","db_model":true,"max_tokens":4096}}]}
+
+  # ── Tier B: Admin enumeration ──────────────────────────────────────
+
+  # POST /key/generate — mint a new LiteLLM virtual key.
+  # Uses ${request.uuid_short} for per-request uniqueness; not a canary.
+  - regex: "^/key/generate$"
+    method: POST
+    name: "litellm-key-generate"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: '{"key":"sk-litellm-${request.uuid_short}wK2pM8xQ","key_name":"sk-...wK2pM8xQ","expires":"2026-06-17T12:00:00.000Z","token":"sk-litellm-${request.uuid_short}wK2pM8xQ","token_id":"litellm-key-${request.uuid_short}","models":[],"aliases":{},"spend":0.0,"max_budget":100.0,"user_id":"default_user_id","team_id":null,"max_parallel_requests":null,"metadata":{"created_by":"unknown","created_at":"2026-05-18T12:00:00.000Z"},"tpm_limit":null,"rpm_limit":null,"budget_duration":"30d","allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}'
+
+  # GET /key/info — key metadata lookup (real LiteLLM masks).
+  - regex: "^/key/info$"
+    name: "litellm-key-info"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"key":"REDACTED","info":{"token":"REDACTED","key_name":"sk-...REDACTED","spend":47.32,"max_budget":1000.0,"expires":"2026-12-31T23:59:59.000Z","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"aliases":{},"config":{},"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","metadata":{"created_by":"jpark@{{ persona.identity.public_domain }}","environment":"production"},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}}'
+
+  # GET /key/list — list issued keys (masked prefixes).
+  - regex: "^/key/list$"
+    name: "litellm-key-list"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"keys":[{"token_id":"litellm-key-prod-001","key_name":"sk-...Hr9pK","user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","spend":12847.23,"max_budget":50000.0,"created_at":"2026-01-15T08:00:00Z","expires":null},{"token_id":"litellm-key-prod-002","key_name":"sk-...Mn2qR","user_id":"mchen@{{ persona.identity.public_domain }}","team_id":"team-data","spend":3421.88,"max_budget":10000.0,"created_at":"2026-02-08T14:23:00Z","expires":null},{"token_id":"litellm-key-prod-003","key_name":"sk-...Zt7vB","user_id":"oncall-rotation@{{ persona.identity.public_domain }}","team_id":"team-sre","spend":1247.56,"max_budget":25000.0,"created_at":"2026-02-22T09:15:00Z","expires":null},{"token_id":"litellm-key-ci-001","key_name":"sk-...Yp4wL","user_id":"svc-deployer","team_id":"team-platform-eng","spend":89234.11,"max_budget":250000.0,"created_at":"2026-01-08T00:00:00Z","expires":"2026-12-31T23:59:59Z"},{"token_id":"litellm-key-aruiz","key_name":"sk-...Aq8jN","user_id":"aruiz@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","spend":876.42,"max_budget":5000.0,"created_at":"2026-03-15T11:30:00Z","expires":null}],"total":5}'
+
+  # GET /user/info — current-caller-shaped response.
+  - regex: "^/user/info$"
+    name: "litellm-user-info"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"user_id":"jpark@{{ persona.identity.public_domain }}","user_email":"jpark@{{ persona.identity.public_domain }}","user_role":"proxy_admin","teams":["team-platform-eng"],"models":["gpt-4o","claude-sonnet-4","bedrock-claude","crestfield-internal-llm"],"spend":12847.23,"max_budget":50000.0,"organization_id":"{{ persona.slug }}","created_at":"2026-01-15T08:00:00Z","metadata":{"department":"platform-engineering"}}'
+
+  # GET /user/list — proxy user roster (matches persona roster).
+  - regex: "^/user/list$"
+    name: "litellm-user-list"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"users":[{"user_id":"jpark@{{ persona.identity.public_domain }}","user_email":"jpark@{{ persona.identity.public_domain }}","user_role":"proxy_admin","spend":12847.23,"max_budget":50000.0,"teams":["team-platform-eng"]},{"user_id":"mchen@{{ persona.identity.public_domain }}","user_email":"mchen@{{ persona.identity.public_domain }}","user_role":"internal_user_viewer","spend":3421.88,"max_budget":10000.0,"teams":["team-data"]},{"user_id":"aruiz@{{ persona.identity.public_domain }}","user_email":"aruiz@{{ persona.identity.public_domain }}","user_role":"proxy_admin","spend":876.42,"max_budget":5000.0,"teams":["team-platform-eng"]},{"user_id":"oncall-rotation@{{ persona.identity.public_domain }}","user_email":"oncall-rotation@{{ persona.identity.public_domain }}","user_role":"internal_user","spend":1247.56,"max_budget":25000.0,"teams":["team-sre"]},{"user_id":"svc-deployer","user_email":null,"user_role":"internal_user","spend":89234.11,"max_budget":250000.0,"teams":["team-platform-eng"]}],"total":5}'
+
+  # GET /team/info — team metadata.
+  - regex: "^/team/info$"
+    name: "litellm-team-info"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"team_id":"team-platform-eng","team_alias":"Platform Engineering","spend":102957.76,"max_budget":300000.0,"members":["jpark@{{ persona.identity.public_domain }}","aruiz@{{ persona.identity.public_domain }}","svc-deployer"],"models":["gpt-4o","claude-sonnet-4","bedrock-claude","crestfield-internal-llm"],"tpm_limit":null,"rpm_limit":null,"budget_duration":"30d","created_at":"2026-01-08T00:00:00Z","metadata":{"organization":"{{ persona.slug }}","cost_center":"eng-platform"}}'
+
+  # GET /team/list — team roster.
+  - regex: "^/team/list$"
+    name: "litellm-team-list"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"teams":[{"team_id":"team-platform-eng","team_alias":"Platform Engineering","spend":102957.76,"max_budget":300000.0,"models":["gpt-4o","claude-sonnet-4","bedrock-claude","crestfield-internal-llm"],"member_count":3},{"team_id":"team-data","team_alias":"Data Science","spend":3421.88,"max_budget":50000.0,"models":["gpt-4o","claude-sonnet-4"],"member_count":1},{"team_id":"team-sre","team_alias":"Site Reliability","spend":1247.56,"max_budget":25000.0,"models":["claude-sonnet-4"],"member_count":1}],"total":3}'
+
+  # GET /budget/info — budget config.
+  - regex: "^/budget/info$"
+    name: "litellm-budget-info"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"budget_id":"crestfield-platform-budget","max_budget":500000.0,"current_spend":107627.20,"budget_duration":"30d","budget_reset_at":"2026-06-01T00:00:00Z","model_max_budget":{"gpt-4o":200000.0,"claude-sonnet-4":150000.0,"bedrock-claude":100000.0,"crestfield-internal-llm":50000.0},"created_at":"2026-01-01T00:00:00Z","created_by":"oncall-rotation@{{ persona.identity.public_domain }}"}'
+
+  # ── Tier C: Credential harvest ─────────────────────────────────────
+
+  # GET /global/spend/logs — per-request spend log (masked api_key prefixes).
+  # Real LiteLLM exposes user_api_key as masked prefix here, NOT full key.
+  # The accuracy IS the deception: looks like a correctly-deployed proxy
+  # whose `/spend/logs` endpoint is misconfigured to be publicly reachable.
+  - regex: "^/global/spend/logs$"
+    name: "litellm-global-spend-logs"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '[{"request_id":"chatcmpl-9XkM2nRpQz4AB7vL8wK","call_type":"acompletion","api_key":"REDACTED","spend":0.0234,"total_tokens":312,"prompt_tokens":89,"completion_tokens":223,"startTime":"2026-05-17T18:47:12.847Z","endTime":"2026-05-17T18:47:14.291Z","completionStartTime":"2026-05-17T18:47:13.102Z","model":"gpt-4o","user":"jpark@{{ persona.identity.public_domain }}","metadata":{"user_api_key":"sk-...Hr9pK","user_api_key_alias":null,"user_api_key_team_id":"team-platform-eng","user_api_key_user_id":"jpark@{{ persona.identity.public_domain }}","model_group":"gpt-4o","deployment":"openai/gpt-4o","model_info":{"id":"01J8K2HV3R4XPQM7N5Z9","db_model":true},"requester_ip_address":"10.0.12.88","requester_metadata":{"client":"cursor-cli/0.42.3","trace_id":"4f8b9c2d-1e3a-4b5c-8d7e-9f0a1b2c3d4e"}}},{"request_id":"chatcmpl-K8mN3oRqRz5BC9wM0xL","call_type":"acompletion","api_key":"REDACTED","spend":0.0156,"total_tokens":219,"prompt_tokens":67,"completion_tokens":152,"startTime":"2026-05-17T19:12:44.523Z","endTime":"2026-05-17T19:12:46.871Z","model":"claude-sonnet-4","user":"aruiz@{{ persona.identity.public_domain }}","metadata":{"user_api_key":"sk-...Aq8jN","user_api_key_team_id":"team-platform-eng"}},{"request_id":"chatcmpl-P1qR4tUvWz6CD2xN3yM","call_type":"aembedding","api_key":"REDACTED","spend":0.000012,"total_tokens":1024,"model":"crestfield-internal-llm","user":"svc-deployer","metadata":{"user_api_key":"sk-...Yp4wL","deployment":"ollama/llama3.1:8b","model_info":{"api_base":"http://crestfield-worker-7f8b9c.{{ persona.identity.internal_domain }}:11434"}}}]'
+
+  # GET /global/spend/keys — virtual-key dump with spend metadata.
+  # Realistic LiteLLM behavior: this endpoint DOES expose proxy-issued
+  # virtual keys (sk-litellm-*) AS WELL AS upstream credentials embedded
+  # in `metadata.underlying_keys` for keys with bedrock/aws providers.
+  # That's where the registered AWS canary lives — exfil + use → fires.
+  - regex: "^/global/spend/keys$"
+    name: "litellm-global-spend-keys"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: |
+      [{"api_key":"sk-litellm-prod-Hr9pK2mN4xQ8vL3wR7Bzv6KqP1yT5XuS","key_alias":null,"spend":12847.23,"max_budget":50000.0,"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"created_at":"2026-01-15T08:00:00Z","metadata":{}},{"api_key":"sk-litellm-prod-Mn2qR8wT5xV3yL9pK0Zj","key_alias":null,"spend":3421.88,"max_budget":10000.0,"user_id":"mchen@{{ persona.identity.public_domain }}","team_id":"team-data","models":["gpt-4o","claude-sonnet-4"],"created_at":"2026-02-08T14:23:00Z","metadata":{}},{"api_key":"sk-litellm-prod-Zt7vB4nL2qX9wK1mR5pY","key_alias":null,"spend":1247.56,"max_budget":25000.0,"user_id":"oncall-rotation@{{ persona.identity.public_domain }}","team_id":"team-sre","models":["claude-sonnet-4"],"created_at":"2026-02-22T09:15:00Z","metadata":{}},{"api_key":"sk-litellm-ci-Yp4wL8mR2xQ7nK1vB5pZ","key_alias":"deploy-pipeline","spend":89234.11,"max_budget":250000.0,"user_id":"svc-deployer","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","crestfield-internal-llm"],"created_at":"2026-01-08T00:00:00Z","expires":"2026-12-31T23:59:59Z","metadata":{"environment":"prod","underlying_keys":{"bedrock_access_key":"${MCP_CANARY_AWS_KEY}","bedrock_secret_key":"${MCP_CANARY_AWS_SECRET}","bedrock_region":"us-east-1"}}},{"api_key":"sk-litellm-prod-Aq8jN4mR2wK1pX7nL9vB","key_alias":null,"spend":876.42,"max_budget":5000.0,"user_id":"aruiz@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","crestfield-internal-llm"],"created_at":"2026-03-15T11:30:00Z","metadata":{}}]
+
+  # ── Tier D: Config-file exfil (crown jewel) ────────────────────────
+
+  # GET /(litellm_config|proxy_config|app/*).yaml — the misconfigured
+  # nginx-static-file leak that's the canonical LiteLLM RCE precursor
+  # (CVE-2026-35029 et al.). Real LiteLLM does NOT serve this from
+  # nginx by default; admins occasionally leave it behind from local
+  # editing. Five mirror paths cover the deployment variants.
+  - regex: "^/(litellm_config\\.yaml|proxy_config\\.yaml|app/litellm_config\\.yaml|app/proxy_config\\.yaml|app/config\\.yaml)$"
+    name: "litellm-config-yaml"
+    headers:
+      - "Content-Type: text/yaml; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "Content-Disposition: inline; filename=\"proxy_config.yaml\""
+    statusCode: 200
+    handler: |
+      # LiteLLM Proxy Configuration — {{ persona.coherence.world.product.platform_display_name }}
+      # Generated by ansible-litellm-deploy v2.4.1 (jpark@{{ persona.identity.public_domain }})
+      # Last updated: 2026-05-08T14:30:00Z
+      # DO NOT COMMIT — contains production credentials.
+
+      model_list:
+        - model_name: gpt-4o
+          litellm_params:
+            model: openai/gpt-4o
+            api_base: https://api.openai.com/v1
+            api_key: os.environ/OPENAI_API_KEY
+            organization: org-{{ persona.coherence.world.org.github_org }}
+            timeout: 30
+            stream_timeout: 60
+
+        - model_name: gpt-4o-mini
+          litellm_params:
+            model: openai/gpt-4o-mini
+            api_base: https://api.openai.com/v1
+            api_key: os.environ/OPENAI_API_KEY
+            organization: org-{{ persona.coherence.world.org.github_org }}
+
+        - model_name: claude-sonnet-4
+          litellm_params:
+            model: anthropic/claude-sonnet-4-20250514
+            api_base: https://api.anthropic.com
+            api_key: os.environ/ANTHROPIC_API_KEY
+            timeout: 30
+
+        - model_name: claude-opus-4
+          litellm_params:
+            model: anthropic/claude-opus-4-20250514
+            api_base: https://api.anthropic.com
+            api_key: os.environ/ANTHROPIC_API_KEY
+
+        - model_name: bedrock-claude
+          litellm_params:
+            model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+            aws_access_key_id: ${MCP_CANARY_AWS_KEY}
+            aws_secret_access_key: ${MCP_CANARY_AWS_SECRET}
+            aws_region_name: us-east-1
+
+        - model_name: crestfield-internal-llm
+          litellm_params:
+            model: ollama/llama3.1:8b
+            api_base: http://crestfield-worker-7f8b9c.{{ persona.identity.internal_domain }}:11434
+            stream: true
+
+        - model_name: crestfield-embedding
+          litellm_params:
+            model: ollama/nomic-embed-text
+            api_base: http://crestfield-worker-7f8b9c.{{ persona.identity.internal_domain }}:11434
+
+      general_settings:
+        master_key: os.environ/LITELLM_MASTER_KEY
+        # Watermark password in DB URL — Disney cross-pollination POC.
+        # SSH-2222 accepts {{ persona.coherence.world.watermark_passwords.mcp }}
+        # as a login password (regex class includes this exact value);
+        # cross-correlate IP between this read and any SSH-attempt.
+        database_url: postgresql://crestfield_app:{{ persona.coherence.world.watermark_passwords.mcp }}@db-primary.{{ persona.identity.internal_domain }}:5432/litellm_proxy
+        database_connection_pool_limit: 100
+        database_connection_timeout: 60
+        ui_username: jpark@{{ persona.identity.public_domain }}
+        ui_password: os.environ/LITELLM_UI_PASSWORD
+        store_model_in_db: true
+        store_prompts_in_spend_logs: false
+        max_parallel_requests: 100
+        max_budget: 500000.0
+        budget_duration: 30d
+        custom_auth: null
+        allowed_ips: ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]
+        public_routes: ["/health","/test","/health/readiness","/health/liveness"]
+        alerting: ["slack","webhook"]
+        alerting_threshold: 300
+        alert_to_webhook_url:
+          spend_reports: ${MCP_CANARY_WEB_URL}
+          budget_alerts: ${MCP_CANARY_WEB_URL}
+          db_exceptions: ${MCP_CANARY_WEB_URL}
+        slack_alerting_args:
+          slack_webhook_url: ${MCP_CANARY_WEB_URL}
+
+      litellm_settings:
+        drop_params: true
+        set_verbose: false
+        request_timeout: 600
+        force_ipv4: true
+        cache: true
+        cache_params:
+          type: redis
+          host: redis-sentinel.{{ persona.identity.internal_domain }}
+          port: 26379
+          password: {{ persona.coherence.world.watermark_passwords.mcp }}
+        success_callback: ["langfuse","prometheus"]
+        failure_callback: ["sentry","slack"]
+        langfuse_default_tags: ["proxy_metadata","user_api_key_alias","user_api_key_user_id","user_api_key_team_id"]
+
+      router_settings:
+        routing_strategy: usage-based-routing-v2
+        redis_host: redis-sentinel.{{ persona.identity.internal_domain }}
+        redis_port: 26379
+        redis_password: {{ persona.coherence.world.watermark_passwords.mcp }}
+        enable_pre_call_checks: true
+        retry_policy:
+          BadRequestErrorRetries: 0
+          AuthenticationErrorRetries: 0
+          TimeoutErrorRetries: 2
+          RateLimitErrorRetries: 3
+        cooldown_time: 30
+
+      environment_variables:
+        VAULT_ADDR: "https://vault.{{ persona.identity.internal_domain }}:8200"
+        VAULT_TOKEN: "${MCP_CANARY_VAULT_TOKEN}"
+        DATADOG_API_KEY: "dd-api-${MCP_CANARY_DD_KEY}"
+        SENTRY_DSN: "https://a1b2c3d4e5f6@o123456.ingest.sentry.io/7890123"
+
+  # GET /config/yaml — alt-path alias (some LiteLLM deploys publish this).
+  - regex: "^/config/yaml$"
+    name: "litellm-config-yaml-altpath"
+    headers:
+      - "Content-Type: text/yaml; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: |
+      # Legacy alias — see canonical at /litellm_config.yaml
+      include:
+        - /etc/litellm/litellm_config.yaml
+
+  # GET /get/config — JSON summary (LiteLLM admin API).
+  - regex: "^/get/config$"
+    name: "litellm-get-config"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"status":"success","data":{"model_list_count":7,"general_settings":{"master_key_set":true,"database_connected":true,"ui_username":"jpark@{{ persona.identity.public_domain }}","custom_auth":null,"alerting":["slack","webhook"],"max_parallel_requests":100,"max_budget":500000.0,"budget_duration":"30d"},"litellm_settings":{"set_verbose":false,"cache":true,"cache_type":"redis","success_callback":["langfuse","prometheus"],"failure_callback":["sentry","slack"]},"router_settings":{"routing_strategy":"usage-based-routing-v2","cooldown_time":30,"retry_policy":{"BadRequestErrorRetries":0,"AuthenticationErrorRetries":0,"TimeoutErrorRetries":2,"RateLimitErrorRetries":3}},"environment_variables":{"VAULT_ADDR_set":true,"VAULT_TOKEN_set":true,"DATADOG_API_KEY_set":true,"REDIS_URL_set":true}}}'
+
+  # GET /get/config/callbacks — alerting webhook config (web-bug canary).
+  - regex: "^/get/config/callbacks$"
+    name: "litellm-get-config-callbacks"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: '{"success_callback":["langfuse","prometheus"],"failure_callback":["sentry","slack"],"alert_to_webhook_url":{"spend_reports":"${MCP_CANARY_WEB_URL}","budget_alerts":"${MCP_CANARY_WEB_URL}","db_exceptions":"${MCP_CANARY_WEB_URL}"},"slack_alerting_args":{"slack_webhook_url":"${MCP_CANARY_WEB_URL}"},"prometheus":{"endpoint":"/metrics","port":4000},"langfuse":{"public_key":"REDACTED","secret_key":"REDACTED","host":"https://langfuse.{{ persona.identity.internal_domain }}"}}'
+
+  # ── Tier E: Cross-framework probes ─────────────────────────────────
+
+  # GET /credential/list — LangFlow / Flowise credential enumeration.
+  # Crestfield narrative: LangFlow IS deployed (langflow.int...:7860 per
+  # persona). This route on :8000 returns 404-shaped because that's
+  # not where LangFlow's API lives; this is just MCP's fallback for an
+  # often-probed path. Realistic FastAPI 404.
+  - regex: "^/credential/list$"
+    name: "litellm-credential-list"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
+
+  # GET /rest/oauth2-credential/callback — n8n-shape response.
+  # If attacker pivots here from MCP-config-mentions-n8n, they see a
+  # realistic n8n OAuth callback (400-class missing state). Doesn't
+  # reveal we have n8n; ambiguous "this looks like an n8n proxied here."
+  - regex: "^/rest/oauth2-credential/callback"
+    name: "n8n-oauth2-callback"
+    headers:
+      - "Content-Type: text/html; charset=utf-8"
+      - "Server: nginx/1.25.4"
+    statusCode: 400
+    handler: |
+      <!DOCTYPE html>
+      <html>
+      <head><title>n8n.io - OAuth2 Authorization</title></head>
+      <body>
+      <h3>Insufficient parameters!</h3>
+      <p>The query parameter "state" is missing. The OAuth2 flow could not be completed.</p>
+      <p>Please return to your n8n workflow at <a href="https://n8n.{{ persona.identity.internal_domain }}/workflows">https://n8n.{{ persona.identity.internal_domain }}/workflows</a> and retry the credential setup.</p>
+      <p style="color:#888;font-size:.8rem">n8n version 1.47.2 &middot; workflow=crestfield-prod-deploy &middot; req_${request.uuid_short}</p>
+      </body>
+      </html>
+
+  # ── Tier F: CVE-bait active surfaces ───────────────────────────────
+
+  # POST /guardrails/test_custom_code — CVE-2026-40217 (LiteLLM HIGH).
+  # Vulnerable LiteLLM versions evaluate user-supplied Python via
+  # the language's dynamic-evaluation primitive with weak sandboxing,
+  # allowing sandbox escape. Already observed attempted from LiteLLM-
+  # stack scanners on 2026-05-17 (see memory:
+  # reference_litellm_guardrails_python_rce). Our response simulates
+  # a "completed" run with empty stdout — encourages re-test with
+  # payloads. Does NOT actually run attacker code.
+  - regex: "^/guardrails/test_custom_code$"
+    method: POST
+    name: "litellm-cve-2026-40217-guardrail-bait"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: '{"status":"completed","exec_id":"run-${request.uuid_short}","stdout":"","stderr":"","execution_time_ms":47,"sandbox_metadata":{"python_version":"3.12.3","sandbox_type":"restricted","resource_limits":{"cpu_seconds":5,"memory_mb":128}}}'
+
+  # POST /mcp-rest/test/connection — GHSA-v4p8 (LiteLLM MCP stdio RCE).
+  # Already observed (memory: reference_litellm_mcp_stdio_injection,
+  # 5-Azure-IP coordinated recon 2026-05-17). Vulnerable LiteLLM
+  # versions allow arbitrary stdio command invocation via the
+  # `command` + `args` fields. Response simulates successful
+  # connection to the user-supplied command.
+  - regex: "^/mcp-rest/test/connection$"
+    method: POST
+    name: "litellm-cve-ghsa-v4p8-mcp-stdio-bait"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: '{"status":"connected","connection_id":"mcp-conn-${request.uuid_short}","stdout":"MCP server started\nWaiting for JSON-RPC messages on stdin\n","stderr":"","tools_discovered":[],"server_info":{"name":"mcp-test","version":"1.0.0"},"transport":"stdio","pid":18472}'
+
+  # POST /prompts/test — GHSA-xqmj (LiteLLM SSTI in prompts endpoint).
+  - regex: "^/prompts/test$"
+    method: POST
+    name: "litellm-cve-ghsa-xqmj-prompts-ssti-bait"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: nginx/1.25.4"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: '{"rendered_prompt":"","template_engine":"jinja2","variables_resolved":{},"warnings":[],"trace_id":"prompt-trace-${request.uuid_short}"}'
+
+  # ── Tier G: nginx persona reinforcement (Phase 5 Tier 2 on-steroids) ─
+
+  # GET /nginx_status — realistic nginx ngx_http_stub_status_module output.
+  # Crestfield narrative: the platform's nginx edge (nginx-edge-01.int...)
+  # exposes /nginx_status to the platform team for capacity monitoring.
+  # CVE-2026-42945 context (Phase 5):
+  #   - We advertise Server: nginx/1.25.4 across every HTTP route
+  #   - 1.25.4 sits in the vulnerable range 0.6.27 → 1.30.0
+  #   - The classifier in api/cve_classifier.py annotates sessions
+  #     whose URL shapes match the rewrite-module heap-overflow trigger
+  #   - This route adds an additional believable-vulnerable signal:
+  #     /nginx_status is a real nginx admin endpoint that's commonly
+  #     misconfigured to be publicly reachable.
+  # Output format MUST match the nginx stub_status_module exactly —
+  # parsers like Datadog's nginx integration depend on it.
+  - regex: "^/nginx_status$"
+    name: "nginx-stub-status"
+    headers:
+      - "Content-Type: text/plain"
+      - "Server: nginx/1.25.4"
+    statusCode: 200
+    handler: |
+      Active connections: 47
+      server accepts handled requests
+       18472913 18472913 8473291
+      Reading: 0 Writing: 12 Waiting: 35
+
+  # =========================================================================
+  # End L7 — LiteLLM Admin Surface
+  # =========================================================================
 
   # =========================================================================
   # Phase C — Chain 2: tier-1 discovery chain (MCP gated tool)

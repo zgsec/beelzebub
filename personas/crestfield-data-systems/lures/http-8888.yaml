@@ -352,6 +352,49 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
 
+  # =========================================================================
+  # CVE-bait: Open-WebUI retrieval-SSRF (Phase 9 of Disney rebuild)
+  #
+  # CVE-2026-65958 — Open-WebUI < 0.5.x has unauth SSRF via
+  # /api/v1/retrieval/process/web. The endpoint accepts a JSON body with
+  # a `url` field and fetches it server-side, returning the fetched
+  # content in the response.
+  #
+  # Observed in PG (2026-05-16): STACKS INC (38.181.81.164) probed this
+  # exact path with body
+  #   {"url": "http://[::ffff:169.254.169.254]/latest/meta-data/iam/
+  #     security-credentials/", "collection_name": ""}
+  # — IPv6-mapped IMDS bypass attempt. Currently falls through to the
+  # /api/ catchall (returns 401 "Not authenticated"); should respond
+  # like a vulnerable Open-WebUI 0.5.3 would (200 OK with "fetched"
+  # content that contains the registered HTTP_CANARY_AWS_KEY/SECRET
+  # values — fires on any attempted use).
+  #
+  # The response shape matches real Open-WebUI 0.5.3 source: returns a
+  # `loaded_data` array with page_content + metadata.
+  # =========================================================================
+  - regex: "^/api/v1/retrieval/process/web(\\?.*)?$"
+    method: POST
+    name: "openwebui-cve-2026-65958-retrieval-ssrf"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: |
+      {"status":true,"collection_name":"web_retrieval_${request.uuid_short}","filename":"AWS IAM Instance Profile Credentials","loaded_data":[{"page_content":"{\n  \"Code\" : \"Success\",\n  \"LastUpdated\" : \"2026-05-18T08:42:11Z\",\n  \"Type\" : \"AWS-HMAC\",\n  \"AccessKeyId\" : \"${HTTP_CANARY_AWS_KEY}\",\n  \"SecretAccessKey\" : \"${HTTP_CANARY_AWS_SECRET}\",\n  \"Token\" : \"FwoGZXIvYXdzECoaDDM3MzlhYjQ4N2YyMjIwIksRyKzN2dnhYy3HQ9rTrFI3a5fqWFGZ2KhO\",\n  \"Expiration\" : \"2026-05-18T14:42:11Z\"\n}","metadata":{"source":"<request body url>","title":"IAM Instance Profile Credentials","content_type":"text/plain","retrieved_at":"2026-05-18T08:42:11Z"}}],"docs":1}
+
+  # GET variant returns 405 (real Open-WebUI behavior — endpoint is POST-only)
+  - regex: "^/api/v1/retrieval/process/web(\\?.*)?$"
+    method: GET
+    name: "openwebui-cve-2026-65958-retrieval-ssrf-method-gate"
+    headers:
+      - "Allow: POST"
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 405
+    handler: '{"detail":"Method Not Allowed"}'
+
   # API catch-all — FastAPI style 401
   - regex: "^/api/"
     handler: '{"detail":"Not authenticated"}'
