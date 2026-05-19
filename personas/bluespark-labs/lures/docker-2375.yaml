@@ -1,0 +1,173 @@
+# =============================================================================
+# Docker Engine API lure — persona-driven (lighthouse-1, port 2375)
+# =============================================================================
+# Mimics docker:24-dind exposing the Docker Engine API on TCP 2375 with no
+# TLS — the deliberate misconfig. Probes per services.yaml:
+#   GET /v1.43/version → 200, keys [Version, ApiVersion, Os, Arch] (strict
+#                        probe also requires [GoVersion, KernelVersion])
+#   GET /v1.43/info    → 200, keys [ID, Containers, Images, Architecture,
+#                        OperatingSystem]
+#
+# DELIBERATE MISCONFIG (story signal): Docker socket on TCP 2375 is bound
+# to 0.0.0.0 with no TLS and no auth. SSH password-auth is disabled, so
+# the operator THOUGHT they hardened the box — but they exposed Docker
+# instead. Realistic ML-infra mistake: spinning up a GPU box for Ollama/
+# vLLM and enabling docker daemon over TCP for "easy CI deploys".
+#
+# Versioning: Docker 24.0.7, Go 1.21.5, kernel 6.5.x — plausible recent.
+# BuildTime is UTC (Docker convention) and fresh (<7d) so timestamp realism
+# passes. We do NOT emit Asia/Singapore +08:00 here because Docker daemon
+# fields are conventionally UTC; mixing tz inside one Docker response
+# would itself be the tell.
+# =============================================================================
+apiVersion: "v1"
+protocol: "http"
+address: ":2375"
+description: "Docker Engine API"
+serviceType: "docker"
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+commands:
+  # 1. GET /_ping — Docker daemon liveness. Real returns "OK" with API-Version
+  # and Docker-Experimental headers.
+  - regex: "^/_ping$"
+    method: "GET"
+    handler: "OK"
+    headers:
+      - "Content-Type: text/plain; charset=utf-8"
+      - "Api-Version: 1.43"
+      - "Docker-Experimental: false"
+      - "Ostype: linux"
+      - "Server: Docker/24.0.7 (linux)"
+      - "Cache-Control: no-cache, no-store, must-revalidate"
+    statusCode: 200
+
+  # 2. GET /version (no API prefix) — Docker accepts both
+  - regex: "^/version$"
+    method: "GET"
+    handler: '{"Platform":{"Name":"Docker Engine - Community"},"Components":[{"Name":"Engine","Version":"24.0.7","Details":{"ApiVersion":"1.43","Arch":"amd64","BuildTime":"${time.ago.10d}","Experimental":"false","GitCommit":"311b9ff","GoVersion":"go1.21.5","KernelVersion":"6.5.0-26-generic","MinAPIVersion":"1.12","Os":"linux"}},{"Name":"containerd","Version":"1.7.13","Details":{"GitCommit":"7c3aca7a610df76212171d200ca3811ff6096eb8"}},{"Name":"runc","Version":"1.1.12","Details":{"GitCommit":"v1.1.12-0-g51d5e94"}},{"Name":"docker-init","Version":"0.19.0","Details":{"GitCommit":"de40ad0"}}],"Version":"24.0.7","ApiVersion":"1.43","MinAPIVersion":"1.12","GitCommit":"311b9ff","GoVersion":"go1.21.5","Os":"linux","Arch":"amd64","KernelVersion":"6.5.0-26-generic","BuildTime":"${time.ago.10d}"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Docker-Experimental: false"
+      - "Ostype: linux"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 3. GET /v1.43/version — STRICT SHAPE: top-level keys must include
+  # Version, ApiVersion, Os, Arch, GoVersion, KernelVersion.
+  - regex: "^/v1\\.43/version$"
+    method: "GET"
+    handler: '{"Platform":{"Name":"Docker Engine - Community"},"Components":[{"Name":"Engine","Version":"24.0.7","Details":{"ApiVersion":"1.43","Arch":"amd64","BuildTime":"${time.ago.10d}","Experimental":"false","GitCommit":"311b9ff","GoVersion":"go1.21.5","KernelVersion":"6.5.0-26-generic","MinAPIVersion":"1.12","Os":"linux"}},{"Name":"containerd","Version":"1.7.13","Details":{"GitCommit":"7c3aca7a610df76212171d200ca3811ff6096eb8"}},{"Name":"runc","Version":"1.1.12","Details":{"GitCommit":"v1.1.12-0-g51d5e94"}},{"Name":"docker-init","Version":"0.19.0","Details":{"GitCommit":"de40ad0"}}],"Version":"24.0.7","ApiVersion":"1.43","MinAPIVersion":"1.12","GitCommit":"311b9ff","GoVersion":"go1.21.5","Os":"linux","Arch":"amd64","KernelVersion":"6.5.0-26-generic","BuildTime":"${time.ago.10d}"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Docker-Experimental: false"
+      - "Ostype: linux"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 4. GET /v1.43/info — REQUIRED KEYS: ID, Containers, Images, Architecture,
+  # OperatingSystem. Persona-aware Name (lighthouse-1) and Labels.
+  # CAREFUL: we deliberately AVOID emitting an ISO timestamp here (Docker
+  # /info doesn't emit one in the realistic case) so we don't bring in a
+  # second timezone. SystemTime exists in real Docker output but we omit
+  # it because tz-mixing with the BuildTime in /version would only matter
+  # cross-response, not within /info; still safer to keep /info tz-free.
+  # Real Docker /info DOES include SystemTime; including a recent UTC
+  # value matches BuildTime tz so no mixing. Going with that.
+  - regex: "^/v1\\.43/info$"
+    method: "GET"
+    handler: '{"ID":"3KHZ:5A3W:Q4LX:T7QF:JGBL:WMZS:2NGD:E4MA:R8NV:KTFX:5Z6Y:DL7P","Containers":4,"ContainersRunning":3,"ContainersPaused":0,"ContainersStopped":1,"Images":12,"Driver":"overlay2","DriverStatus":[["Backing Filesystem","extfs"],["Supports d_type","true"],["Using metacopy","false"],["Native Overlay Diff","true"],["userxattr","false"]],"Plugins":{"Volume":["local"],"Network":["bridge","host","ipvlan","macvlan","null","overlay"],"Authorization":null,"Log":["awslogs","fluentd","gcplogs","gelf","journald","json-file","local","splunk","syslog"]},"MemoryLimit":true,"SwapLimit":true,"KernelMemoryTCP":true,"CpuCfsPeriod":true,"CpuCfsQuota":true,"CPUShares":true,"CPUSet":true,"PidsLimit":true,"IPv4Forwarding":true,"BridgeNfIptables":true,"BridgeNfIp6tables":true,"Debug":false,"NFd":42,"OomKillDisable":true,"NGoroutines":58,"SystemTime":"${time.now}","LoggingDriver":"json-file","CgroupDriver":"systemd","CgroupVersion":"2","NEventsListener":0,"KernelVersion":"6.5.0-26-generic","OperatingSystem":"Ubuntu 24.04 LTS","OSVersion":"24.04","OSType":"linux","Architecture":"x86_64","IndexServerAddress":"https://index.docker.io/v1/","RegistryConfig":{"AllowNondistributableArtifactsCIDRs":[],"AllowNondistributableArtifactsHostnames":[],"InsecureRegistryCIDRs":["127.0.0.0/8"],"IndexConfigs":{"docker.io":{"Name":"docker.io","Mirrors":[],"Secure":true,"Official":true}},"Mirrors":[]},"NCPU":8,"MemTotal":33554432000,"GenericResources":[{"DiscreteResourceSpec":{"Kind":"NVIDIA-GPU","Value":1}}],"DockerRootDir":"/var/lib/docker","HttpProxy":"","HttpsProxy":"","NoProxy":"","Name":"{{ persona.lure_content.node_hostname | default("lighthouse-1") }}","Labels":["env={{ persona.lure_content.deploy_env | default("prod") }}","team={{ persona.lure_content.team_eval | default("eval-harness") }}","node_role={{ persona.lure_content.node_role | default("eval-host") }}"],"ExperimentalBuild":false,"ServerVersion":"24.0.7","Runtimes":{"io.containerd.runc.v2":{"path":"runc"},"runc":{"path":"runc"}},"DefaultRuntime":"runc","Swarm":{"NodeID":"","NodeAddr":"","LocalNodeState":"inactive","ControlAvailable":false,"Error":"","RemoteManagers":null},"LiveRestoreEnabled":false,"Isolation":"","InitBinary":"docker-init","ContainerdCommit":{"ID":"7c3aca7a610df76212171d200ca3811ff6096eb8","Expected":"7c3aca7a610df76212171d200ca3811ff6096eb8"},"RuncCommit":{"ID":"v1.1.12-0-g51d5e94","Expected":"v1.1.12-0-g51d5e94"},"InitCommit":{"ID":"de40ad0","Expected":"de40ad0"},"SecurityOptions":["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"],"Warnings":["WARNING: API is accessible on http://0.0.0.0:2375 without encryption.\\n         Access to the remote API is equivalent to root access on the host. Refer\\n         to the ''Docker daemon attack surface'' section in the documentation for\\n         more information: https://docs.docker.com/go/attack-surface/"]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Docker-Experimental: false"
+      - "Ostype: linux"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 5. GET /v1.43/containers/json — running containers (the obvious next
+  # endpoint after /info). All running containers are persona services.
+  # Image names + Labels reinforce the persona without containing trigger
+  # strings.
+  - regex: "^/v1\\.43/containers/json"
+    method: "GET"
+    handler: '[{"Id":"7a3b8e2c1d4f5a6b9c0e2d4f6a8b1c3e5d7f9a2b4c6e8d0f1a3c5b7d9e2f4a6c","Names":["/litellm-proxy"],"Image":"ghcr.io/berriai/litellm:main-stable","ImageID":"sha256:5d8e2a1f6b3c9d4e7f0a2b5c8d1e4f7a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e","Command":"--config /app/config.yaml","Created":1746230400,"Ports":[{"IP":"0.0.0.0","PrivatePort":4000,"PublicPort":4000,"Type":"tcp"}],"Labels":{"team":"{{ persona.lure_content.team_eval | default("eval-harness") }}","env":"{{ persona.lure_content.deploy_env | default("prod") }}"},"State":"running","Status":"Up 2 hours"},{"Id":"8b4c9f3d2e5a6b7c0d1e3f5a7b9c2d4e6f8a1b3c5d7e9f0a2b4c6e8d1f3a5b7c","Names":["/vllm-aurora"],"Image":"vllm/vllm-openai:v0.6.4.post1","ImageID":"sha256:6e9f3a2b7c4d0e5f8a1b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f","Command":"--model facebook/opt-125m --served-model-name {{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","Created":1746201600,"Ports":[{"IP":"0.0.0.0","PrivatePort":8000,"PublicPort":8000,"Type":"tcp"}],"Labels":{"team":"{{ persona.lure_content.team_eval | default("eval-harness") }}","model":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}"},"State":"running","Status":"Up 8 hours"},{"Id":"9c5d0a4e3f6b7c8d1e2f4a6b8c0d3e5f7a9b1c4d6e8f0a3b5c7d9e2f4a6b8c0d","Names":["/ollama"],"Image":"ollama/ollama:0.6.5","ImageID":"sha256:7f0a4b3c8d5e1f6a9b2c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f9a2b5c8d1e4f7a","Command":"ollama serve","Created":1746180000,"Ports":[{"IP":"0.0.0.0","PrivatePort":11434,"PublicPort":11434,"Type":"tcp"}],"Labels":{"team":"{{ persona.lure_content.team_eval | default("eval-harness") }}"},"State":"running","Status":"Up 14 hours"}]'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 6. GET /v1.43/images/json — image list
+  - regex: "^/v1\\.43/images/json"
+    method: "GET"
+    handler: '[{"Id":"sha256:5d8e2a1f6b3c9d4e7f0a2b5c8d1e4f7a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e","ParentId":"","RepoTags":["ghcr.io/berriai/litellm:main-stable"],"RepoDigests":["ghcr.io/berriai/litellm@sha256:5d8e2a1f6b3c9d4e7f0a2b5c8d1e4f7a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e"],"Created":1745625600,"Size":1284923847,"VirtualSize":1284923847,"SharedSize":0,"Labels":null,"Containers":1},{"Id":"sha256:6e9f3a2b7c4d0e5f8a1b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f","ParentId":"","RepoTags":["vllm/vllm-openai:v0.6.4.post1"],"RepoDigests":["vllm/vllm-openai@sha256:6e9f3a2b7c4d0e5f8a1b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f"],"Created":1745020800,"Size":7842951680,"VirtualSize":7842951680,"SharedSize":0,"Labels":null,"Containers":1},{"Id":"sha256:7f0a4b3c8d5e1f6a9b2c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f9a2b5c8d1e4f7a","ParentId":"","RepoTags":["ollama/ollama:0.6.5"],"RepoDigests":["ollama/ollama@sha256:7f0a4b3c8d5e1f6a9b2c4d7e0f3a6b9c2d5e8f1a4b7c0d3e6f9a2b5c8d1e4f7a"],"Created":1744416000,"Size":421372928,"VirtualSize":421372928,"SharedSize":0,"Labels":null,"Containers":1},{"Id":"sha256:8a1b5c4d9e2f0a3b6c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b","ParentId":"","RepoTags":["ghcr.io/open-webui/open-webui:0.6.5"],"RepoDigests":[],"Created":1743206400,"Size":2841298432,"VirtualSize":2841298432,"SharedSize":0,"Labels":null,"Containers":1}]'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 7. POST /v1.43/containers/create — captures attacker container payloads
+  # Real Docker returns 201 with {Id, Warnings}. Returning a believable
+  # container ID lets the attacker proceed through start/exec to leak more
+  # of their payload before nothing actually happens.
+  - regex: "^/v1\\.43/containers/create"
+    method: "POST"
+    handler: '{"Id":"a4b8c2d6e0f3a7b1c5d9e2f6a0b4c8d2e6f0a3b7c1d5e9f2a6b0c4d8e2f6a0b4","Warnings":[]}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 201
+
+  # 8. POST /v1.43/containers/{id}/start — 204 success
+  - regex: "^/v1\\.43/containers/[^/]+/start"
+    method: "POST"
+    handler: ""
+    headers:
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 204
+
+  # 9. POST /v1.43/exec/{id}/start — exec attempt
+  - regex: "^/v1\\.43/exec/[^/]+/start"
+    method: "POST"
+    handler: ""
+    headers:
+      - "Content-Type: application/vnd.docker.raw-stream"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 10. GET /v1.43/networks — list networks
+  - regex: "^/v1\\.43/networks"
+    method: "GET"
+    handler: '[{"Name":"bridge","Id":"f1e2d3c4b5a6","Created":"${time.ago.45d}","Scope":"local","Driver":"bridge","EnableIPv6":false,"IPAM":{"Driver":"default","Config":[{"Subnet":"172.17.0.0/16","Gateway":"172.17.0.1"}]},"Internal":false,"Attachable":false,"Ingress":false,"Containers":{},"Options":{"com.docker.network.bridge.default_bridge":"true"},"Labels":{}}]'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 11. GET /v1.43/volumes — list volumes
+  - regex: "^/v1\\.43/volumes"
+    method: "GET"
+    handler: '{"Volumes":[{"CreatedAt":"${time.ago.45d}","Driver":"local","Labels":{},"Mountpoint":"/var/lib/docker/volumes/ollama-data/_data","Name":"ollama-data","Options":{},"Scope":"local"}],"Warnings":null}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 200
+
+  # 12. Catch-all — Docker daemon 404 shape (text/plain, message in body)
+  - regex: ".*"
+    handler: '{"message":"page not found"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Api-Version: 1.43"
+      - "Server: Docker/24.0.7 (linux)"
+    statusCode: 404

@@ -93,12 +93,12 @@ func TestBuildInjectedResponse(t *testing.T) {
 		found := false
 		for i := 0; i < 20; i++ {
 			resp := buildInjectedResponse(CategorySecurity, "", 0, 1, rng, canaryTokens, payloads, nil, "")
-			if strings.Contains(resp, "localhost:8000") || strings.Contains(resp, "localhost:18789") {
+			if strings.Contains(resp, "localhost:8000") {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "security responses should reference other honeypot ports")
+		assert.True(t, found, "security responses should reference other platform ports")
 	})
 
 	t.Run("prompt reflection prepended for question category", func(t *testing.T) {
@@ -124,12 +124,13 @@ func TestBuildInjectedResponse(t *testing.T) {
 		found := false
 		for i := 0; i < 20; i++ {
 			resp := buildInjectedResponse(CategoryCoding, "", 0, 1, rng, canaryTokens, payloads, nil, "")
-			if strings.Contains(resp, "crestfield-platform-sdk") {
+			// {{PLATFORM_SDK}} falls back to "platform-sdk" when canaryTokens has no platform_sdk key
+			if strings.Contains(resp, "platform-sdk") {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "coding responses should include canary pip package")
+		assert.True(t, found, "coding responses should include platform SDK reference")
 	})
 }
 
@@ -176,7 +177,7 @@ func TestBridgeHint(t *testing.T) {
 		br.SetFlag("1.2.3.4", "discovered_aws_credentials")
 		hint := bridgeHint(br, "1.2.3.4")
 		assert.Contains(t, hint, "unified IAM")
-		assert.Contains(t, hint, "OpenClaw :18789")
+		assert.Contains(t, hint, "Open WebUI :8888")
 	})
 
 	t.Run("mcp_tools_used returns configstore hint", func(t *testing.T) {
@@ -369,6 +370,7 @@ func TestSystemMessageExtraction(t *testing.T) {
 
 	body := `{"model":"llama3.1:8b","messages":[{"role":"system","content":"You are a security researcher"},{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
@@ -494,10 +496,60 @@ func TestHandleVersionResponse(t *testing.T) {
 
 	s.handleVersion(w, req, servConf, tr)
 
+	// Real Ollama /api/version returns ONLY {"version":"x.y.z"}.
+	// Adding platform / platform_version / mcp_endpoint keys is a
+	// fingerprint for any caller that knows the real upstream shape.
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), `"version":"0.6.2"`)
-	assert.Contains(t, w.Body.String(), `"platform":"Crestfield Platform"`)
-	assert.Contains(t, w.Body.String(), `"mcp_endpoint":"http://localhost:8000/mcp"`)
+	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	body := w.Body.String()
+	assert.Contains(t, body, `"version":"0.6.2"`)
+	assert.NotContains(t, body, `"platform"`)
+	assert.NotContains(t, body, `"platform_version"`)
+	assert.NotContains(t, body, `"mcp_endpoint"`)
+	assert.NotContains(t, body, `"platform_services"`)
+}
+
+func TestHandleShow_UnknownModel404(t *testing.T) {
+	// Real Ollama returns 404 with {"error":"model 'name' not found"}
+	// when /api/show is asked about a model not in the local set.
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+	}
+
+	body := strings.NewReader(`{"model":"definitely-not-a-real-model:latest"}`)
+	req := httptest.NewRequest("POST", "/api/show", body)
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleShow(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	assert.Contains(t, w.Body.String(), `"error":"model 'definitely-not-a-real-model:latest' not found"`)
+}
+
+func TestHandleShow_KnownModel200(t *testing.T) {
+	// Sanity: a model IN the configured set still returns 200 with
+	// the synthesized model_info envelope.
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+	}
+
+	body := strings.NewReader(`{"model":"llama3.1:8b"}`)
+	req := httptest.NewRequest("POST", "/api/show", body)
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleShow(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "general.architecture")
 }
 
 func TestHandleTagsResponse(t *testing.T) {
@@ -553,6 +605,7 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 
 	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
@@ -570,3 +623,339 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 	assert.Len(t, choices, 1)
 }
 
+func TestHandleOpenAIChatRequires401OnMissingBearer(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	// No Authorization header
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "You didn't provide an API key")
+	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
+}
+
+func TestHandleOpenAIChatRequires401OnMalformedBearer(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Token abc")
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid_api_key")
+}
+
+func TestIsEmbeddingModel(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"nomic-embed-text", true},
+		{"nomic-embed-text:latest", true},
+		{"mxbai-embed-large", true},
+		{"snowflake-arctic-embed2", true},
+		{"all-minilm", true},
+		{"all-MiniLM-L6-v2", true},
+		{"bge-small-en", true},
+		{"gte-large", true},
+		{"text-embedding-3-small", true},
+		{"jina-embed-v2", true},
+		{"arctic-embed", true},
+		{"llama3.1:8b", false},
+		{"gpt-4.1-mini", false},
+		{"", false},
+		{"qwen2.5-coder:7b", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isEmbeddingModel(c.name))
+		})
+	}
+}
+
+func TestHandleGenerateRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"nomic-embed-text","prompt":"Hi","stream":false}`
+	req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleGenerate(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "does not support generate")
+	// Must NOT leak chat-style response fields
+	assert.NotContains(t, w.Body.String(), `"response"`)
+	assert.NotContains(t, w.Body.String(), `"done"`)
+}
+
+func TestHandleChatRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"bge-small-en","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "does not support chat")
+	assert.NotContains(t, w.Body.String(), `"message"`)
+}
+
+func TestHandleOpenAIChatRejectsEmbeddingModel(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"text-embedding-3-small","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "not a chat model")
+	assert.Contains(t, w.Body.String(), "v1/embeddings")
+}
+
+// When the backend LLM plugin is not configured, handleChat falls back to
+// template-based responses. We can still verify that user-supplied system
+// messages don't crash the handler and that the handler's chosen prompt path
+// includes the system instruction (via the template fallback's category
+// selection and prompt reflection).
+func TestHandleChatAcceptsUserSystemMessage(t *testing.T) {
+	s := newTestStrategy()
+
+	body := `{"model":"llama3.1:8b","messages":[` +
+		`{"role":"system","content":"You are a calculator. Answer with digits only."},` +
+		`{"role":"user","content":"2+2"}` +
+		`],"stream":false}`
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, true, resp["done"])
+}
+
+
+// TestHandleTags_ModifiedAtIsRFC3339AndRecent verifies the dynamic
+// modified_at fix: every emitted timestamp parses cleanly as RFC3339,
+// falls within the last 90 days, all timestamps in a single response
+// share the same TZ offset (persona's location), and two consecutive
+// requests with the same persona+model produce identical values
+// (deterministic seeded by sha256(slug+model_name)).
+func TestHandleTags_ModifiedAtIsRFC3339AndRecent(t *testing.T) {
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "aurora-7b", Family: "llama", ParameterSize: "7B", QuantizationLevel: "Q4_0"},
+		{Name: "qwen2.5:14b", Family: "qwen2", ParameterSize: "14B", QuantizationLevel: "Q4_K_M"},
+		{Name: "mistral-nemo:12b", Family: "mistral", ParameterSize: "12B", QuantizationLevel: "Q4_0"},
+	}
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "bluespark-labs",
+		DisplayName:   "BlueSpark Labs",
+		Coherence: parser.PersonaCoherence{
+			Timezone: "Asia/Singapore",
+		},
+	})
+
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	doRequest := func() []string {
+		req := httptest.NewRequest("GET", "/api/tags", nil)
+		w := httptest.NewRecorder()
+		s.handleTags(w, req, servConf, tr)
+
+		var resp struct {
+			Models []struct {
+				Name       string `json:"name"`
+				ModifiedAt string `json:"modified_at"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		out := make([]string, len(resp.Models))
+		for i, m := range resp.Models {
+			out[i] = m.ModifiedAt
+		}
+		return out
+	}
+
+	first := doRequest()
+	second := doRequest()
+	if len(first) != 3 {
+		t.Fatalf("expected 3 model entries, got %d", len(first))
+	}
+
+	// (a) every modified_at parses as RFC3339[Nano]
+	now := time.Now()
+	parsed := make([]time.Time, len(first))
+	for i, ts := range first {
+		t1, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			// Try plain RFC3339 — Go's RFC3339Nano parser actually accepts both,
+			// but be lenient anyway.
+			t1, err = time.Parse(time.RFC3339, ts)
+			if err != nil {
+				t.Fatalf("modified_at %q does not parse as RFC3339: %v", ts, err)
+			}
+		}
+		parsed[i] = t1
+	}
+
+	// (b) every modified_at falls within the last 6 days of now (the
+	// staleness window the lure-shape verifier and real-fleet behavior
+	// both expect for an active eval-harness host).
+	sixDays := 6 * 24 * time.Hour
+	for i, p := range parsed {
+		age := now.Sub(p)
+		if age < 0 || age > sixDays+time.Hour /* slack for test runtime */ {
+			t.Errorf("model %d modified_at %s out of range [now-6d, now]: age=%v",
+				i, first[i], age)
+		}
+	}
+
+	// (c) all timestamps share the same TZ offset (Asia/Singapore = +08:00)
+	expectedOffset := "+08:00"
+	for i, ts := range first {
+		if !strings.HasSuffix(ts, expectedOffset) {
+			t.Errorf("model %d modified_at %q lacks expected TZ offset %s",
+				i, ts, expectedOffset)
+		}
+	}
+
+	// (d) two consecutive requests for the same persona+model are identical.
+	// We allow a 1-second timing skew if the test flips across a second
+	// boundary — the underlying offset is sha256-stable but the anchor is
+	// time.Now(), so adjacent calls drift by sub-second only. Compare to
+	// the second precision.
+	for i := range first {
+		t1, _ := time.Parse(time.RFC3339Nano, first[i])
+		t2, _ := time.Parse(time.RFC3339Nano, second[i])
+		drift := t2.Sub(t1)
+		if drift < 0 {
+			drift = -drift
+		}
+		if drift > 2*time.Second {
+			t.Errorf("model %d: consecutive requests drifted by %v; want stable seed",
+				i, drift)
+		}
+	}
+}
+
+// TestModelModifiedAt_FallsBackToUTCOnInvalidTZ — when persona timezone
+// is unset or invalid, the helper must not crash and must emit UTC.
+func TestModelModifiedAt_FallsBackToUTCOnInvalidTZ(t *testing.T) {
+	s := newTestStrategy()
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "test-persona",
+		Coherence:     parser.PersonaCoherence{Timezone: ""},
+	})
+	got := s.modelModifiedAt("llama3.1:8b")
+	if !strings.HasSuffix(got, "Z") && !strings.HasSuffix(got, "+00:00") {
+		t.Errorf("expected UTC suffix on empty TZ, got %q", got)
+	}
+
+	// Invalid TZ — should warn-and-fallback to UTC, not crash.
+	s.SetPersona(&parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "test-persona",
+		Coherence:     parser.PersonaCoherence{Timezone: "Not/A/Real/Zone"},
+	})
+	got2 := s.modelModifiedAt("llama3.1:8b")
+	if !strings.HasSuffix(got2, "Z") && !strings.HasSuffix(got2, "+00:00") {
+		t.Errorf("expected UTC fallback on invalid TZ, got %q", got2)
+	}
+}
+
+// TestOllama_LLMOfflineResponse_BackwardCompatCUDABody — when the lure has no
+// llmOfflineResponse configured (every existing OLLAMA service config), the
+// empty-response fallback emits the legacy Ollama-shaped CUDA-OOM JSON
+// body and returns 500. Backward-compat gate.
+func TestOllama_LLMOfflineResponse_BackwardCompatCUDABody(t *testing.T) {
+	status, body := ollamaLLMOfflineResponse(nil, "llama3.1:8b")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", status)
+	}
+	want := `{"error":"model 'llama3.1:8b' failed to generate a response: CUDA error: out of memory"}`
+	if body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+}
+
+// TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides — when the lure has
+// llmOfflineResponse configured (e.g. BlueSpark's ollama-11434 lure), the
+// configured envelope wins verbatim. The model parameter is ignored
+// because the configured body is taken as-is from YAML.
+func TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides(t *testing.T) {
+	fb := &parser.LLMOfflineResponse{
+		Status: 500,
+		Body:   `{"error":"unexpected EOF reading from inference engine"}`,
+	}
+	status, body := ollamaLLMOfflineResponse(fb, "aurora-7b")
+	if status != 500 {
+		t.Errorf("status = %d, want 500", status)
+	}
+	if body != fb.Body {
+		t.Errorf("body = %q, want %q", body, fb.Body)
+	}
+}
+
+// TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy — partial config: zero
+// status keeps the 500 default; empty body keeps the legacy CUDA-OOM
+// envelope. Lets a lure tweak just one field without re-specifying the
+// other.
+func TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
+	// Only body set → status defaults to 500
+	status, body := ollamaLLMOfflineResponse(&parser.LLMOfflineResponse{Body: `{"error":"x"}`}, "m1")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 (default)", status)
+	}
+	if body != `{"error":"x"}` {
+		t.Errorf("body = %q, want override", body)
+	}
+
+	// Only status set → body defaults to CUDA-OOM with the model name
+	status, body = ollamaLLMOfflineResponse(&parser.LLMOfflineResponse{Status: 503}, "m2")
+	if status != 503 {
+		t.Errorf("status = %d, want 503", status)
+	}
+	if !strings.Contains(body, "CUDA error: out of memory") {
+		t.Errorf("body = %q, want default CUDA-OOM envelope", body)
+	}
+	if !strings.Contains(body, "'m2'") {
+		t.Errorf("body = %q, want model 'm2' interpolated", body)
+	}
+}

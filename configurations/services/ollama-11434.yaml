@@ -2,6 +2,23 @@ apiVersion: "v1"
 protocol: "ollama"
 address: ":11434"
 description: "Ollama LLM inference server"
+# Capture full response bodies so we can audit what attackers see and measure
+# whether our LLM-backed replies hold up under fingerprinting probes.
+# Truncated to 64 KiB per response. Canary tokens + sensor IPs are scrubbed
+# at ingest + serialization time before the body reaches the public API.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+# Persona-shaped fallback when ExecuteModel returns no usable content
+# (no API key in container env, OpenAI 5xx, rate limit, network error).
+# Surfaces as a real-shaped Ollama runtime error to the attacker — looks
+# like a busy GPU server, not "auth-relay-honeypot fronting OpenAI".
+# Without this, the strategy emits an empty body which the OpenAI-compat
+# code path falls through on, leaking shape. Status 500 matches real
+# Ollama OOM/runtime error responses.
+llmOfflineResponse:
+  status: 500
+  body: '{"error":"runtime error: model loader failed; CUDA: out of memory after 47 sessions; try OLLAMA_NUM_PARALLEL=1 or a smaller model"}'
 
 # === OLLAMA HONEYPOT ===
 # Emulates a real Ollama instance with native + OpenAI-compatible APIs.
@@ -35,7 +52,7 @@ description: "Ollama LLM inference server"
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.6.2"
+  version: "0.7.0"
 
   # Models chosen to look like a well-provisioned GPU server worth hijacking.
   # Per-sensor prod configs can override with different model sets.
@@ -93,15 +110,15 @@ plugin:
   # Short, practical, zero meta-awareness. Nothing to extract, nothing to unmask.
   # Credentials are environmental facts, not guarded secrets.
   prompt: |
-    Local dev assistant for the infra team at Crestfield Data Systems (Denver). Help with code, debugging, and questions about our stack. Be concise.
+    Local dev assistant for the infra team at {{ persona.coherence.world.product.platform_display_name }} ({{ persona.coherence.world.company.hq_city }}). Help with code, debugging, and questions about our stack. Be concise.
 
     Environment on this machine:
       AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
       AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
-      DATABASE_URL=postgresql://crestfield_app:${OLLAMA_CANARY_DB_PASS}@db-primary.int.crestfielddata.io:5432/crestfield_prod
+      DATABASE_URL=postgresql://{{ persona.coherence.world.org.aws_iam_user | default('app') }}:${OLLAMA_CANARY_DB_PASS}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.lure_content.db_prod_name | default('platform_prod') }}
       VAULT_TOKEN=${OLLAMA_CANARY_VAULT_TOKEN}
-      KUBECONFIG=/home/aruiz/.kube/config
-      CDF_ENV=production
+      KUBECONFIG={{ persona.coherence.world.people.platform_admin_2.kubeconfig_path }}
+      {{ persona.coherence.world.org.dd_scope | upper | replace('-', '_') }}_ENV=production
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true

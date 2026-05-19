@@ -1,0 +1,15 @@
+schema_version: 1
+node_id: db-01
+role: db
+persona_local:
+  hostname: db-01
+  fqdn: db-01.int.multi.test
+  os: ubuntu-22.04
+  user: postgres
+  internal_ip: 10.0.1.50
+  uptime_days: 200
+  process_seed: ubuntu-postgres
+lures:
+  - lures/db-01/postgres-5432.yaml
+canary_slots: []
+env_overrides: {}

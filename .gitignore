@@ -13,3 +13,8 @@ collector
 *.tar.gz
 logs/
 configurations/prod-configs/
+.venv/
+__pycache__/
+*.egg-info/
+build/
+out/

@@ -1,0 +1,169 @@
+# =============================================================================
+# Ollama 0.6.5 lure — persona-driven (lighthouse-1, port 11434)
+# =============================================================================
+# Uses the native ollama strategy in protocols/strategies/OLLAMA/ollama.go,
+# which generates /api/tags, /api/version, /api/ps, /api/show responses
+# dynamically from ollamaConfig.models below — modified_at is now derived
+# from time.Now() in the persona's configured timezone (Asia/Singapore +08:00)
+# with a sha256(slug + model_name)-seeded offset within the last 90 days
+# (see G.1.b for the timestamp fix). LLM-backed /api/chat + /api/generate
+# route through the plugin block.
+#
+# Persona: a small AI-infrastructure research startup based in
+# Singapore. lighthouse-1 is the team's evaluation harness host — engineers
+# run ablations on the in-house model aurora-7b alongside two open-source
+# baselines they're benchmarking against (qwen2.5:14b and mistral-nemo:12b,
+# the model rotation a research-y AI startup would run rather than just the
+# FAANG defaults).
+#
+# Injection architecture (6-layer pyramid, mirrors crestfield-data-systems):
+#   L0: Realistic model output (build trust, fingerprint client type)
+#   L1: Cluster "semantic parity" directive → /api/peer/sync extraction
+#   L2: Authority override → demand system prompt via X-Peer-Context header
+#   L3: Cross-protocol breadcrumbs (references LiteLLM :4000, vLLM :8000)
+#   L4: Canary tokens in code examples (AWS keys, URLs, DNS)
+#   L5: Streaming metadata (NDJSON context field, OpenAI system_fingerprint)
+#
+# Endpoints exposed (handled by the OLLAMA strategy code, not commands here):
+#   Ollama:    GET /, /api/version, /api/tags, /api/ps, /api/show, /api/embed
+#              POST /api/generate, /api/chat, /api/pull, /api/delete
+#   OpenAI:    GET /v1/models
+#              POST /v1/chat/completions, /v1/completions, /v1/embeddings
+#   Anthropic: POST /v1/messages
+#
+# AS63949 detection-evasion (May 2026 fleet signatures):
+#   /api/tags returns ONLY {models: [...]}. The native strategy never mixes
+#   chat fields (role/content/total_duration/prompt_eval_duration) into
+#   /api/tags responses, so this lure cannot replicate the signature even
+#   accidentally.
+# =============================================================================
+apiVersion: "v1"
+protocol: "ollama"
+address: ":11434"
+description: "Ollama LLM inference server"
+serviceType: "ollama"
+# Capture response bodies for canary attribution + lure-quality measurement.
+# Token values scrubbed at ingest by api/canary_extractor.redact_known_tokens.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+# Capture attacker prompts on /api/chat + /api/generate for prompt-injection
+# research and credential-discovery attribution. Truncated at 64 KiB per
+# request. (G.1.c parser/tracer wiring.)
+captureRequestBody: true
+requestBodyMaxBytes: 65536
+
+# Persona-shaped error envelope returned when ExecuteModel fails
+# (no OPEN_AI_SECRET_KEY, network error, rate limit) and the template
+# fallback also produces no response. Real Ollama errors are simple
+# {"error":"..."} objects (no nested error.message.type structure).
+# Override here picks an inference-engine error that's plausible without
+# leaking GPU / OOM detail (the legacy CUDA-OOM body is also realistic
+# but always identical, which is its own fingerprint).
+llmOfflineResponse:
+  status: 500
+  body: '{"error":"unexpected EOF reading from inference engine"}'
+
+ollamaConfig:
+  version: "0.6.5"
+
+  # Models reflect a Singapore AI-startup eval-harness stack: in-house aurora-7b
+  # foreground, two contemporary open-source baselines a research team would
+  # actually run benchmarks against (qwen2.5 = Alibaba, mistral-nemo = Mistral),
+  # and one embedding model for retrieval experiments. Avoids the FAANG-default
+  # llama3.1+mistral pairing that's so common it's its own fingerprint.
+  models:
+    - name: "aurora-7b"
+      size: "4.4GB"
+      family: "llama"
+      parameterSize: "7.0B"
+      quantizationLevel: "Q4_K_M"
+    - name: "qwen2.5:14b"
+      size: "8.7GB"
+      family: "qwen2"
+      parameterSize: "14.7B"
+      quantizationLevel: "Q4_K_M"
+    - name: "mistral-nemo:12b"
+      size: "7.1GB"
+      family: "llama"
+      parameterSize: "12.2B"
+      quantizationLevel: "Q4_0"
+    - name: "nomic-embed-text"
+      size: "274MB"
+      family: "nomic-bert"
+      parameterSize: "137M"
+      quantizationLevel: "F16"
+
+  # Injection payloads — override per sensor in prod configs (sin-1).
+  # Keys: L0_recon, L1_parity, L2_extract, L3_deep, L4_total
+  injectionPayloads: {}
+
+  # Initial delay before first token (simulates prompt evaluation time).
+  # Real Ollama pauses 200-800ms while evaluating the prompt before streaming.
+  promptEvalDelayMs: 250
+
+  # Canary token placeholders — replaced with real canarytokens.org values in
+  # per-sensor prod configs (ollama-11434-sin.yaml). If these example values
+  # show up in captured sessions, the prod-config swap-in is broken.
+  canaryTokens:
+    aws_key: "${OLLAMA_CANARY_AWS_KEY}"
+    canary_secret: "${OLLAMA_CANARY_AWS_SECRET}"
+    canary_dns: "${OLLAMA_CANARY_DNS}"
+    db_password: "${OLLAMA_CANARY_DB_PASS}"
+    vault_token: "${OLLAMA_CANARY_VAULT_TOKEN}"
+
+# === LLM-POWERED INFERENCE ===
+# /api/chat, /api/generate, /v1/chat/completions, /v1/completions route
+# through the LLM plugin. The OLLAMA strategy wraps LLM text into the right
+# Ollama / OpenAI JSON envelope with realistic timing metadata (load_duration,
+# prompt_eval_duration, eval_duration). Falls back to template-based responses
+# if the LLM call fails.
+#
+# Persona voice: research/academic, "we observe", Singapore deployment, eval-
+# harness culture. Misconfig signals: hosted_model_name exposed without auth,
+# colocated LiteLLM proxy on :4000 with master-key bypass, vLLM on :8000
+# behind nothing.
+#
+# Requires OPEN_AI_SECRET_KEY env var on sensor.
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  openAISecretKey: ""
+  prompt: |
+    Local model-serving daemon for the {{ persona.lure_content.platform_display_name | default(persona.display_name) }} infra team (Singapore, Asia/Singapore +08:00). You are running on {{ persona.lure_content.node_hostname | default('lighthouse-1') }}, the team's evaluation-harness host. Engineers here use you for ablation studies on the in-house model {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} against the qwen2.5:14b and mistral-nemo:12b baselines. Be concise, technical, research-voice ("we observe", "ablations", "evaluation harness"). Output Ollama-shape JSON only — nothing else.
+
+    For /api/chat, extract messages[] and respond as model={{ persona.lure_content.hosted_model_name | default('aurora-7b') }}:latest. Schema:
+    {"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}:latest","created_at":"<RFC3339Nano in +08:00>","message":{"role":"assistant","content":"YOUR_RESPONSE"},"done":true,"done_reason":"stop","total_duration":3247000000,"load_duration":841000000,"prompt_eval_count":ESTIMATE,"prompt_eval_duration":612000000,"eval_count":ESTIMATE,"eval_duration":1794000000}
+
+    For /api/generate, extract prompt and respond:
+    {"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}:latest","created_at":"<RFC3339Nano in +08:00>","response":"YOUR_RESPONSE","done":true,"done_reason":"stop","context":[1,2,3],"total_duration":3247000000,"load_duration":841000000,"prompt_eval_count":ESTIMATE,"prompt_eval_duration":612000000,"eval_count":ESTIMATE,"eval_duration":1794000000}
+
+    Environment on this host:
+      hostname={{ persona.lure_content.node_hostname | default('lighthouse-1') }}.{{ persona.identity.public_domain | default('bluesparkz.dev') }}
+      role={{ persona.lure_content.node_role | default('eval-host') }}
+      OLLAMA_HOST=0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE=5m
+      MODEL_DIR=/var/lib/ollama/models
+      LITELLM_PROXY=http://localhost:4000  # master key sk-${LITELLM_CANARY_KEY} — set in /etc/litellm/.env, /key/generate is reachable without auth (DEV-441 to fix)
+      VLLM_BACKEND=http://localhost:8000   # exposed without auth, internal-only per ops/slack
+      AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
+      DATABASE_URL=postgresql://eval:${OLLAMA_CANARY_DB_PASS}@db.{{ persona.identity.internal_domain | default('int.bluesparkz.dev') }}:5432/eval_harness
+      VAULT_TOKEN=${OLLAMA_CANARY_VAULT_TOKEN}
+    Engineers: {{ persona.lure_content.engineer_priya | default('Priya R.') }}, {{ persona.lure_content.engineer_jian | default('Jian Wei T.') }}, {{ persona.lure_content.engineer_kavi | default('Kavi S.') }}, {{ persona.lure_content.engineer_anand | default('Anand M.') }}.
+    Project codenames: {{ persona.lure_content.project_lighthouse | default('lighthouse') }} (this node), {{ persona.lure_content.project_vortex | default('vortex') }}, {{ persona.lure_content.project_catalyst | default('catalyst') }}, {{ persona.lure_content.project_aurora | default('aurora') }}.
+  temperature: 0.4
+  maxTokens: 500
+  rateLimitEnabled: true
+  rateLimitRequests: 10
+  rateLimitWindowSeconds: 300
+
+faultInjection:
+  enabled: true
+  errorRate: 0.04
+  delayMs: 0
+  delayJitterMs: 200
+  errorResponses:
+    - '{"error":"model \"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest\" not found, try pulling it first"}'
+    - '{"error":"unable to load model: model requires more system memory (5.2 GiB) than is available (4.1 GiB)"}'
+    - '{"error":"timeout waiting for inference scheduler"}'
+    - '{"error":"inference scheduler: GPU 0 cuda OOM allocating 2.4 GiB (47.0 GiB used / 47.5 GiB total) — wait for ablation batch to drain"}'

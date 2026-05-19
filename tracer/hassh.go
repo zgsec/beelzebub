@@ -82,3 +82,71 @@ func ComputeHASSH(raw []byte) string {
 	hash := md5.Sum([]byte(input))
 	return fmt.Sprintf("%x", hash)
 }
+
+// HASSHResult contains both the HASSH hash and the raw algorithm lists.
+// The hash is the standard HASSH fingerprint. The raw lists enable:
+// - Clustering by SSH library version (not just by algorithm set)
+// - Distinguishing clients that share the same algorithm set but differ in preference order
+// - Detecting algorithm negotiation anomalies (unusual combinations, deprecated algorithms)
+type HASSHResult struct {
+	Hash        string // MD5 hash (the standard HASSH fingerprint)
+	RawInput    string // semicolon-joined algorithm lists (the HASSH input string before hashing)
+	KexAlgos    string // kex_algorithms (index 0)
+	EncAlgos    string // encryption_algorithms_client_to_server (index 2)
+	MacAlgos    string // mac_algorithms_client_to_server (index 4)
+	CompAlgos   string // compression_algorithms_client_to_server (index 6)
+}
+
+// ComputeHASSHFull returns both the hash and raw algorithm lists.
+// Returns nil on any parse error. Never panics.
+func ComputeHASSHFull(raw []byte) *HASSHResult {
+	nl := bytes.IndexByte(raw, '\n')
+	if nl < 0 || nl+6 > len(raw) {
+		return nil
+	}
+	rest := raw[nl+1:]
+
+	if len(rest) < 5 {
+		return nil
+	}
+	packetLen := int(binary.BigEndian.Uint32(rest[:4]))
+	paddingLen := int(rest[4])
+	if packetLen < 2 || packetLen > 35000 {
+		return nil
+	}
+	payload := rest[5:]
+	payloadLen := packetLen - paddingLen - 1
+	if payloadLen < 18 || len(payload) < payloadLen {
+		return nil
+	}
+	payload = payload[:payloadLen]
+	if payload[0] != 20 {
+		return nil
+	}
+	pos := 17
+
+	lists := make([]string, 0, 10)
+	for i := 0; i < 10; i++ {
+		if pos+4 > len(payload) {
+			return nil
+		}
+		listLen := int(binary.BigEndian.Uint32(payload[pos : pos+4]))
+		pos += 4
+		if pos+listLen > len(payload) {
+			return nil
+		}
+		lists = append(lists, string(payload[pos:pos+listLen]))
+		pos += listLen
+	}
+
+	input := lists[0] + ";" + lists[2] + ";" + lists[4] + ";" + lists[6]
+	hash := md5.Sum([]byte(input))
+	return &HASSHResult{
+		Hash:     fmt.Sprintf("%x", hash),
+		RawInput: input,
+		KexAlgos: lists[0],
+		EncAlgos: lists[2],
+		MacAlgos: lists[4],
+		CompAlgos: lists[6],
+	}
+}

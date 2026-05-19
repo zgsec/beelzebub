@@ -1,0 +1,187 @@
+# Lure realism allowlist — what counts as a "real-looking" value vs a fictional
+# product name or fingerprint that flags us as a honeypot.
+#
+# Curated from observed real-world deployments + upstream product docs.
+# Read by tools/lure_lint.py to catch leaks at edit time.
+#
+# Updated:  2026-05-06 — initial extract from Phase A+C lessons
+
+# ---------------------------------------------------------------------------
+# Server / X-Powered-By / X-Generator etc. — values that look like a real
+# product. Match is substring-against-allowlist (case-insensitive).
+# Anything that doesn't match flags as "potential fictional product name".
+# ---------------------------------------------------------------------------
+known_servers:
+  - nginx              # most common edge proxy
+  - apache             # apache httpd
+  - caddy              # caddy server
+  - lighttpd           # lighttpd
+  - openresty          # openresty (nginx fork)
+  - cloudflare         # cloudflare edge
+  - cloudfront         # AWS CloudFront
+  - uvicorn            # ASGI server (Python)
+  - gunicorn           # WSGI server (Python)
+  - hypercorn          # ASGI server
+  - daphne             # ASGI server (Django Channels)
+  - kestrel            # .NET kestrel
+  - werkzeug           # Flask dev (less common in prod)
+  - tornado            # Tornado server
+  - microsoft-iis      # IIS
+  - iis                # IIS short
+  - jetty              # Eclipse Jetty
+  - tomcat             # Apache Tomcat
+  - undertow           # JBoss Undertow
+  - go                 # net/http default
+  - fasthttp           # fasthttp
+  - httpd              # generic httpd
+  - envoy              # Envoy proxy
+  - haproxy            # HAProxy
+  - traefik            # Traefik proxy
+  - awselb             # AWS ELB / ALB
+  - aws                # AWS Lambda / etc.
+  - k8s                # Kubernetes ingress
+  # Specific real product servers
+  - ollama             # ollama emits empty Server but adds Ollama-Version
+  - prometheus         # prom http server
+  - grafana            # grafana web
+  - jupyter            # jupyter
+  - openwebui          # rare; usually behind uvicorn
+  # Real AI/ML stack products that publish their name in Server headers
+  - vllm               # vLLM inference server (real)
+  - lmdeploy           # LMDeploy inference (real)
+  - litellm            # LiteLLM proxy emits litellm in Server-class headers
+  - influxdb           # InfluxDB DB
+  - clickhouse         # ClickHouse
+  - elasticsearch      # ES
+  - redis              # redis-server
+  - mongodb            # mongod
+  # Other commonly-impersonated products
+  - docker             # Docker daemon API (Server: Docker/x.y.z (linux))
+  - grandstream        # Grandstream VoIP gateways
+  - screenconnect      # ConnectWise ScreenConnect
+
+# ---------------------------------------------------------------------------
+# Headers that should NEVER appear on lure responses — they leak persona
+# internals or are otherwise unused by the real services we mimic.
+# ---------------------------------------------------------------------------
+banned_headers:
+  - X-Platform           # leaks persona display name (today's #9)
+  - X-Internal-Service   # any explicitly internal marker
+  - X-Honeypot           # blatant
+  - X-Lure               # blatant
+  - X-Beelzebub          # blatant
+  - X-Persona            # any persona attribution
+
+# ---------------------------------------------------------------------------
+# Hardcoded request ID literals are a one-shot fingerprint across requests
+# and across sensors. Either use the ${request.uuid*} runtime substitution
+# or omit the header entirely. Specific known-bad literals to flag.
+# ---------------------------------------------------------------------------
+banned_request_ids:
+  - "req_a1b2c3d4"       # the literal we found in Crestfield
+  - "7a2f4e18-b3c1-4d5e-9f6a-8b7c2d1e0f3a"  # InfluxDB literal
+  - "8c3e5f29-d4a2-4b6f-a071-9c8d3e2f1a4b"  # InfluxDB second literal
+  - "00000000-0000-0000-0000-000000000000"  # null UUID
+  - "deadbeef"
+  - "cafecafe"
+# Pattern detection: any X-Request-Id value that's a static literal (no
+# ${request.*} placeholder) flags as suspicious. The lint rule does
+# regex detection regardless of this list.
+
+# ---------------------------------------------------------------------------
+# Per-service expected HTTP methods. Used to flag missing method: gates on
+# commands whose path is a known POST-only or GET-only endpoint of a real
+# product. Service is detected from the lure file name.
+# ---------------------------------------------------------------------------
+expected_methods:
+  ollama:
+    GET:
+      - "^/$"
+      - "^/api/version$"
+      - "^/api/tags$"
+      - "^/api/ps$"
+    POST:
+      - "^/api/show$"
+      - "^/api/embed$"
+      - "^/api/embeddings$"
+      - "^/api/generate$"
+      - "^/api/chat$"
+      - "^/api/pull$"
+      - "^/api/push$"
+      - "^/api/copy$"
+      - "^/api/create$"
+    DELETE:
+      - "^/api/delete$"
+
+  openai-compatible:
+    # litellm, openai-compat, vllm /v1/* surface
+    GET:
+      - "^/(v1/)?models$"
+      - "^/health"
+      - "^/version$"
+      - "^/docs$"
+      - "^/openapi.json$"
+      - "^/metrics$"
+      - "^/key/info$"
+    POST:
+      - "^/(v1/)?chat/completions$"
+      - "^/(v1/)?completions$"
+      - "^/(v1/)?embeddings$"
+      - "^/key/generate$"
+      - "^/prompts/test$"
+      - "^/mcp-rest/test/connection$"
+      - "^/mcp-rest/test/tools/list$"
+
+  influxdb:
+    GET:
+      - "^/$"
+      - "^/ping$"
+      - "^/health$"
+      - "^/debug/vars$"
+    POST:
+      - "^/write"
+      - "^/query"
+      - "^/api/v2/write"
+      - "^/api/v2/query"
+
+  open-webui:
+    POST:
+      - "^/api/v1/auths/signin$"
+      - "^/api/v1/auths/signup$"
+      - "^/api/v1/chats$"
+      - "^/api/chat$"
+    GET:
+      - "^/$"
+      - "^/health$"
+      - "^/api/config$"
+      - "^/api/models$"
+      - "^/api/v1/users$"
+      - "^/api/v1/users/me$"
+      - "^/api/v1/chats/list$"
+
+  mcp:
+    # MCP HTTP-Stream — POST for JSON-RPC, GET for SSE upgrade.
+    POST:
+      - "^/mcp$"
+      - "^/message$"
+    GET:
+      - "^/sse$"
+      - "^/mcp$"          # spec allows GET for SSE upgrade
+
+# ---------------------------------------------------------------------------
+# Real upstream version strings. Bump these when upstream releases.
+# Linter warns if a lure declares a version that's not in this list (i.e.,
+# either ahead-of-upstream or stale beyond the staleness window).
+# ---------------------------------------------------------------------------
+known_versions:
+  ollama:
+    current: ["0.6.2", "0.5.13", "0.5.7"]
+    staleness_warn_days: 90
+  open-webui:
+    current: ["0.5.3", "0.5.2", "0.4.8"]
+  litellm:
+    current: ["1.83.6", "1.83.7", "1.55.10"]   # 1.83.6 is the CVE-vuln one we lure with
+  influxdb:
+    current: ["1.8.10", "2.7.x"]
+  vllm:
+    current: ["0.6.x", "0.7.x"]

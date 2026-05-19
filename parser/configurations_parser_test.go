@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func mockReadfilebytesConfigurationsCore(filePath string) ([]byte, error) {
@@ -540,4 +541,162 @@ func TestToolAnnotationsHashCodeStability(t *testing.T) {
 	hashCode, errHashCode := beelzebubServicesConfiguration[0].HashCode()
 	assert.Nil(t, errHashCode)
 	assert.Equal(t, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c", hashCode)
+}
+
+func TestStateField_OmittedHashCodeStable(t *testing.T) {
+	// A pre-State-feature service must hash to the same value with the
+	// State pointer present-but-nil as without it. This is the
+	// backwards-compat invariant that lets Beelzebub Cloud track
+	// existing services across the framework upgrade.
+	// State is *State (pointer) so that json omitempty truly omits the
+	// field when nil — a zero-value struct would still serialize as "{}".
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.State = nil // nil pointer — must be omitted by json encoder
+	h2, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatalf("HashCode changed by setting nil State: %s != %s", h1, h2)
+	}
+}
+
+func TestStateField_PopulatedHashChanges(t *testing.T) {
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, _ := cfg.HashCode()
+	cfg.State = &State{CookieName: ".ASPXAUTH", TTLSeconds: 1800}
+	h2, _ := cfg.HashCode()
+	if h1 == h2 {
+		t.Fatal("populated State did not change hash")
+	}
+}
+
+func TestScreenConnectYAML_Parses(t *testing.T) {
+	data, err := os.ReadFile("../configurations/services/screenconnect-8042.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if cfg.Address != ":8042" {
+		t.Errorf("address: want :8042, got %q", cfg.Address)
+	}
+	if cfg.State == nil {
+		t.Fatal("State is nil — config did not bind state: block")
+	}
+	if cfg.State.CookieName != ".ASPXAUTH" {
+		t.Errorf("cookieName: want .ASPXAUTH, got %q", cfg.State.CookieName)
+	}
+	if cfg.State.TTLSeconds != 1800 {
+		t.Errorf("ttlSeconds: want 1800, got %d", cfg.State.TTLSeconds)
+	}
+	if cfg.State.ArtifactPath == "" {
+		t.Error("artifactPath unset")
+	}
+	if len(cfg.Commands) != 11 {
+		t.Errorf("commands: want 11, got %d", len(cfg.Commands))
+	}
+	// Verify all three stateful field flags are present across the command set
+	var foundCreate, foundRequire, foundArtifact bool
+	for _, c := range cfg.Commands {
+		if c.SessionAction == "create" {
+			foundCreate = true
+			if len(c.SessionCapture) != 2 {
+				t.Errorf("create cmd should have 2 captures, got %d", len(c.SessionCapture))
+			}
+		}
+		if c.SessionAction == "require" {
+			foundRequire = true
+		}
+		if c.ArtifactCapture {
+			foundArtifact = true
+		}
+	}
+	if !foundCreate || !foundRequire || !foundArtifact {
+		t.Errorf("missing field flags: create=%v require=%v artifact=%v",
+			foundCreate, foundRequire, foundArtifact)
+	}
+
+	// Method field must round-trip — the auth_bypass command (POST
+	// /SetupWizard.aspx) must have Method="POST" so the HTTP strategy
+	// filters out GET probes that would otherwise falsely match the
+	// regex and trigger sessionAction:create.
+	var foundPost, foundGet bool
+	for _, c := range cfg.Commands {
+		if c.Method == "POST" {
+			foundPost = true
+		}
+		if c.Method == "GET" {
+			foundGet = true
+		}
+	}
+	if !foundPost {
+		t.Error("no POST methods round-tripped from YAML — method filter would be a no-op")
+	}
+	if !foundGet {
+		t.Error("no GET methods round-tripped from YAML")
+	}
+}
+
+// TestCaptureRequestBody_YAMLRoundTrip — captureRequestBody +
+// requestBodyMaxBytes must unmarshal correctly. Mirrors the existing
+// captureResponseBody pattern.
+func TestCaptureRequestBody_YAMLRoundTrip(t *testing.T) {
+	yamlIn := []byte(`
+apiVersion: "v1"
+protocol: "http"
+address: ":4000"
+captureRequestBody: true
+requestBodyMaxBytes: 65536
+`)
+	var cfg BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal(yamlIn, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !cfg.CaptureRequestBody {
+		t.Error("captureRequestBody did not unmarshal as true")
+	}
+	if cfg.RequestBodyMaxBytes != 65536 {
+		t.Errorf("requestBodyMaxBytes: want 65536, got %d", cfg.RequestBodyMaxBytes)
+	}
+}
+
+// TestCaptureRequestBody_OmittedHashCodeStable — adding the new fields
+// must not change the HashCode of pre-existing service configs that
+// leave the new flags at default-false / zero.
+func TestCaptureRequestBody_OmittedHashCodeStable(t *testing.T) {
+	cfg := BeelzebubServiceConfiguration{
+		ApiVersion: "v1",
+		Protocol:   "http",
+		Address:    ":8080",
+	}
+	h1, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Toggling the new fields explicitly to their zero values
+	// must not change the hash either.
+	cfg.CaptureRequestBody = false
+	cfg.RequestBodyMaxBytes = 0
+	h2, err := cfg.HashCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatalf("HashCode changed by zero-value request-body fields: %s != %s", h1, h2)
+	}
 }

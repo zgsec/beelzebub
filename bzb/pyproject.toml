@@ -1,0 +1,40 @@
+[project]
+name = "bzb"
+version = "0.1.0"
+description = "Honeynet persona deployment CLI"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1",
+    "jinja2>=3.1",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "psycopg2-binary>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "paramiko>=3.4"]
+
+[project.scripts]
+bzb = "bzb.cli:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["bzb*"]
+
+[tool.setuptools.package-data]
+bzb = [
+    "templates/persona-skeleton/**/*",
+    "templates/persona-skeleton/**/.gitkeep",
+    "templates/sensor-compose.yml.j2",
+    "templates/beelzebub.yaml",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "regression: operator-run regression tests requiring a live beelzebub stack (skipped in CI unless env vars are set)",
+]

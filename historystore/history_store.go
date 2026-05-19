@@ -15,7 +15,9 @@ var (
 // HistoryStore is a thread-safe structure for storing Messages used to build LLM Context.
 type HistoryStore struct {
 	sync.RWMutex
-	sessions map[string]HistoryEvent
+	sessions    map[string]HistoryEvent
+	cleanerStop chan struct{}
+	cleanerOnce sync.Once
 }
 
 const retryRingSize = 16
@@ -36,7 +38,8 @@ type HistoryEvent struct {
 // NewHistoryStore returns a prepared HistoryStore
 func NewHistoryStore() *HistoryStore {
 	return &HistoryStore{
-		sessions: make(map[string]HistoryEvent),
+		sessions:    make(map[string]HistoryEvent),
+		cleanerStop: make(chan struct{}),
 	}
 }
 
@@ -74,8 +77,13 @@ func (hs *HistoryStore) Append(key string, message ...plugins.Message) {
 }
 
 // NextSequence increments and returns the sequence number for a session.
-// The caller must hold the HistoryStore lock.
+// Acquires the HistoryStore lock internally; safe to call concurrently.
 func (hs *HistoryStore) NextSequence(key string) int {
+	hs.Lock()
+	defer hs.Unlock()
+	if hs.sessions == nil {
+		hs.sessions = make(map[string]HistoryEvent)
+	}
 	e := hs.sessions[key]
 	e.Sequence++
 	e.LastSeen = time.Now()
@@ -134,18 +142,32 @@ func (hs *HistoryStore) DetectRetry(key, cmd, eventID string) (bool, string) {
 }
 
 // HistoryCleaner is a function that will periodically remove records from the HistoryStore
-// that are older than MaxHistoryAge.
+// that are older than MaxHistoryAge. The goroutine exits when Close() is called.
 func (hs *HistoryStore) HistoryCleaner() {
 	cleanerTicker := time.NewTicker(CleanerInterval)
 	go func() {
-		for range cleanerTicker.C {
-			hs.Lock()
-			for k, v := range hs.sessions {
-				if time.Since(v.LastSeen) > MaxHistoryAge {
-					delete(hs.sessions, k)
+		defer cleanerTicker.Stop()
+		for {
+			select {
+			case <-hs.cleanerStop:
+				return
+			case <-cleanerTicker.C:
+				hs.Lock()
+				for k, v := range hs.sessions {
+					if time.Since(v.LastSeen) > MaxHistoryAge {
+						delete(hs.sessions, k)
+					}
 				}
+				hs.Unlock()
 			}
-			hs.Unlock()
 		}
 	}()
+}
+
+// Close signals the cleaner goroutine to exit and stops the ticker.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (hs *HistoryStore) Close() {
+	hs.cleanerOnce.Do(func() {
+		close(hs.cleanerStop)
+	})
 }

@@ -1,14 +1,17 @@
 package builder
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/faults"
+	"github.com/mariocandela/beelzebub/v3/lifecycle"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/MCP"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/OLLAMA"
 	"github.com/mariocandela/beelzebub/v3/protocols/strategies/TELNET"
@@ -35,6 +38,21 @@ type Builder struct {
 	rabbitMQChannel                *amqp.Channel
 	rabbitMQConnection             *amqp.Connection
 	logsFile                       *os.File
+
+	// persona holds deception content loaded from /configurations/persona.yaml
+	// at startup. Nil means no persona file was found (backward-compat mode).
+	persona *parser.Persona
+}
+
+// SetPersona stores the loaded persona for use by protocol strategies.
+func (b *Builder) SetPersona(p *parser.Persona) *Builder {
+	b.persona = p
+	return b
+}
+
+// Persona returns the loaded persona, or nil if none was loaded.
+func (b *Builder) Persona() *parser.Persona {
+	return b.persona
 }
 
 func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {
@@ -90,11 +108,14 @@ func (b *Builder) Close() error {
 		}
 	}
 
-	// Close RabbitMQ connections
-	if b.rabbitMQConnection != nil {
+	// Close RabbitMQ connections. Channel may be nil if buildRabbitMQ failed
+	// after dialing but before opening the channel.
+	if b.rabbitMQChannel != nil {
 		if err := b.rabbitMQChannel.Close(); err != nil {
 			return err
 		}
+	}
+	if b.rabbitMQConnection != nil {
 		if err := b.rabbitMQConnection.Close(); err != nil {
 			return err
 		}
@@ -125,13 +146,27 @@ Honeypot Framework, happy hacking!`)
 	// Init shared cross-protocol bridge
 	protocolBridge := bridge.NewBridge()
 
+	// Periodically prune stale bridge state. Without this, discoveredCreds and
+	// sessionFlags grow unboundedly — the bug Track 5 surfaced. 5-minute tick
+	// + 60-minute TTL matches the cleanup cadence used by HTTP / TCP / TELNET
+	// session stores. context.Background() preserves the previous
+	// no-shutdown behavior; when builder gains a real lifecycle context, this
+	// is the seam to thread it through.
+	go lifecycle.Cleaner(context.Background(), 5*time.Minute, "bridge.clean", func() {
+		protocolBridge.Clean(60 * time.Minute)
+	})
+
 	// Init Protocol strategies
 	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}
 	hypertextTransferProtocolStrategy := &HTTP.HTTPStrategy{Bridge: protocolBridge}
-	transmissionControlProtocolStrategy := &TCP.TCPStrategy{}
+	transmissionControlProtocolStrategy := &TCP.TCPStrategy{Bridge: protocolBridge}
 	modelContextProtocolStrategy := &MCP.MCPStrategy{Bridge: protocolBridge}
 	telnetStrategy := &TELNET.TelnetStrategy{Bridge: protocolBridge}
 	ollamaStrategy := &OLLAMA.OllamaStrategy{Bridge: protocolBridge}
+
+	// Propagate persona to strategies that use deception content
+	modelContextProtocolStrategy.SetPersona(b.persona)
+	ollamaStrategy.SetPersona(b.persona)
 
 	// Init Tracer strategies, and set the trace strategy default HTTP
 	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
@@ -199,6 +234,7 @@ func (b *Builder) build() *Builder {
 		beelzebubServicesConfiguration: b.beelzebubServicesConfiguration,
 		traceStrategy:                  b.traceStrategy,
 		beelzebubCoreConfigurations:    b.beelzebubCoreConfigurations,
+		persona:                        b.persona,
 	}
 }
 

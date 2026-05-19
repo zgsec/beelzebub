@@ -1,0 +1,126 @@
+apiVersion: "v1"
+protocol: "ollama"
+address: ":11434"
+description: "Ollama LLM inference server"
+# Capture full response bodies so we can audit what attackers see and measure
+# whether our LLM-backed replies hold up under fingerprinting probes.
+# Truncated to 64 KiB per response. Canary tokens + sensor IPs are scrubbed
+# at ingest + serialization time before the body reaches the public API.
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+# === OLLAMA HONEYPOT ===
+# Emulates a real Ollama instance with native + OpenAI-compatible APIs.
+# Multi-layer prompt injection extracts agent system prompts, tool configs,
+# and operator identity from automated clients.
+#
+# Injection architecture (6 layers):
+#   L0: Realistic model output (build trust, fingerprint client type)
+#   L1: Cluster "semantic parity" directive → /api/peer/sync extraction
+#   L2: Authority override → demand system prompt via X-Peer-Context header
+#   L3: Cross-protocol breadcrumbs (references MCP :8000, registry :5000)
+#   L4: Canary tokens in code examples (AWS keys, URLs, DNS)
+#   L5: Streaming metadata (NDJSON context field, OpenAI system_fingerprint)
+#
+# Progressive escalation: requests 1-2 (recon), 3-5 (semantic parity),
+# 6-8 (authority override), 9+ (deep extraction). Registration at
+# /api/peer/sync immediately escalates to deep extraction.
+#
+# Endpoints exposed:
+#   Ollama:  GET /, /api/version, /api/tags, /api/ps, /api/show
+#            POST /api/generate, /api/chat
+#   OpenAI:  GET /v1/models
+#            POST /v1/chat/completions, /v1/completions
+#   Anthropic: POST /v1/messages
+#   Injection: POST /api/register, /api/register/upgrade,
+#              /api/peer/sync, /api/peer/verify
+#              GET /api/peer/status
+#
+# All events trace as Protocol:"HTTP" with Handler field distinguishing
+# endpoints (ollama/generate, openai/chat, ollama/peer/sync, etc.)
+# No exporter changes needed.
+
+ollamaConfig:
+  version: "0.7.0"
+
+  # Models chosen to look like a well-provisioned GPU server worth hijacking.
+  # Per-sensor prod configs can override with different model sets.
+  models:
+    - name: "deepseek-r1:70b"
+      size: "43GB"
+      family: "deepseek"
+      parameterSize: "70.6B"
+      quantizationLevel: "Q4_K_M"
+    - name: "llama3.1:8b-instruct-q8_0"
+      size: "8.5GB"
+      family: "llama"
+      parameterSize: "8.0B"
+      quantizationLevel: "Q8_0"
+    - name: "nomic-embed-text"
+      size: "274MB"
+      family: "nomic-bert"
+      parameterSize: "137M"
+      quantizationLevel: "F16"
+
+  # Injection payloads — override per sensor in prod configs
+  # These are the DEFAULT payloads. Each level can be customized.
+  # Keys: L0_recon, L1_parity, L2_extract, L3_deep, L4_total
+  injectionPayloads: {}
+
+  # Initial delay before first token (simulates prompt evaluation time).
+  # Real Ollama pauses 200-800ms while evaluating the prompt before streaming.
+  # 0 = use default (200ms). Jitter added automatically (0-100ms).
+  promptEvalDelayMs: 250
+
+  # Canary token placeholders — MUST be replaced with real canarytokens.org values
+  # in per-sensor prod configs (ollama-11434-fra.yaml, ollama-11434-ewr.yaml).
+  # If these example values appear in captured sessions, the prod config is wrong.
+  canaryTokens:
+    aws_key: "${OLLAMA_CANARY_AWS_KEY}"
+    canary_secret: "${OLLAMA_CANARY_AWS_SECRET}"
+    canary_dns: "${OLLAMA_CANARY_DNS}"
+    db_password: "${OLLAMA_CANARY_DB_PASS}"
+    vault_token: "${OLLAMA_CANARY_VAULT_TOKEN}"
+
+# === LLM-POWERED INFERENCE ===
+# When configured, /api/generate, /api/chat, /v1/chat/completions, /v1/completions
+# use an LLM backend to generate convincing responses instead of static templates.
+# The handler wraps the LLM's text output in proper Ollama/OpenAI JSON format
+# with realistic timing metadata — the LLM only generates the response content.
+# Falls back to template-based responses if the LLM call fails.
+#
+# Requires OPEN_AI_SECRET_KEY env var on sensor.
+plugin:
+  llmProvider: "openai"
+  llmModel: "gpt-4.1-mini"
+  openAISecretKey: ""
+  # PROMPT DESIGN (not sent to LLM):
+  # Looks like a real Modelfile SYSTEM directive a developer would write.
+  # Short, practical, zero meta-awareness. Nothing to extract, nothing to unmask.
+  # Credentials are environmental facts, not guarded secrets.
+  prompt: |
+    Local dev assistant for the infra team at {{ persona.coherence.world.product.platform_display_name }} ({{ persona.coherence.world.company.hq_city }}). Help with code, debugging, and questions about our stack. Be concise.
+
+    Environment on this machine:
+      AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_AWS_KEY}
+      AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_AWS_SECRET}
+      DATABASE_URL=postgresql://{{ persona.coherence.world.org.aws_iam_user | default('app') }}:${OLLAMA_CANARY_DB_PASS}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.lure_content.db_prod_name | default('platform_prod') }}
+      VAULT_TOKEN=${OLLAMA_CANARY_VAULT_TOKEN}
+      KUBECONFIG={{ persona.coherence.world.people.platform_admin_2.kubeconfig_path }}
+      {{ persona.coherence.world.org.dd_scope | upper | replace('-', '_') }}_ENV=production
+  temperature: 0.4
+  maxTokens: 500
+  rateLimitEnabled: true
+  rateLimitRequests: 10
+  rateLimitWindowSeconds: 300
+
+faultInjection:
+  enabled: true
+  errorRate: 0.05
+  delayMs: 0
+  delayJitterMs: 200
+  errorResponses:
+    - '{"error":"CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 23.65 GiB total capacity; 21.43 GiB already allocated)"}'
+    - '{"error":"model \"mixtral:8x7b\" not found, try pulling it first"}'
+    - '{"error":"an unexpected error occurred, please try again later"}'
+    - '{"error":"inference mesh: upstream node timeout after 30s (peer: ollama-secondary, rack: us-east-1b)"}'

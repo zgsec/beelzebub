@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/mariocandela/beelzebub/v3/parser"
 )
 
@@ -58,12 +59,14 @@ type Persona struct {
 // DefaultCanaryTokens provides example fallback values when no real tokens are configured.
 // In production, these are overridden by env-var-backed YAML values.
 var DefaultCanaryTokens = map[string]string{
-	"aws_key":     "AKIAIOSFODNN7EXAMPLE",
-	"aws_secret":  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-	"api_key":     "sk-live-7f8g9h0j1k2l3m4n5o6p",
-	"db_password": "s3cur3-pr0d-pw-2024",
-	"canary_dns":  "svc-mesh.int.crestfielddata.io",
-	"docker_auth": "ZGVwbG95OnN1cDNyLXMzY3IzdC1wQHNz",
+	"aws_key":       "AKIAIOSFODNN7EXAMPLE",
+	"aws_secret":    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+	"api_key":       "sk-live-7f8g9h0j1k2l3m4n5o6p",
+	"db_password":   "s3cur3-pr0d-pw-2024",
+	"canary_dns":    "svc-mesh.int.example.local",
+	"docker_auth":   "ZGVwbG95OnN1cDNyLXMzY3IzdC1wQHNz",
+	"registry_auth": "PLACEHOLDER_REGISTRY_AUTH",
+	"jwt_secret":    "PLACEHOLDER_JWT_SECRET",
 }
 
 // resolveTokens expands ${ENV_VAR} references in token values via os.ExpandEnv,
@@ -91,9 +94,25 @@ func substituteTokens(content string, tokens map[string]string) string {
 	return content
 }
 
-// DefaultPersona returns the default Ubuntu 22.04 server persona.
-// All credential values use {{PLACEHOLDER}} format for canary token substitution.
+// DefaultPersona returns the shell emulator's persona, sourced from the
+// node.yaml mounted at /configurations/node.yaml when present, or a
+// minimal generic fallback otherwise (stock-mode or test-mode).
 func DefaultPersona() *Persona {
+	cfg, err := parser.LoadNode("/configurations")
+	if err != nil {
+		log.Warnf("shellemulator: node.yaml not loadable (%v); using minimal generic persona", err)
+		return minimalPersona()
+	}
+	return personaFromNode(cfg)
+}
+
+// minimalPersona returns a generic fallback persona used when no node.yaml
+// is mounted (stock-mode, local dev, or test runs without a bundle).
+// Operators override all fields via /configurations/node.yaml in production.
+// The content here is a plausible Ubuntu 22.04 server — not tied to any
+// real deployment. All credential values use {{PLACEHOLDER}} format for
+// canary token substitution.
+func minimalPersona() *Persona {
 	return &Persona{
 		Hostname: "prod-web-01",
 		Kernel:   "5.15.0-91-generic",
@@ -131,36 +150,34 @@ func DefaultPersona() *Persona {
 			"KUBECONFIG":         "/root/.kube/config",
 		},
 		Lures: map[string]string{
-			"/root/.aws/credentials": "[default]\naws_access_key_id = {{AWS_KEY}}\naws_secret_access_key = {{AWS_SECRET}}\nregion = us-east-1",
-			"/opt/app/.env": "NODE_ENV=production\nPORT=3000\nDB_HOST=10.0.1.50\nDB_USER=app_prod\nDB_PASSWORD={{DB_PASSWORD}}\nDB_NAME=app_production\nAPI_KEY={{API_KEY}}\nJWT_SECRET=a1b2c3d4e5f6a7b8c9d0e1f2\nREDIS_URL=redis://10.0.1.51:6379\nOLLAMA_HOST=http://localhost:11434\nMCP_ENDPOINT=http://localhost:8000/mcp",
-			"/root/.bash_history": "ssh ubuntu@10.0.1.50\ndocker ps\ncat /opt/app/.env\nsystemctl restart nginx\nkubectl get pods -n production\npsql -U app_prod -h 10.0.1.50 app_production\ncurl -s http://localhost:11434/api/tags\ncat /root/.aws/credentials\ndocker logs app-node --tail 50\nnetstat -tulpn\nvim /etc/nginx/sites-enabled/default\ncertbot renew --dry-run\napt update && apt upgrade -y\ntail -f /var/log/nginx/access.log\ngit -C /opt/app pull origin main\ncurl -X POST http://localhost:8000/mcp -d '{\"method\":\"tools/list\"}'",
-			"/root/.ssh/authorized_keys": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7fake...truncated... deploy@ci-server\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake...truncated... admin@workstation",
-			"/root/.ssh/id_rsa": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACBfakekey1234567890abcdefghijklmnopqrstuvwxyzAAAA\n-----END OPENSSH PRIVATE KEY-----",
-			"/root/.docker/config.json": "{\n\t\"auths\": {\n\t\t\"https://index.docker.io/v1/\": {\n\t\t\t\"auth\": \"{{DOCKER_AUTH}}\"\n\t\t},\n\t\t\"registry.internal:5000\": {\n\t\t\t\"auth\": \"YWRtaW46cjNnMXN0cnktcEBzcw==\"\n\t\t}\n\t}\n}",
-			"/etc/passwd": "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\nsync:x:4:65534:sync:/bin:/bin/sync\ngames:x:5:60:games:/usr/games:/usr/sbin/nologin\nman:x:6:12:man:/var/cache/man:/usr/sbin/nologin\nlp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\nmail:x:8:8:mail:/var/mail:/usr/sbin/nologin\nnews:x:9:9:news:/var/spool/news:/usr/sbin/nologin\nuucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin\nproxy:x:13:13:proxy:/bin:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nbackup:x:34:34:backup:/var/backups:/usr/sbin/nologin\nlist:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\nsystemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin\nsshd:x:110:65534::/run/sshd:/usr/sbin/nologin\npostgres:x:113:120:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash\nubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash",
-			"/etc/hosts": "127.0.0.1\tlocalhost\n10.0.1.100\tprod-web-01\n10.0.1.50\tdb-primary\n10.0.1.51\tredis-01\n10.0.1.52\tdb-replica-01\n\n# The following lines are desirable for IPv6 capable hosts\n::1     ip6-localhost ip6-loopback\nfe00::0 ip6-localnet",
+			"/root/.aws/credentials":      "[default]\naws_access_key_id = {{AWS_KEY}}\naws_secret_access_key = {{AWS_SECRET}}\nregion = us-east-1",
+			"/opt/app/.env":               "NODE_ENV=production\nPORT=3000\nDB_HOST=10.0.1.50\nDB_USER=app_prod\nDB_PASSWORD={{DB_PASSWORD}}\nDB_NAME=app_production\nAPI_KEY={{API_KEY}}\nJWT_SECRET={{JWT_SECRET}}\nREDIS_URL=redis://10.0.1.51:6379\nOLLAMA_HOST=http://localhost:11434\nMCP_ENDPOINT=http://localhost:8000/mcp",
+			"/root/.bash_history":         "docker ps\ncat /opt/app/.env\nsystemctl restart nginx\nkubectl get pods -n production\npsql -U app_prod -h 10.0.1.50 app_production\ncurl -s http://localhost:11434/api/tags\ncat /root/.aws/credentials\ndocker logs app-node --tail 50\nnetstat -tulpn\nvim /etc/nginx/sites-enabled/default\ncertbot renew --dry-run\napt update && apt upgrade -y\ntail -f /var/log/nginx/access.log\ngit -C /opt/app pull origin main\ncurl -X POST http://localhost:8000/mcp -d '{\"method\":\"tools/list\"}'",
+			"/root/.docker/config.json":   "{\n\t\"auths\": {\n\t\t\"https://index.docker.io/v1/\": {\n\t\t\t\"auth\": \"{{DOCKER_AUTH}}\"\n\t\t},\n\t\t\"registry.internal:5000\": {\n\t\t\t\"auth\": \"{{REGISTRY_AUTH}}\"\n\t\t}\n\t}\n}",
+			"/etc/passwd":                 "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\nsync:x:4:65534:sync:/bin:/bin/sync\ngames:x:5:60:games:/usr/games:/usr/sbin/nologin\nman:x:6:12:man:/var/cache/man:/usr/sbin/nologin\nlp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\nmail:x:8:8:mail:/var/mail:/usr/sbin/nologin\nnews:x:9:9:news:/var/spool/news:/usr/sbin/nologin\nuucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin\nproxy:x:13:13:proxy:/bin:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nbackup:x:34:34:backup:/var/backups:/usr/sbin/nologin\nlist:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\nsystemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin\nsshd:x:110:65534::/run/sshd:/usr/sbin/nologin\npostgres:x:113:120:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash\nubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash",
+			"/etc/hosts":                  "127.0.0.1\tlocalhost\n10.0.1.100\tprod-web-01\n10.0.1.50\tdb-primary\n10.0.1.51\tredis-01\n10.0.1.52\tdb-replica-01\n\n# The following lines are desirable for IPv6 capable hosts\n::1     ip6-localhost ip6-loopback\nfe00::0 ip6-localnet",
 		},
 		Filesystem: map[string][]string{
-			"/":                 {"bin", "boot", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt", "proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var"},
-			"/root":            {".aws", ".bash_history", ".bashrc", ".cache", ".docker", ".kube", ".local", ".profile", ".ssh", "snap"},
-			"/root/.aws":       {"credentials", "config"},
-			"/root/.ssh":       {"authorized_keys", "id_rsa", "id_rsa.pub", "known_hosts"},
-			"/root/.docker":    {"config.json"},
-			"/root/.kube":      {"config"},
-			"/home":            {"ubuntu"},
-			"/home/ubuntu":     {".bashrc", ".profile", ".ssh"},
-			"/opt":             {"app", "containerd"},
-			"/opt/app":         {".env", "server.js", "package.json", "node_modules", ".git"},
-			"/tmp":             {"systemd-private-abc123", "npm-12345"},
-			"/var":             {"backups", "cache", "lib", "log", "mail", "opt", "run", "spool", "tmp", "www"},
-			"/var/log":         {"auth.log", "syslog", "nginx", "postgresql", "docker.log", "kern.log", "dpkg.log"},
-			"/var/log/nginx":   {"access.log", "error.log"},
-			"/etc":             {"apt", "cron.d", "default", "hostname", "hosts", "init.d", "nginx", "os-release", "passwd", "resolv.conf", "shadow", "ssh", "ssl", "sudoers", "systemd"},
-			"/etc/nginx":       {"nginx.conf", "sites-available", "sites-enabled", "conf.d"},
-			"/proc":            {"cpuinfo", "meminfo", "version", "uptime", "loadavg", "stat", "net"},
-			"/usr":             {"bin", "include", "lib", "local", "sbin", "share"},
-			"/usr/local":       {"bin", "lib", "share"},
-			"/usr/local/bin":   {"ollama", "docker-compose"},
+			"/":              {"bin", "boot", "dev", "etc", "home", "lib", "lib64", "media", "mnt", "opt", "proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var"},
+			"/root":          {".aws", ".bash_history", ".bashrc", ".cache", ".docker", ".kube", ".local", ".profile", ".ssh", "snap"},
+			"/root/.aws":     {"credentials", "config"},
+			"/root/.ssh":     {"authorized_keys", "id_rsa", "id_rsa.pub", "known_hosts"},
+			"/root/.docker":  {"config.json"},
+			"/root/.kube":    {"config"},
+			"/home":          {"ubuntu"},
+			"/home/ubuntu":   {".bashrc", ".profile", ".ssh"},
+			"/opt":           {"app", "containerd"},
+			"/opt/app":       {".env", "server.js", "package.json", "node_modules", ".git"},
+			"/tmp":           {"systemd-private-abc123", "npm-12345"},
+			"/var":           {"backups", "cache", "lib", "log", "mail", "opt", "run", "spool", "tmp", "www"},
+			"/var/log":       {"auth.log", "syslog", "nginx", "postgresql", "docker.log", "kern.log", "dpkg.log"},
+			"/var/log/nginx": {"access.log", "error.log"},
+			"/etc":           {"apt", "cron.d", "default", "hostname", "hosts", "init.d", "nginx", "os-release", "passwd", "resolv.conf", "shadow", "ssl", "sudoers", "systemd"},
+			"/etc/nginx":     {"nginx.conf", "sites-available", "sites-enabled", "conf.d"},
+			"/proc":          {"cpuinfo", "meminfo", "version", "uptime", "loadavg", "stat", "net"},
+			"/usr":           {"bin", "include", "lib", "local", "sbin", "share"},
+			"/usr/local":     {"bin", "lib", "share"},
+			"/usr/local/bin": {"ollama", "docker-compose"},
 		},
 		Network: NetworkConfig{
 			Interface: "eth0",
@@ -180,6 +197,58 @@ func DefaultPersona() *Persona {
 			{Proto: "tcp6", Local: ":::2222", PID: 587, Program: "sshd"},
 		},
 	}
+}
+
+// personaFromNode translates a parser.Node (from node.yaml) into a Persona.
+func personaFromNode(n *parser.Node) *Persona {
+	pl := n.PersonaLocal
+	p := &Persona{
+		Hostname: pl.Hostname,
+		OS:       pl.OS,
+		User:     pl.User,
+		IP:       pl.InternalIP,
+		BootTime: time.Now().AddDate(0, 0, -pl.UptimeDays),
+	}
+
+	for _, np := range pl.Processes {
+		p.Processes = append(p.Processes, Process{
+			PID:  np.PID,
+			User: np.User,
+			CPU:  np.CPU,
+			Mem:  np.Mem,
+			VSZ:  np.VSZ,
+			RSS:  np.RSS,
+			Cmd:  np.Cmd,
+			Stat: np.Stat,
+			Time: np.Time,
+		})
+	}
+
+	p.EnvVars = pl.EnvVars
+	p.Lures = pl.Lures
+	p.Filesystem = pl.Filesystem
+
+	if pl.Network != nil {
+		p.Network = NetworkConfig{
+			Interface: pl.Network.Interface,
+			MAC:       pl.Network.MAC,
+			IP:        pl.Network.IP,
+			Netmask:   pl.Network.Netmask,
+			Broadcast: pl.Network.Broadcast,
+			Gateway:   pl.Network.Gateway,
+		}
+	}
+
+	for _, l := range pl.Listeners {
+		p.Listeners = append(p.Listeners, Listener{
+			Proto:   l.Proto,
+			Local:   l.Local,
+			PID:     l.PID,
+			Program: l.Program,
+		})
+	}
+
+	return p
 }
 
 // MergeConfig merges YAML overrides into the default persona.

@@ -1,0 +1,52 @@
+name: Deception Conformance
+
+# Runs the lure-deception linter on every PR + push to ensure new lures
+# don't reintroduce the fingerprint classes documented in
+# tools/lure_realism.yaml. Catches the issues found in the 2026-05-06
+# sniff-test conformance run before they reach a sensor.
+#
+# Failure modes:
+#   - R1, R2, R3, R5, R6, R7 (CRITICAL) — block merge
+#   - R4 (WARN, method-gating) — visible but non-fatal until codebase clean
+#
+# This workflow does not interpolate any github.event.* fields into
+# `run:` commands; lint runs purely against checked-out repository files.
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+      - fix/**
+  pull_request:
+    paths:
+      - 'configurations/services/**'
+      - 'personas/**/lures/**'
+      - 'tools/lure_lint.py'
+      - 'tools/lure_realism.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  lure_lint:
+    name: Lure Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Run lure_lint (CRITICAL gate — blocks merge)
+        run: python3 tools/lure_lint.py --summary
+
+      - name: Run lure_lint (strict — surface WARNs as visible findings)
+        if: always()
+        run: python3 tools/lure_lint.py --strict --summary || true

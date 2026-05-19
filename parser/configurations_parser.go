@@ -165,6 +165,45 @@ type NoveltyDetection struct {
 	VariantThreshold int  `yaml:"variantThreshold"`
 }
 
+// LLMOfflineResponse configures the persona-shaped error envelope returned when
+// ExecuteModel fails (missing OPEN_AI_SECRET_KEY, network error,
+// rate limit, model crash, etc). Empty (zero-value) preserves the legacy
+// bare-text "500 Internal Server Error" behavior — backward-compatible.
+//
+// When Body is non-empty, the strategy uses {Status, Body} verbatim
+// instead of the bare text. Real LiteLLM / vLLM / Ollama surfaces all
+// return JSON-shaped error envelopes that differ across vendors; the
+// lure YAML knows what shape its impersonated service returns, so this
+// is configurable per-lure rather than framework-hardcoded.
+//
+// Used by HTTP and OLLAMA strategies. Not used by MCP — its error
+// envelopes are JSON-RPC-shaped already and don't go through this path.
+type LLMOfflineResponse struct {
+	// Status is the HTTP status code to return. Zero = 500 (default).
+	Status int `yaml:"status,omitempty" json:",omitempty"`
+	// Body is the response body verbatim. Empty = legacy bare-text
+	// behavior (caller decides). Non-empty bodies are typically JSON
+	// matching the impersonated service's real error shape.
+	Body string `yaml:"body,omitempty" json:",omitempty"`
+}
+
+// State is the per-service stateful-HTTP configuration. Empty struct = stateless.
+//
+// Non-empty CookieName turns the service stateful: the HTTP strategy
+// generates a cookie on `sessionAction: create` handlers, validates it
+// on `sessionAction: require` handlers, and persists short-lived per-
+// session captures (operator user, role, etc.) for the duration of TTLSeconds.
+//
+// ArtifactPath, when non-empty, enables the artifact store for this service:
+// per-command `artifactCapture: true` directs request bodies into the store,
+// SHA-named, with an idempotent meta.json sibling per artifact.
+type State struct {
+	CookieName       string `yaml:"cookieName,omitempty"  json:",omitempty"`
+	TTLSeconds       int    `yaml:"ttlSeconds,omitempty"  json:",omitempty"`
+	ArtifactPath     string `yaml:"artifactPath,omitempty" json:",omitempty"`
+	ArtifactMaxBytes int    `yaml:"artifactMaxBytes,omitempty" json:",omitempty"`
+}
+
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
 	ApiVersion             string          `yaml:"apiVersion"`
@@ -178,6 +217,13 @@ type BeelzebubServiceConfiguration struct {
 	DeadlineTimeoutSeconds int             `yaml:"deadlineTimeoutSeconds"`
 	PasswordRegex          string          `yaml:"passwordRegex"`
 	Description            string          `yaml:"description"`
+	// v8: Canonical service type tag. Flows through every event to the exporter
+	// and downstream systems. Describes WHAT THIS SENSOR IS PRETENDING TO BE,
+	// not what the attacker is doing (that's behavioral classification).
+	// Examples: "ollama", "terraform-state", "docker-registry", "redis", "mysql".
+	// If empty, the exporter falls back to deriving service type from Description
+	// or port mapping. New deployments should always set this.
+	ServiceType            string          `yaml:"serviceType,omitempty" json:",omitempty"`
 	Banner                 string          `yaml:"banner"`
 	Plugin                 Plugin          `yaml:"plugin"`
 	TLSCertPath            string          `yaml:"tlsCertPath"`
@@ -195,6 +241,62 @@ type BeelzebubServiceConfiguration struct {
 	// `omitempty` keeps the JSON shape identical to pre-change for the
 	// default value, so HashCode() stays stable for all existing configs.
 	BinarySafe bool `yaml:"binarySafe" json:",omitempty"`
+	// CaptureResponseBody, when true, includes the response body in every
+	// HTTP tracer.Event for this service (truncated to ResponseBodyMaxBytes).
+	// Default false to preserve backward-compat AND avoid logging decoy
+	// credentials embedded in lure responses without operator intent.
+	// Operators opt in per-service in YAML when they want canary attribution,
+	// honeypot-cover analysis, or LLM-lure quality measurement.
+	// `omitempty` keeps default-value HashCode() stable.
+	CaptureResponseBody bool `yaml:"captureResponseBody" json:",omitempty"`
+	// ResponseBodyMaxBytes truncates captured response bodies to this size.
+	// Zero (default) means the runtime default (64 KiB). Set explicitly to
+	// raise/lower per service. Truncation is plain byte-cutoff (no UTF-8
+	// boundary preservation) — receivers must tolerate truncation.
+	ResponseBodyMaxBytes int `yaml:"responseBodyMaxBytes" json:",omitempty"`
+	// CaptureRequestBody, when true, populates the dedicated RequestBody
+	// field on every tracer.Event for this service (truncated to
+	// RequestBodyMaxBytes). Mirrors CaptureResponseBody for prompt /
+	// JSON-RPC argument capture on chat-shaped lures (LLM endpoints, MCP
+	// tool calls, etc). Default false to keep storage opt-in and avoid
+	// duplicating attacker payloads when the legacy Body field is enough.
+	// `omitempty` keeps default-value HashCode() stable.
+	CaptureRequestBody bool `yaml:"captureRequestBody" json:",omitempty"`
+	// RequestBodyMaxBytes truncates captured request bodies to this size.
+	// Zero (default) means the runtime default (64 KiB) is applied when
+	// CaptureRequestBody is true. Truncation is plain byte-cutoff.
+	RequestBodyMaxBytes int `yaml:"requestBodyMaxBytes" json:",omitempty"`
+	// ServiceProtocol opts a TCP listener into a purpose-built binary
+	// protocol handler instead of the generic regex/command loop. Known
+	// values:
+	//   "mysql-handshake-v10"  MySQL wire protocol handshake v10 →
+	//                          reads Handshake Response 41 (capturing
+	//                          username, capability flags, connect_attrs),
+	//                          always replies ERR 1045 "Access denied",
+	//                          closes connection.
+	// Empty = generic TCP behavior (default). Safe to leave unset on
+	// any existing TCP config.
+	ServiceProtocol string `yaml:"serviceProtocol,omitempty" json:",omitempty"`
+	// MysqlAuthPlugin overrides the auth plugin advertised in the
+	// handshake greeting. Default "caching_sha2_password" (MySQL 8.0).
+	// Use "mysql_native_password" when impersonating MySQL 5.7 or
+	// MariaDB <=10.3.
+	MysqlAuthPlugin string `yaml:"mysqlAuthPlugin,omitempty" json:",omitempty"`
+	// State enables HTTP cookie-keyed session correlation + the artifact
+	// store. Nil (default) = stateless. Pointer so json omitempty skips
+	// the field entirely when nil, keeping HashCode() stable for existing
+	// services that don't use the stateful-HTTP feature.
+	// Spec: docs/superpowers/specs/2026-04-30-stateful-http-cve-lure-framework-design.md.
+	State *State `yaml:"state,omitempty" json:",omitempty"`
+	// LLMOfflineResponse configures the response shape returned when ExecuteModel
+	// errors (missing API key, network error, rate limit). Nil (default)
+	// preserves the legacy bare-text "500 Internal Server Error" body.
+	// Set on chat-LLM lures (LiteLLM proxy, vLLM, Ollama) so a probe that
+	// hits the chat endpoint without a working LLM still sees a
+	// vendor-shaped JSON error envelope rather than bare text. Pointer so
+	// json omitempty skips the field entirely when nil, keeping HashCode()
+	// stable for existing services.
+	LLMOfflineResponse *LLMOfflineResponse `yaml:"llmOfflineResponse,omitempty" json:",omitempty"`
 }
 
 func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {
@@ -215,6 +317,46 @@ type Command struct {
 	StatusCode int            `yaml:"statusCode"`
 	Plugin     string         `yaml:"plugin"`
 	Name       string         `yaml:"name"`
+	// ReplyFormat switches the TCP strategy's wire encoding for this
+	// command. Empty = plaintext + "\r\n" appended (default, backward-
+	// compatible). Recognized values for Redis RESP2:
+	//   "redis-simple"   → "+<handler>\r\n" (simple string)
+	//   "redis-integer"  → ":<handler>\r\n"
+	//   "redis-error"    → "-<handler>\r\n"
+	//   "redis-bulk"     → "$<len>\r\n<handler>\r\n" (bulk string; CRLF
+	//                      inside handler is preserved verbatim)
+	//   "redis-nil-bulk" → "$-1\r\n"
+	//   "redis-array"    → wraps `ReplyBulks` as a RESP array of bulk
+	//                      strings; `handler` is ignored
+	ReplyFormat string   `yaml:"replyFormat,omitempty" json:",omitempty"`
+	ReplyBulks  []string `yaml:"replyBulks,omitempty" json:",omitempty"`
+
+	// Method (HTTP only) — when set, only requests using this method
+	// (GET, POST, PUT, etc.) match this command. Empty = method-agnostic
+	// (the prior default; preserves backwards compatibility with all
+	// existing service configs that don't set this field). Stateful HTTP
+	// CVE lures need this to differentiate `GET /SetupWizard.aspx` (recon
+	// page) from `POST /SetupWizard.aspx` (auth-bypass exploit) — without
+	// it, a probe scanner that GETs every URL would falsely trip
+	// `sessionAction: create` handlers and pollute the cookie store.
+	Method string `yaml:"method,omitempty" json:",omitempty"`
+
+	// SessionAction (HTTP only) — "create" generates a fresh cookie and
+	// emits Set-Cookie; "require" demands a valid cookie or 401.
+	// Empty = stateless (no session interaction).
+	SessionAction string `yaml:"sessionAction,omitempty" json:",omitempty"`
+
+	// SessionCapture (HTTP only) — map of session-metadata key → regex
+	// applied to the raw request body. Captures land in the cookie
+	// session's Captured map and propagate to tracer.Event.Captured
+	// for downstream ingest.
+	SessionCapture map[string]string `yaml:"sessionCapture,omitempty" json:",omitempty"`
+
+	// ArtifactCapture (HTTP only) — when true, the request body is
+	// written to the service's artifact store; the artifact SHA-256
+	// is added to tracer.Event.Captured under "artifact_sha256".
+	// Requires service-level State.ArtifactPath to be set.
+	ArtifactCapture bool `yaml:"artifactCapture,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot

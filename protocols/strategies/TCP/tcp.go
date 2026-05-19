@@ -1,16 +1,22 @@
 package TCP
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	mrand "math/rand"
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/mariocandela/beelzebub/v3/agentdetect"
+	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/mariocandela/beelzebub/v3/plugins"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 
 	"github.com/google/uuid"
@@ -19,8 +25,24 @@ import (
 
 const maxLineLength = 8192 // Prevent unbounded memory growth from binary junk or malicious input
 
+// maxConcurrentConns caps in-flight TCP handler goroutines per listener. Each
+// accepted connection holds a per-conn buffer (~1KB read buffer + per-handler
+// stack); without a cap, 100k+ connections fill memory and degrade the sensor.
+// Surface as config if/when sensors with very different traffic profiles need
+// it; until then a fixed const keeps the surface area small.
+const maxConcurrentConns = 1024
+
 type TCPStrategy struct {
 	Sessions *historystore.HistoryStore
+	Bridge   *bridge.ProtocolBridge
+
+	// Per-IP timing accumulation for automation detection.
+	// We collect the data here; the scoring thresholds may need tuning
+	// as we learn what TCP automation looks like vs SSH/HTTP.
+	agentMu       sync.Mutex
+	agentTimings  map[string][]int64
+	agentLastSeen map[string]time.Time
+	agentPrevCmd  map[string]string
 }
 
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
@@ -28,6 +50,7 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		tcpStrategy.Sessions = historystore.NewHistoryStore()
 	}
 	go tcpStrategy.Sessions.HistoryCleaner()
+	go tcpStrategy.cleanAgentState()
 
 	listen, err := net.Listen("tcp", servConf.Address)
 	if err != nil {
@@ -37,34 +60,45 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 	interactive := len(servConf.Commands) > 0
 
-	go func() {
-		for {
-			conn, err := listen.Accept()
-			if err != nil {
-				continue
+	go acceptLoop(listen, func(c net.Conn) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("panic in TCP handler: %v", r)
 			}
-			go func(c net.Conn) {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Errorf("panic in TCP handler: %v", r)
-					}
-				}()
-				c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
+		}()
+		c.SetDeadline(time.Now().Add(time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second))
 
-				// Send banner exactly as configured — no appended newline.
-				// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
-				if servConf.Banner != "" {
-					c.Write([]byte(servConf.Banner))
-				}
-
-				if interactive {
-					handleInteractiveConnection(c, servConf, tr, tcpStrategy)
-				} else {
-					handleBannerOnly(c, servConf, tr)
-				}
-			}(conn)
+		// serviceProtocol dispatch: purpose-built binary protocol
+		// handlers that own the whole connection lifecycle and
+		// bypass banner / interactive / banner-only entirely.
+		switch servConf.ServiceProtocol {
+		case "mysql-handshake-v10":
+			// Per-connection rng: thread-safe by construction,
+			// cheap to seed, avoids sharing a lock across
+			// concurrent MySQL probes.
+			localRng := mrand.New(mrand.NewSource(time.Now().UnixNano()))
+			dispatchMysqlHandshake(c, servConf, tr, localRng)
+			return
 		}
-	}()
+
+		// Send banner exactly as configured — no appended newline.
+		// Operators control the format: "8.0.32\n", "220 smtp.example.com ESMTP\r\n", or "".
+		// ${request.*} placeholders authored in YAML are substituted per-connection
+		// so banners can carry e.g. "${request.uuid_short}" without leaking a
+		// fleet-identical string across sensors.
+		if servConf.Banner != "" {
+			banner, _ := responsesubs.Apply(servConf.Banner, nil, nil, nil)
+			if _, err := c.Write([]byte(banner)); err != nil {
+				return
+			}
+		}
+
+		if interactive {
+			handleInteractiveConnection(c, servConf, tr, tcpStrategy)
+		} else {
+			handleBannerOnly(c, servConf, tr)
+		}
+	})
 
 	mode := "banner-only"
 	if interactive {
@@ -88,6 +122,7 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 	}
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	destPort := extractPort(servConf.Address)
 
 	tr.TraceEvent(tracer.Event{
 		Msg:         "New TCP attempt",
@@ -99,6 +134,8 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 		SourcePort:  port,
 		ID:          uuid.New().String(),
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
+		ServicePort: destPort,
 	})
 }
 
@@ -114,7 +151,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Optional authentication — only if passwordRegex is configured
 	if servConf.PasswordRegex != "" {
-		conn.Write([]byte("Login: "))
+		if _, err := conn.Write([]byte("Login: ")); err != nil {
+			return
+		}
 		var err error
 		username, err = readLine(conn)
 		if err != nil {
@@ -122,7 +161,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		}
 		username = strings.TrimSpace(username)
 
-		conn.Write([]byte("Password: "))
+		if _, err := conn.Write([]byte("Password: ")); err != nil {
+			return
+		}
 		password, err = readLine(conn)
 		if err != nil {
 			return
@@ -141,14 +182,18 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			SourcePort:  port,
 			ID:          uuid.New().String(),
 			Description: servConf.Description,
+			ServiceType: servConf.ServiceType,
+			ServicePort: destPort,
 		})
 
 		matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 		if err != nil || !matched {
-			conn.Write([]byte("Login incorrect\r\n"))
+			_, _ = conn.Write([]byte("Login incorrect\r\n"))
 			return
 		}
-		conn.Write([]byte("\r\n"))
+		if _, err := conn.Write([]byte("\r\n")); err != nil {
+			return
+		}
 	}
 
 	// Session start
@@ -168,7 +213,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		ID:          sessionID,
 		User:        username,
 		Description: servConf.Description,
+		ServiceType: servConf.ServiceType,
 		SessionKey:  sessionKey,
+		ServicePort: destPort,
 	})
 
 	// Load history for LLM context
@@ -179,9 +226,12 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Interactive command loop
 	for {
-		// Display prompt if serverName is set
+		// Display prompt if serverName is set. Substitute ${request.*}
+		// placeholders so prompts can carry per-call UUIDs without
+		// leaking a fleet-identical literal.
 		if servConf.ServerName != "" {
-			if _, err := conn.Write([]byte(servConf.ServerName)); err != nil {
+			prompt, _ := responsesubs.Apply(servConf.ServerName, nil, nil, nil)
+			if _, err := conn.Write([]byte(prompt)); err != nil {
 				break
 			}
 		}
@@ -225,10 +275,12 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		handlerName := "not_found"
 		matched := false
 		shouldQuit := false
+		var matchedCommand parser.Command
 
 		for _, command := range servConf.Commands {
 			if command.Regex != nil && command.Regex.MatchString(commandInput) {
 				matched = true
+				matchedCommand = command
 				commandOutput = command.Handler
 				handlerName = command.Name
 				if handlerName == "" {
@@ -265,6 +317,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		}
 
 		if !matched {
+			matchedCommand = servConf.FallbackCommand
 			commandOutput = servConf.FallbackCommand.Handler
 			if commandOutput == "" {
 				commandOutput = "ERROR: unknown command"
@@ -279,12 +332,26 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		strategy.Sessions.Append(sessionKey, newEntries...)
 		histories = append(histories, newEntries...)
 
-		// Send response
-		if commandOutput != "" {
-			if _, err := conn.Write([]byte(commandOutput + "\r\n")); err != nil {
+		// Send response — honor matchedCommand.ReplyFormat when set so
+		// wire-protocol lures (Redis RESP2, etc.) can emit schema-correct
+		// bytes from plain YAML authors. Default (empty format) keeps the
+		// legacy behavior: append "\r\n" to handler string.
+		//
+		// Apply ${request.*} placeholders so YAML lures get a fresh
+		// per-request UUID / timestamp on the wire instead of literal
+		// template strings. TCP has no header concept and no stateful
+		// session context, so headers=nil and sessionVars=nil. This is a
+		// no-op for plaintext lures that don't author placeholders.
+		commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil, nil)
+		wireBytes := encodeReply(matchedCommand, commandOutput)
+		if len(wireBytes) > 0 {
+			if _, err := conn.Write(wireBytes); err != nil {
 				break
 			}
 		}
+
+		// Agent classification for interactive commands
+		verdict := strategy.classifyTCP(host, commandInput)
 
 		// Trace interaction
 		tr.TraceEvent(tracer.Event{
@@ -300,8 +367,13 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			Protocol:      tracer.TCP.String(),
 			User:          username,
 			Description:   servConf.Description,
+			ServiceType:   servConf.ServiceType,
 			Handler:       handlerName,
 			SessionKey:    sessionKey,
+			ServicePort:   destPort,
+			AgentScore:    verdict.Score,
+			AgentCategory: verdict.Category,
+			AgentSignals:  verdict.SignalsString(),
 		})
 
 		if shouldQuit {
@@ -311,12 +383,13 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 
 	// Session end
 	tr.TraceEvent(tracer.Event{
-		Msg:        "End TCP Session",
-		Status:     tracer.End.String(),
-		ID:         sessionID,
-		Protocol:   tracer.TCP.String(),
-		SessionKey: sessionKey,
-		SourceIp:   host,
+		Msg:         "End TCP Session",
+		Status:      tracer.End.String(),
+		ID:          sessionID,
+		Protocol:    tracer.TCP.String(),
+		SessionKey:  sessionKey,
+		SourceIp:    host,
+		ServicePort: destPort,
 	})
 }
 
@@ -605,4 +678,179 @@ func extractPort(addr string) string {
 		return strings.TrimPrefix(addr, ":")
 	}
 	return port
+}
+
+// encodeReply converts a matched Command's reply into wire bytes. When
+// ReplyFormat is empty the legacy behavior is preserved: `handler + "\r\n"`.
+// When ReplyFormat names a protocol-specific encoding (e.g. "redis-bulk"),
+// this function frames the bytes so the response is schema-correct on the
+// wire — without requiring the YAML author to count RESP length prefixes.
+//
+// Redis RESP2 encodings supported:
+//   redis-simple   "+<value>\r\n"           simple string (e.g. "+PONG")
+//   redis-integer  ":<value>\r\n"           integer (value must be digits)
+//   redis-error    "-<value>\r\n"           error (e.g. "-ERR unknown cmd")
+//   redis-bulk     "$<len>\r\n<value>\r\n"  bulk string; value is raw,
+//                                            CRLF preserved, length auto-
+//                                            computed, UTF-8 safe
+//   redis-nil-bulk "$-1\r\n"                nil bulk; handler ignored
+//   redis-array    "*<n>\r\n" + per-entry   array of bulk strings taken
+//                  bulk encoding             from ReplyBulks
+func encodeReply(cmd parser.Command, value string) []byte {
+	switch cmd.ReplyFormat {
+	case "":
+		// Legacy default: plain text + CRLF
+		if value == "" {
+			return nil
+		}
+		return []byte(value + "\r\n")
+	case "redis-simple":
+		return []byte("+" + value + "\r\n")
+	case "redis-integer":
+		return []byte(":" + value + "\r\n")
+	case "redis-error":
+		return []byte("-" + value + "\r\n")
+	case "redis-bulk":
+		return []byte(fmt.Sprintf("$%d\r\n%s\r\n", len(value), value))
+	case "redis-nil-bulk":
+		return []byte("$-1\r\n")
+	case "redis-raw":
+		// Escape hatch for RESP shapes the typed encoders can't express
+		// (nested arrays, integer elements inside arrays, HELLO's mixed
+		// bulk+integer+array response). The handler string is written
+		// VERBATIM — author must provide the exact RESP bytes including
+		// type markers, length prefixes, and CRLF. YAML double-quoted
+		// strings handle \r\n escapes; block scalars do not.
+		return []byte(value)
+	case "redis-array":
+		var buf strings.Builder
+		fmt.Fprintf(&buf, "*%d\r\n", len(cmd.ReplyBulks))
+		for _, b := range cmd.ReplyBulks {
+			fmt.Fprintf(&buf, "$%d\r\n%s\r\n", len(b), b)
+		}
+		return []byte(buf.String())
+	default:
+		// Unknown format: log once and fall back to plain-text framing so
+		// a typo in a YAML doesn't silently drop all traffic.
+		log.Warnf("tcp.encodeReply: unknown replyFormat %q, falling back to plaintext", cmd.ReplyFormat)
+		return []byte(value + "\r\n")
+	}
+}
+
+// classifyTCP accumulates timing and builds an agent detection verdict for a TCP command.
+// The scoring uses the same agentdetect.IncrementalClassify as SSH/MCP — same signal
+// definitions, same thresholds. Whether those thresholds are well-calibrated for TCP
+// is an open question (Redis scanners may have different timing profiles than SSH bots).
+// We collect the data now; threshold tuning happens after we have labeled TCP sessions.
+func (s *TCPStrategy) classifyTCP(ip, cmd string) agentdetect.Verdict {
+	now := time.Now()
+	s.agentMu.Lock()
+
+	// Lazy init (safe because Init runs before any connections)
+	if s.agentTimings == nil {
+		s.agentTimings = make(map[string][]int64)
+		s.agentLastSeen = make(map[string]time.Time)
+		s.agentPrevCmd = make(map[string]string)
+	}
+
+	// Accumulate timing (ring buffer, max 100 samples per IP)
+	if last, ok := s.agentLastSeen[ip]; ok {
+		delta := now.Sub(last).Milliseconds()
+		s.agentTimings[ip] = append(s.agentTimings[ip], delta)
+		if len(s.agentTimings[ip]) > 100 {
+			s.agentTimings[ip] = s.agentTimings[ip][len(s.agentTimings[ip])-100:]
+		}
+	}
+	s.agentLastSeen[ip] = now
+	timings := make([]int64, len(s.agentTimings[ip]))
+	copy(timings, s.agentTimings[ip])
+
+	// Retry detection: exact same command repeated
+	prevCmd := s.agentPrevCmd[ip]
+	isRetry := prevCmd != "" && prevCmd == cmd
+	s.agentPrevCmd[ip] = cmd
+
+	s.agentMu.Unlock()
+
+	sig := agentdetect.Signal{
+		InterEventTimingsMs: timings,
+		HasIdenticalRetries: isRetry,
+	}
+
+	// Cross-protocol: check bridge for activity from same IP on other protocols.
+	// v8: compute CrossProtocolGapMs from bridge timestamps (was dead code).
+	if s.Bridge != nil {
+		flags := s.Bridge.GetFlags(ip)
+		for _, f := range flags {
+			if f == "mcp_tool_call" || f == "ollama_api_accessed" {
+				sig.HasCrossProtocol = true
+				lastAct := s.Bridge.LastActivity(ip)
+				if !lastAct.IsZero() {
+					sig.CrossProtocolGapMs = now.Sub(lastAct).Milliseconds()
+				}
+				break
+			}
+		}
+	}
+
+	return agentdetect.IncrementalClassify(sig)
+}
+
+// cleanAgentState periodically prunes stale entries from the agent detection maps.
+func (s *TCPStrategy) cleanAgentState() {
+	for {
+		time.Sleep(5 * time.Minute)
+		cutoff := time.Now().Add(-60 * time.Minute)
+		s.agentMu.Lock()
+		if s.agentLastSeen != nil {
+			for ip, last := range s.agentLastSeen {
+				if last.Before(cutoff) {
+					delete(s.agentTimings, ip)
+					delete(s.agentLastSeen, ip)
+					delete(s.agentPrevCmd, ip)
+				}
+			}
+		}
+		s.agentMu.Unlock()
+	}
+}
+
+// acceptLoop is the shared Accept-loop body for the TCP strategy. It bounds
+// concurrent in-flight handler goroutines to maxConcurrentConns via a buffered
+// semaphore, drops connections that arrive while the cap is full instead of
+// queueing (queueing under DoS is the bug we're fixing), and returns cleanly
+// when the listener is closed instead of CPU-spinning on permanent errors.
+//
+// The handler closure carries all per-connection logic — banner, dispatch,
+// interactive loop. acceptLoop owns only the accept / cap / spawn lifecycle.
+func acceptLoop(listener net.Listener, handle func(net.Conn)) {
+	sem := make(chan struct{}, maxConcurrentConns)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.WithError(err).Warn("accept error in TCP strategy")
+			// Small fixed backoff: avoids a tight CPU spin if Accept returns
+			// errors back-to-back (e.g., transient EMFILE under load) without
+			// adding latency once the system recovers. Not exponential —
+			// Accept errors should be rare and transient.
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		select {
+		case sem <- struct{}{}:
+			go func(c net.Conn) {
+				defer func() { <-sem }()
+				handle(c)
+			}(conn)
+		default:
+			// Cap reached. Drop the connection rather than queue —
+			// queueing under DoS is the bug we're fixing.
+			log.WithField("remoteAddr", conn.RemoteAddr().String()).
+				Warn("TCP connection cap reached, dropping")
+			_ = conn.Close()
+		}
+	}
 }

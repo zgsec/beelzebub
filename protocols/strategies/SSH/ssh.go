@@ -58,9 +58,28 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		sshStrategy.agentPrevCmd = make(map[string]string)
 		go sshStrategy.cleanAgentState()
 	}
-	// Shell emulator: create if enabled in config
+	// Shell emulator: create if enabled in config, then wire the LLM bridge.
 	if servConf.ShellEmulator.Enabled && sshStrategy.emulator == nil {
 		sshStrategy.emulator = shellemulator.NewEmulator(servConf.ShellEmulator)
+
+		// Wire LLM bridge — mirrors the MCP pattern: construct LLMHoneypot from
+		// servConf at init time, wrap in an LLMShell, inject into the emulator.
+		if servConf.Plugin.LLMProvider != "" {
+			if llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider); err == nil {
+				honeypot := plugins.BuildHoneypot(nil, tracer.SSH, llmProvider, servConf)
+				instance := plugins.InitLLMHoneypot(*honeypot)
+				// Eagerly set Host to avoid data race in the HTTP caller goroutines.
+				if instance.Host == "" {
+					switch llmProvider {
+					case plugins.OpenAI:
+						instance.Host = "https://api.openai.com/v1/chat/completions"
+					case plugins.Ollama:
+						instance.Host = "http://localhost:11434/api/chat"
+					}
+				}
+				sshStrategy.emulator.SetLLMShell(shellemulator.NewLLMShell(instance, 0))
+			}
+		}
 	}
 
 	// Novelty detection: create store if enabled in config
@@ -73,6 +92,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	}
 	go sshStrategy.Sessions.HistoryCleaner()
 	go func() {
+		destPort := tracer.ExtractPort(servConf.Address)
 		server := &ssh.Server{
 			Addr:        servConf.Address,
 			MaxTimeout:  time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
@@ -163,6 +183,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								Environ:         strings.Join(sess.Environ(), ","),
 								User:            sess.User(),
 								Description:     servConf.Description,
+								ServiceType:     servConf.ServiceType,
 								Command:         sess.RawCommand(),
 								CommandOutput:   commandOutput,
 								Handler:         command.Name,
@@ -174,25 +195,44 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyCategory: rawNoveltyVerdict.Category,
 								NoveltySignals:  rawNoveltyVerdict.SignalsString(),
 								HASSH:           hasshFromContext(sess.Context()),
+								HASSHAlgorithms: hasshAlgorithmsFromContext(sess.Context()),
+								ServicePort:     destPort,
 							})
 							return
 						}
 					}
 				}
 
+				// Capture PTY metadata — terminal type and dimensions.
+				// Real humans use "xterm-256color" with varied dimensions.
+				// Bots typically use "vt100" or 80x24, or skip PTY entirely.
+				var ptyTerm string
+				var ptyWidth, ptyHeight int
+				if pty, _, hasPty := sess.Pty(); hasPty {
+					ptyTerm = pty.Term
+					ptyWidth = pty.Window.Width
+					ptyHeight = pty.Window.Height
+				}
+
 				tr.TraceEvent(tracer.Event{
-					Msg:        "New SSH Terminal Session",
-					Protocol:   tracer.SSH.String(),
-					RemoteAddr: sess.RemoteAddr().String(),
-					SourceIp:   host,
-					SourcePort: port,
-					Status:     tracer.Start.String(),
-					ID:         uuidSession.String(),
-					Environ:    strings.Join(sess.Environ(), ","),
-					User:       sess.User(),
+					Msg:         "New SSH Terminal Session",
+					Protocol:    tracer.SSH.String(),
+					RemoteAddr:  sess.RemoteAddr().String(),
+					SourceIp:    host,
+					SourcePort:  port,
+					Status:      tracer.Start.String(),
+					ID:          uuidSession.String(),
+					Environ:     strings.Join(sess.Environ(), ","),
+					User:        sess.User(),
 					Description: servConf.Description,
-					SessionKey: sessionKey,
-					HASSH:      hasshFromContext(sess.Context()),
+					ServiceType: servConf.ServiceType,
+					SessionKey:  sessionKey,
+					HASSH:            hasshFromContext(sess.Context()),
+					HASSHAlgorithms:  hasshAlgorithmsFromContext(sess.Context()),
+					ServicePort:      destPort,
+					PTYTerm:          ptyTerm,
+					PTYWidth:         ptyWidth,
+					PTYHeight:        ptyHeight,
 				})
 
 				// Record SSH authentication in bridge
@@ -216,6 +256,8 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					}
 					for _, command := range servConf.Commands {
 						if command.Regex.MatchString(commandInput) {
+							// v8: Measure response generation time for lure effectiveness research
+							responseStart := time.Now()
 							commandOutput := command.Handler
 							if command.Plugin == plugins.LLMPluginName {
 								emHandled := false
@@ -243,6 +285,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 									}
 								}
 							}
+							responseTimeMs := time.Since(responseStart).Milliseconds()
 							var newEntries []plugins.Message
 							newEntries = append(newEntries, plugins.Message{Role: plugins.USER.String(), Content: commandInput})
 							newEntries = append(newEntries, plugins.Message{Role: plugins.ASSISTANT.String(), Content: commandOutput})
@@ -282,6 +325,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								ID:              uuidSession.String(),
 								Protocol:        tracer.SSH.String(),
 								Description:     servConf.Description,
+								ServiceType:     servConf.ServiceType,
 								Handler:         command.Name,
 								SessionKey:      sessionKey,
 								AgentScore:      cmdVerdict.Score,
@@ -290,6 +334,8 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								NoveltyScore:    cmdNoveltyVerdict.Score,
 								NoveltyCategory: cmdNoveltyVerdict.Category,
 								NoveltySignals:  cmdNoveltyVerdict.SignalsString(),
+								ServicePort:     destPort,
+								ResponseTimeMs:  responseTimeMs,
 							})
 							break // Inner range over commands.
 						}
@@ -315,23 +361,28 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					NoveltyScore:    endNoveltyVerdict.Score,
 					NoveltyCategory: endNoveltyVerdict.Category,
 					NoveltySignals:  endNoveltyVerdict.SignalsString(),
+					ServicePort:     destPort,
 				})
 			},
 			PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 				fingerprint := fingerprintKey(key)
 				tr.TraceEvent(tracer.Event{
-					Msg:         "SSH Public Key Offered",
-					Protocol:    tracer.SSH.String(),
-					Status:      tracer.Stateless.String(),
-					User:        ctx.User(),
-					Client:      ctx.ClientVersion(),
-					RemoteAddr:  ctx.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					ID:          uuid.New().String(),
-					Description: servConf.Description,
-					Command:     key.Type() + " " + fingerprint,
+					Msg:               "SSH Public Key Offered",
+					Protocol:          tracer.SSH.String(),
+					Status:            tracer.Stateless.String(),
+					User:              ctx.User(),
+					Client:            ctx.ClientVersion(),
+					RemoteAddr:        ctx.RemoteAddr().String(),
+					SourceIp:          host,
+					SourcePort:        port,
+					ID:                uuid.New().String(),
+					Description:       servConf.Description,
+					ServiceType:       servConf.ServiceType,
+					Command:           key.Type() + " " + fingerprint, // backward compat
+					SSHKeyType:        key.Type(),
+					SSHKeyFingerprint: fingerprint,
+					ServicePort:       destPort,
 				})
 				return false // always reject, fall through to password auth
 			},
@@ -360,10 +411,13 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					SourcePort:      port,
 					ID:              uuid.New().String(),
 					Description:     servConf.Description,
+					ServiceType:     servConf.ServiceType,
 					NoveltyScore:    authNoveltyVerdict.Score,
 					NoveltyCategory: authNoveltyVerdict.Category,
 					NoveltySignals:  authNoveltyVerdict.SignalsString(),
 					HASSH:           hasshFromContext(ctx),
+					HASSHAlgorithms: hasshAlgorithmsFromContext(ctx),
+					ServicePort:     destPort,
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 				if err != nil {
@@ -463,12 +517,17 @@ func (s *SSHStrategy) classifySSH(ip, cmd string) agentdetect.Verdict {
 		InterEventTimingsMs:  timings,
 		HasCommandCorrection: detectCorrection(prevCmd, cmd),
 	}
-	// Cross-protocol: check if this IP has MCP activity
+	// Cross-protocol: check if this IP has activity on other protocols.
+	// v8: compute CrossProtocolGapMs from bridge timestamps (was dead code).
 	if s.Bridge != nil {
 		flags := s.Bridge.GetFlags(ip)
 		for _, f := range flags {
 			if f == "mcp_tool_call" || f == "ollama_api_accessed" {
 				sig.HasCrossProtocol = true
+				lastAct := s.Bridge.LastActivity(ip)
+				if !lastAct.IsZero() {
+					sig.CrossProtocolGapMs = now.Sub(lastAct).Milliseconds()
+				}
 				break
 			}
 		}
@@ -545,6 +604,8 @@ type hasshCtxKey struct{}
 // hasshFromContext extracts the HASSH fingerprint from a session context.
 // Computes from TeeConn on first call, caches the result, and releases the
 // capture buffer to avoid pinning memory for the lifetime of long sessions.
+type hasshAlgosCtxKey struct{} // context key for cached raw algorithm string
+
 func hasshFromContext(ctx interface {
 	Value(any) any
 	SetValue(any, any)
@@ -553,14 +614,26 @@ func hasshFromContext(ctx interface {
 	if cached, ok := ctx.Value(hasshCtxKey{}).(string); ok {
 		return cached
 	}
-	// Compute from TeeConn, cache, and release buffer
+	// Compute from TeeConn using ComputeHASSHFull, cache hash + algorithms, release buffer
 	hassh := ""
 	if tc, ok := ctx.Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
-		hassh = tracer.ComputeHASSH(tc.RawBytes())
+		if result := tracer.ComputeHASSHFull(tc.RawBytes()); result != nil {
+			hassh = result.Hash
+			ctx.SetValue(hasshAlgosCtxKey{}, result.RawInput)
+		}
 		tc.Release()
 	}
 	ctx.SetValue(hasshCtxKey{}, hassh)
 	return hassh
+}
+
+// hasshAlgorithmsFromContext returns the raw KEX algorithm string (cached by hasshFromContext).
+// Must be called AFTER hasshFromContext to ensure computation has happened.
+func hasshAlgorithmsFromContext(ctx interface{ Value(any) any }) string {
+	if cached, ok := ctx.Value(hasshAlgosCtxKey{}).(string); ok {
+		return cached
+	}
+	return ""
 }
 
 // checkCredentialDiscovery scans command output for credential-like content and records via bridge.

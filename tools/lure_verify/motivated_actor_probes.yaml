@@ -1,0 +1,74 @@
+# Representative motivated-actor probes captured from real-world reconnaissance.
+# Used by the verification harness to validate that lure responses survive the
+# strict-shape probes that motivated researchers (with off-the-shelf agentic
+# tooling and infrastructure-OSINT methodologies) typically run.
+#
+# These probes are LOCAL-TEST FIXTURES ONLY. The harness uses them to verify
+# our lures pass; nothing in our deployed deception ever uses them.
+#
+# Naming: probes are named after their structural shape, not any attributed source.
+# Do NOT copy these UA strings or paths into operator-facing tooling.
+schema_version: 1
+probes:
+  - service: litellm
+    name: "litellm-chat-completions-strict"
+    method: POST
+    path: /v1/chat/completions
+    headers:
+      User-Agent: "nuclide-research-pofK/0.1 (security@nuclide-research.com; coordinated-disclosure PoC)"
+      Content-Type: "application/json"
+    body: '{"model": "aurora-7b", "messages": [{"role": "user", "content": "ping"}]}'
+    expect_status: 200
+    expect_content_type_contains: application/json
+    expect_keys: [id, object, created, model, choices, usage]
+    expect_field_value_pattern:
+      object: "chat.completion"
+    forbidden_substrings:
+      - "VULNERABLE"
+      - "admin@example.com"
+      - "wW0sffoqsk.EM"
+    latency_min_seconds: 1.5
+    notes: |
+      Strict-shape chat-completions probe. The OpenAI-compat field set
+      (object="chat.completion") is the structural gate that differentiates
+      this from a generic /v1/chat/completions check.
+
+  - service: ollama
+    name: "ollama-tags-strict"
+    method: GET
+    path: /api/tags
+    headers:
+      User-Agent: "Mozilla/5.0 (research-recon)"
+    expect_status: 200
+    expect_keys_only: [models]
+    forbidden_keys: [role, content, total_duration, prompt_eval_duration]
+    forbidden_substrings:
+      - "VULNERABLE"
+      - "wW0sffoqsk.EM"
+      - "admin@example.com"
+    notes: |
+      The /api/tags endpoint must return ONLY {models: [...]}. Any chat-
+      completion field present is the May-2026 fleet detection signature
+      (cross-endpoint field mixing).
+
+  - service: openwebui
+    name: "openwebui-root-strict"
+    method: GET
+    path: /
+    headers:
+      User-Agent: "Mozilla/5.0 (compatible; recon)"
+    expect_status: 200
+    expect_content_type_contains: text/html
+    expect_body_contains: ["<title>", "Open WebUI"]
+    forbidden_substrings:
+      - "VULNERABLE"
+      - "wW0sffoqsk.EM"
+
+  - service: docker_socket
+    name: "docker-version-strict"
+    method: GET
+    path: /v1.43/version
+    expect_status: 200
+    expect_keys: [Version, ApiVersion, Os, Arch, GoVersion, KernelVersion]
+    forbidden_substrings:
+      - "VULNERABLE"

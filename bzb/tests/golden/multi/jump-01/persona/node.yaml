@@ -1,0 +1,15 @@
+canary_slots: []
+env_overrides: {}
+lures:
+- lures/jump-01/ssh-22.yaml
+node_id: jump-01
+persona_local:
+  fqdn: jump-01.int.multi.test
+  hostname: jump-01
+  internal_ip: 10.0.1.10
+  os: ubuntu-22.04
+  process_seed: ubuntu-bastion
+  uptime_days: 100
+  user: root
+role: bastion
+schema_version: 1

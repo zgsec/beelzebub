@@ -1,0 +1,160 @@
+schema_version: 1
+node_id: placeholder
+role: kitchen-sink-regression
+persona_local:
+  hostname: globex-prod-us-west-2
+  fqdn: globex-prod-us-west-2.int.globex.example
+  os: "Ubuntu 22.04.4 LTS"
+  user: root
+  internal_ip: 10.0.2.100
+  uptime_days: 31
+  process_seed: ubuntu-prod-globex
+  processes:
+    - {pid: 1,    user: root,     cpu: "0.0", mem: "0.1", vsz: "168K", rss: "11M",  cmd: "/sbin/init",                                                    stat: "Ss",  time: "0:03"}
+    - {pid: 412,  user: root,     cpu: "0.0", mem: "0.2", vsz: "92M",  rss: "18M",  cmd: "/lib/systemd/systemd-journald",                                  stat: "Ss",  time: "0:08"}
+    - {pid: 587,  user: root,     cpu: "0.0", mem: "0.1", vsz: "15M",  rss: "6M",   cmd: "/usr/sbin/sshd -D",                                              stat: "Ss",  time: "0:00"}
+    - {pid: 602,  user: root,     cpu: "0.0", mem: "0.1", vsz: "24M",  rss: "8M",   cmd: "/usr/sbin/cron -f",                                              stat: "Ss",  time: "0:01"}
+    - {pid: 842,  user: root,     cpu: "0.2", mem: "1.8", vsz: "1.2G", rss: "72M",  cmd: "/usr/bin/dockerd -H fd://",                                      stat: "Ssl", time: "0:12"}
+    - {pid: 903,  user: root,     cpu: "0.1", mem: "0.8", vsz: "712M", rss: "32M",  cmd: "containerd",                                                     stat: "Ssl", time: "0:05"}
+    - {pid: 1105, user: root,     cpu: "0.3", mem: "0.5", vsz: "141M", rss: "21M",  cmd: "nginx: master process /usr/sbin/nginx",                          stat: "Ss",  time: "0:02"}
+    - {pid: 1106, user: www-data, cpu: "0.0", mem: "0.3", vsz: "142M", rss: "14M",  cmd: "nginx: worker process",                                          stat: "S",   time: "0:01"}
+    - {pid: 1247, user: root,     cpu: "0.5", mem: "1.2", vsz: "620M", rss: "48M",  cmd: "node /opt/app/server.js",                                        stat: "Ssl", time: "0:18"}
+    - {pid: 1389, user: postgres, cpu: "0.1", mem: "1.5", vsz: "217M", rss: "62M",  cmd: "/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql/15/main", stat: "Ss",  time: "0:04"}
+    - {pid: 1390, user: postgres, cpu: "0.0", mem: "0.3", vsz: "217M", rss: "12M",  cmd: "postgres: checkpointer",                                         stat: "Ss",  time: "0:01"}
+    - {pid: 1391, user: postgres, cpu: "0.0", mem: "0.3", vsz: "217M", rss: "12M",  cmd: "postgres: background writer",                                    stat: "Ss",  time: "0:00"}
+    - {pid: 1502, user: root,     cpu: "1.8", mem: "4.2", vsz: "2.1G", rss: "168M", cmd: "/usr/local/bin/ollama serve",                                    stat: "Ssl", time: "2:47"}
+    - {pid: 2891, user: root,     cpu: "0.0", mem: "0.1", vsz: "15M",  rss: "6M",   cmd: "sshd: root@pts/0",                                               stat: "Ss",  time: "0:00"}
+    - {pid: 2893, user: root,     cpu: "0.0", mem: "0.1", vsz: "8M",   rss: "5M",   cmd: "-bash",                                                          stat: "Ss",  time: "0:00"}
+  env_vars:
+    SHELL:              /bin/bash
+    PATH:               /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOME:               /root
+    LOGNAME:            root
+    USER:               root
+    LANG:               en_US.UTF-8
+    TERM:               xterm-256color
+    OLLAMA_HOST:        http://localhost:11434
+    DOCKER_HOST:        "unix:///var/run/docker.sock"
+    AWS_DEFAULT_REGION: us-west-2
+    KUBECONFIG:         /root/.kube/config
+  lures:
+    /root/.aws/credentials: |
+      [default]
+      aws_access_key_id = {{AWS_KEY}}
+      aws_secret_access_key = {{AWS_SECRET}}
+      region = us-west-2
+    /opt/app/.env: |
+      NODE_ENV=production
+      PORT=3000
+      DB_HOST=10.0.2.50
+      DB_USER=globex_app
+      DB_PASSWORD={{DB_PASSWORD}}
+      DB_NAME=globex_prod
+      API_KEY={{API_KEY}}
+      JWT_SECRET={{JWT_SECRET}}
+      REDIS_URL=redis://10.0.2.51:6379
+      OLLAMA_HOST=http://localhost:11434
+      MCP_ENDPOINT=http://localhost:8000/mcp
+    /root/.bash_history: |
+      docker ps
+      cat /opt/app/.env
+      systemctl restart nginx
+      kubectl get pods -n production
+      psql -U globex_app -h 10.0.2.50 globex_prod
+      curl -s http://localhost:11434/api/tags
+      cat /root/.aws/credentials
+      docker logs app-node --tail 50
+      netstat -tulpn
+      vim /etc/nginx/sites-enabled/default
+      certbot renew --dry-run
+      apt update && apt upgrade -y
+      tail -f /var/log/nginx/access.log
+      git -C /opt/app pull origin main
+      curl -X POST http://localhost:8000/mcp -d '{"method":"tools/list"}'
+    /root/.docker/config.json: |
+      {
+        "auths": {
+          "https://index.docker.io/v1/": {
+            "auth": "{{DOCKER_AUTH}}"
+          },
+          "registry.internal:5000": {
+            "auth": "{{REGISTRY_AUTH}}"
+          }
+        }
+      }
+    /etc/passwd: |
+      root:x:0:0:root:/root:/bin/bash
+      daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+      bin:x:2:2:bin:/bin:/usr/sbin/nologin
+      sys:x:3:3:sys:/dev:/usr/sbin/nologin
+      sync:x:4:65534:sync:/bin:/bin/sync
+      games:x:5:60:games:/usr/games:/usr/sbin/nologin
+      man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+      lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
+      mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+      news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
+      uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
+      proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+      www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+      backup:x:34:34:backup:/var/backups:/usr/sbin/nologin
+      list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
+      nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+      systemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
+      sshd:x:110:65534::/run/sshd:/usr/sbin/nologin
+      postgres:x:113:120:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash
+      ubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash
+    /etc/hosts: |
+      127.0.0.1	localhost
+      10.0.2.100	globex-prod-us-west-2
+      10.0.2.50	db-primary
+      10.0.2.51	redis-01
+      10.0.2.52	db-replica-01
+
+      # The following lines are desirable for IPv6 capable hosts
+      ::1     ip6-localhost ip6-loopback
+      fe00::0 ip6-localnet
+  filesystem:
+    /:
+      [bin, boot, dev, etc, home, lib, lib64, media, mnt, opt, proc, root, run, sbin, srv, sys, tmp, usr, var]
+    /root:
+      [.aws, .bash_history, .bashrc, .cache, .docker, .kube, .local, .profile, .ssh, snap]
+    /root/.aws:      [credentials, config]
+    /root/.ssh:      [authorized_keys, id_rsa, id_rsa.pub, known_hosts]
+    /root/.docker:   [config.json]
+    /root/.kube:     [config]
+    /home:           [ubuntu]
+    /home/ubuntu:    [.bashrc, .profile, .ssh]
+    /opt:            [app, containerd]
+    /opt/app:        [.env, server.js, package.json, node_modules, .git]
+    /tmp:            [systemd-private-abc123, npm-12345]
+    /var:            [backups, cache, lib, log, mail, opt, run, spool, tmp, www]
+    /var/log:        [auth.log, syslog, nginx, postgresql, docker.log, kern.log, dpkg.log]
+    /var/log/nginx:  [access.log, error.log]
+    /etc:            [apt, cron.d, default, hostname, hosts, init.d, nginx, os-release, passwd, resolv.conf, shadow, ssl, sudoers, systemd]
+    /etc/nginx:      [nginx.conf, sites-available, sites-enabled, conf.d]
+    /proc:           [cpuinfo, meminfo, version, uptime, loadavg, stat, net]
+    /usr:            [bin, include, lib, local, sbin, share]
+    /usr/local:      [bin, lib, share]
+    /usr/local/bin:  [ollama, docker-compose]
+  network:
+    interface: eth0
+    mac: "02:42:ac:11:00:03"
+    ip: 10.0.2.100
+    netmask: "255.255.255.0"
+    broadcast: "10.0.2.255"
+    gateway: "10.0.2.1"
+  listeners:
+    - {proto: tcp,  local: "0.0.0.0:22",    pid: 587,  program: sshd}
+    - {proto: tcp,  local: "0.0.0.0:80",    pid: 1105, program: nginx}
+    - {proto: tcp,  local: "0.0.0.0:443",   pid: 1105, program: nginx}
+    - {proto: tcp,  local: "127.0.0.1:3000", pid: 1247, program: node}
+    - {proto: tcp,  local: "127.0.0.1:5432", pid: 1389, program: postgres}
+    - {proto: tcp,  local: "0.0.0.0:11434", pid: 1502, program: ollama}
+    - {proto: tcp6, local: ":::2222",        pid: 587,  program: sshd}
+lures:
+  - lures/mcp-8000.yaml
+  - lures/ollama-11434.yaml
+  - lures/openai-8001.yaml
+  - lures/http-8888.yaml
+canary_slots: []
+env_overrides: {}

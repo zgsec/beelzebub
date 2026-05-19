@@ -4,6 +4,8 @@ package tracer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +93,99 @@ type Event struct {
 	JA4H        string `json:"JA4H,omitempty"`
 	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
 	HASSH       string `json:"HASSH,omitempty"`
+
+	// v8: Service port extracted from listener address.
+	ServicePort string `json:"ServicePort,omitempty"`
+
+	// v8: Canonical service type from sensor config. Describes what the sensor
+	// is pretending to be (e.g., "ollama", "terraform-state", "redis").
+	// Provides context for downstream classification without biasing toward
+	// specific path patterns. Scales to any service type without code changes.
+	ServiceType string `json:"ServiceType,omitempty"`
+
+	// v8: Raw SSH KEX algorithm lists (preserved alongside the HASSH MD5 hash).
+	HASSHAlgorithms string `json:"HASSHAlgorithms,omitempty"`
+
+	// v8: HTTP response status code for lure effectiveness research.
+	ResponseStatusCode int `json:"ResponseStatusCode,omitempty"`
+
+	// v8: SSH terminal metadata from PTY request.
+	PTYTerm   string `json:"PTYTerm,omitempty"`
+	PTYWidth  int    `json:"PTYWidth,omitempty"`
+	PTYHeight int    `json:"PTYHeight,omitempty"`
+
+	// v8: JA4 TLS ClientHello fingerprint.
+	JA4 string `json:"JA4,omitempty"`
+
+	// v8: Telnet subnegotiation data from IAC SB...SE blocks.
+	// NAWS = terminal dimensions, TTYPE = terminal software, TSPEED = connection speed.
+	// Strong client fingerprint: real terminals vary, bots use 80x24 or 0x0.
+	TelnetTermType string `json:"TelnetTermType,omitempty"`
+	TelnetWidth    int    `json:"TelnetWidth,omitempty"`
+	TelnetHeight   int    `json:"TelnetHeight,omitempty"`
+	TelnetSpeed    string `json:"TelnetSpeed,omitempty"`
+
+	// v8: SSH public key metadata (structured, not crammed into Command field).
+	// key.Type() + fingerprint was previously stored as Command on Stateless events.
+	// These structured fields enable: key type distribution analysis, RSA exponent
+	// detection (e=37 PuTTYgen vs e=65537 OpenSSH), cross-session key matching.
+	SSHKeyType        string `json:"SSHKeyType,omitempty"`
+	SSHKeyFingerprint string `json:"SSHKeyFingerprint,omitempty"`
+
+	// v8: Per-request response timing — how long the honeypot took to respond.
+	// Critical for: lure effectiveness research, agent timing decontamination,
+	// detecting when our LLM responses are suspiciously slow vs real services.
+	ResponseTimeMs int64 `json:"ResponseTimeMs,omitempty"`
+
+	// v8: HTTP response body bytes served to the attacker. Opt-in per service
+	// via parser.BeelzebubServiceConfiguration.CaptureResponseBody. Truncated
+	// to ResponseBodyMaxBytes (default 64 KiB) to bound storage. Empty when
+	// flag is off; ResponseBytes (count) is still populated regardless.
+	// Required for: AKIA canary attribution (token embedded in response, not
+	// request), honeypot-detection probe verification, lure quality A/B,
+	// LLM-side prompt-injection detection.
+	ResponseBody string `json:"ResponseBody,omitempty"`
+
+	// v8: HTTP request body bytes from the attacker, dedicated capture (mirrors
+	// ResponseBody). Opt-in per service via parser.BeelzebubServiceConfiguration.
+	// CaptureRequestBody, truncated to RequestBodyMaxBytes (default 64 KiB).
+	// Required for: prompt capture on LLM-shaped lures (LiteLLM, vLLM,
+	// Ollama, Open WebUI), MCP tool argument retention, prompt-injection
+	// research. Distinct from the legacy Body field (which is always set,
+	// not truncated, and used by HTTP/MCP for backwards-compat); RequestBody
+	// is the bounded, opt-in equivalent that downstream pipelines should
+	// prefer when the operator has explicitly opted in.
+	RequestBody string `json:"RequestBody,omitempty"`
+
+	// v8: HTTP response headers served, comma-separated "Name: value" pairs.
+	// Captured alongside ResponseBody under the same opt-in flag. Detects
+	// honeypot fingerprinting via static header sets.
+	ResponseHeaders string `json:"ResponseHeaders,omitempty"`
+
+	// Captured carries lure-namespaced session metadata extracted by
+	// HTTP strategy's stateful handlers (sessionCapture) plus the
+	// artifact_sha256 when an artifact was written. Keys MUST be
+	// dot-namespaced by service to avoid collision: "screenconnect.operator_user".
+	// Propagates through to the aggregator's deception_metadata JSONB column.
+	Captured map[string]string `json:"Captured,omitempty"`
+
+	// WS-4 Slice B (2026-05-12): body-capture integrity fields. Hashes are
+	// computed over the FULL raw body bytes BEFORE any truncation, so the
+	// hash is forensic identity even when RequestBody / ResponseBody are
+	// truncated for storage. Empty when the body was empty (per Slice B Q1
+	// — see docs/strategy/2026-05-12-ws4-slice-b-body-capture-design.md in
+	// the honeypot-research repo). Hashing runs unconditionally on every
+	// body the wire carried — independent of CaptureRequestBody — so the
+	// hash field always reflects "what was on the wire" (Slice B Q5).
+	RequestBodySha256  string `json:"RequestBodySha256,omitempty"`
+	ResponseBodySha256 string `json:"ResponseBodySha256,omitempty"`
+
+	// RequestBodyParts is populated by the HTTP strategy when a request
+	// arrives with a multipart/* Content-Type. JSON / opaque to all
+	// downstream consumers — see MultipartPart struct in tracer/multipart.go.
+	// Nil for non-multipart traffic and for protocols other than HTTP
+	// (Slice B Q2: MCP/OLLAMA/openai never carry multipart in practice).
+	RequestBodyParts []MultipartPart `json:"RequestBodyParts,omitempty"`
 }
 
 type (
@@ -216,6 +311,16 @@ func (tracer *tracer) GetStrategy() Strategy {
 func CorrelationIDFromIP(ip string) string {
 	h := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(h[:8])
+}
+
+// ExtractPort returns the port portion of a listen address.
+// Handles ":22", "0.0.0.0:22", "[::]:3306", and bare ":8000".
+func ExtractPort(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return strings.TrimPrefix(addr, ":")
+	}
+	return port
 }
 
 func (tracer *tracer) TraceEvent(event Event) {

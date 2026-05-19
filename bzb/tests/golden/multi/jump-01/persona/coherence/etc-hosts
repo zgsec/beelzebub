@@ -1,0 +1,4 @@
+127.0.0.1   localhost
+10.0.1.10   jump-01 jump-01.int.multi.test
+10.0.1.100   web-01 web-01.int.multi.test
+10.0.1.50   db-01 db-01.int.multi.test
