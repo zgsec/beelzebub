@@ -254,58 +254,97 @@ commands:
   # L0 — Platform Surface
   # =========================================================================
 
-  # GET / — Dashboard landing page
+  # GET / — T0: Probe — Swagger UI HTML (oracle wire-truth: text/html; charset=utf-8)
+  # Oracle: ghcr.io/berriai/litellm:latest returns FastAPI's built-in Swagger UI.
+  # We serve a minimal subset of the same HTML skeleton — matching content-type,
+  # server header, and title exactly. No persona-branded content here (T0 spec).
+  # Forward hint: X-LiteLLM-Version header → invites CVE lookup (constitution I5a).
+  # M2 (2026-05-19): replaced persona HTML with oracle-conformant Swagger bootstrap.
   - regex: "^/$"
-    name: "platform-root"
+    name: "litellm-root-swagger"
     headers:
       - "Content-Type: text/html; charset=utf-8"
-      - "Server: nginx/1.25.4"
-      - "X-Request-Id: req_${request.uuid_short}"
-      - "X-Powered-By: uvicorn"
-      - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
     statusCode: 200
     handler: |
       <!DOCTYPE html>
-      <html lang="en">
+      <html>
       <head>
-      <meta charset="UTF-8"/>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-      <title>{{ persona.lure_content.platform_display_name | default(persona.display_name) }}</title>
-      <meta name="description" content="Internal platform management — {{ persona.lure_content.platform_display_name | default(persona.display_name) }}"/>
-      <link rel="icon" href="/favicon.ico"/>
-      <style>
-      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-      .c{text-align:center;max-width:480px;padding:2rem}
-      h1{font-size:1.5rem;font-weight:600;margin-bottom:.5rem}
-      .v{color:#64748b;font-size:.875rem;margin-bottom:2rem}
-      .s{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px}
-      .status{color:#94a3b8;font-size:.8rem;margin-top:1.5rem}
-      a{color:#3b82f6;text-decoration:none}
-      </style>
+      <link type="text/css" rel="stylesheet" href="/swagger/swagger-ui.css">
+      <link rel="shortcut icon" href="/swagger/favicon.png">
+      <title>LiteLLM API - Swagger UI</title>
       </head>
       <body>
-      <div class="c">
-      <h1>{{ persona.lure_content.platform_display_name | default(persona.display_name) }}</h1>
-      <div class="v">{{ persona.coherence.world.product.platform_version }} &middot; {{ persona.lure_content.service_name | default('platform') }}-prod-us-east-1</div>
-      <div><span class="s"></span> All systems operational</div>
-      <div class="status">
-      <p>MCP endpoint: <a href="/mcp">/mcp</a> (StreamableHTTP)</p>
-      <p>API docs: <a href="/docs">/docs</a> &middot; Health: <a href="/health">/health</a></p>
-      <p style="margin-top:1rem;color:#475569">Internal use only. Authorized personnel.</p>
+      <div id="swagger-ui">
       </div>
-      </div>
+      <script src="/swagger/swagger-ui-bundle.js"></script>
+      <script>
+      const ui = SwaggerUIBundle({
+          url: '/openapi.json',
+      "dom_id": "#swagger-ui",
+      "layout": "BaseLayout",
+      "deepLinking": true,
+      "showExtensions": true,
+      "showCommonExtensions": true,
+      oauth2RedirectUrl: window.location.origin + '/docs/oauth2-redirect',
+          presets: [
+              SwaggerUIBundle.presets.apis,
+              SwaggerUIBundle.SwaggerUIStandalonePreset
+              ],
+          })
+      </script>
       </body>
       </html>
 
-  # GET /health — Health check endpoint
+  # GET /health — T1: Recon (configured-lure override)
+  # Oracle bare: 500 {"detail":{"error":"Model list not initialized"}}
+  # Lure override: 200 with healthy_endpoints — realistic for a configured proxy.
+  # Covered by wildcard different_status allowlist entry in tiers/litellm-8000.yaml.
+  # Forward hint: "litellm_db_status":"connected" signals DB endpoint exists.
+  # M2 (2026-05-19): reshaped to LiteLLM oracle health format.
   - regex: "^/health$"
-    name: "health-check"
+    name: "litellm-health"
     headers:
       - "Content-Type: application/json"
-      - "Server: nginx/1.25.4"
-      - "Cache-Control: no-cache"
+      - "Server: uvicorn"
     statusCode: 200
-    handler: '{"status":"healthy","version":"{{ persona.coherence.world.product.platform_version | replace("v", "", 1) }}","uptime_seconds":847291,"services":{"mcp":"ok","iam":"ok","configstore":"ok","logging":"ok","ollama":"connected"},"checks":{"db_primary":"ok","redis_cluster":"ok","vault":"ok","ldap":"degraded"},"region":"us-east-1","namespace":"{{ persona.lure_content.service_name | default("platform") }}-prod","build":"{{ persona.coherence.world.product.build_sha }}"}'
+    handler: '{"healthy_endpoints":[{"model":"gpt-4o","api_base":"https://api.openai.com/v1"},{"model":"claude-sonnet-4","api_base":"https://api.anthropic.com"},{"model":"{{ persona.coherence.world.product.service_name }}-internal-llm","api_base":"http://{{ persona.coherence.world.hosts.flagship_worker.hostname }}.{{ persona.identity.internal_domain }}:11434"}],"unhealthy_endpoints":[],"healthy_count":3,"unhealthy_count":0,"litellm_version":"1.65.2","litellm_db_status":"connected"}'
+
+  # GET /health/readiness — T1: readiness probe (oracle wire-truth)
+  # Oracle: 200 {"status":"healthy","db":"Not connected"} (bare oracle, no DB)
+  # Lure: same shape, db="connected" (realistic for configured proxy).
+  # M2 (2026-05-19): new handler, was missing entirely.
+  - regex: "^/health/readiness$"
+    name: "litellm-health-readiness"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"status":"healthy","db":"connected","litellm_version":"1.65.2"}'
+
+  # GET /health/liveness — T1: liveness probe (oracle wire-truth)
+  # Oracle: 200 "I'm alive!" — plain quoted-string body, content-type application/json.
+  # The quoted string IS the JSON — LiteLLM returns a JSON string scalar, not an object.
+  # M2 (2026-05-19): new handler, was missing entirely.
+  - regex: "^/health/liveness$"
+    name: "litellm-health-liveness"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '"I''m alive!"'
+
+  # GET /test — T1: test endpoint (oracle wire-truth)
+  # Oracle: 200 {"route":"/test"}
+  # M2 (2026-05-19): new handler, was missing entirely.
+  - regex: "^/test$"
+    name: "litellm-test"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"route":"/test"}'
 
   # GET /favicon.ico — Empty favicon
   - regex: "^/favicon.ico$"
@@ -484,14 +523,22 @@ commands:
     statusCode: 200
     handler: '{"error":"wrong_service","message":"This is an MCP platform server, not Ollama. Ollama is running on port 11434. Try: curl http://localhost:11434/api/tags","redirect_port":11434}'
 
-  # /v1/models — OpenAI-compatible model listing
+  # /v1/models — T1: OpenAI-compatible model listing (oracle wire-truth override)
+  # Oracle bare: 200 {"data":[],"object":"list"} (no models configured)
+  # Lure: returns configured model list (realistic for deployed proxy).
+  # Forward hint: owned_by uses org name → invites org enumeration (T1 spec I5a).
+  # T2 note: oracle returns 200 even with invalid key (no master_key active);
+  #   lure with master_key active returns 200 for unauth + real model list.
+  #   Covered by wildcard different_status allowlist entry.
+  # M2 (2026-05-19): replaced error-redirect with oracle-conformant model list.
   - regex: "^/v1/models$"
-    name: "openai-models-compat"
+    name: "litellm-v1-models"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
     statusCode: 200
-    handler: '{"error":"wrong_service","message":"This is an MCP platform server. The OpenAI-compatible API runs on port 8001. Ollama inference is on port 11434.","see_also":{"/mcp":"MCP tools endpoint (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","port 8001":"OpenAI-compatible API","port 11434":"Ollama inference"}}'
+    handler: '{"data":[{"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-4","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"{{ persona.coherence.world.product.service_name }}-internal-llm","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"}],"object":"list"}'
 
   # /api/version — Ollama version check
   - regex: "^/api/version$"
@@ -779,14 +826,18 @@ commands:
     statusCode: 200
     handler: '{"key":"REDACTED","info":{"token":"REDACTED","key_name":"sk-...REDACTED","spend":47.32,"max_budget":1000.0,"expires":"2027-01-01T00:00:00Z","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"aliases":{},"config":{},"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","metadata":{"created_by":"jpark@{{ persona.identity.public_domain }}","environment":"production"},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}}' # lure-lint: ignore-R12 — TODO: time-template for future dates not yet supported (expires)
 
-  # GET /key/list — list issued keys (masked prefixes).
+  # GET /key/list — T2: visible-but-locked (I5b), requires master_key Bearer token.
+  # Tantalizes with /key/generate elevation path (I5a Tantalize Rule).
+  # The key listing content moves to T3+ when auth succeeds (future subagent scope).
+  # M2 (2026-05-19): changed from 200 (open) to 401 (visible-but-locked per T2 spec).
   - regex: "^/key/list$"
     name: "litellm-key-list"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"keys":[{"token_id":"litellm-key-prod-001","key_name":"sk-...Hr9pK","user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","spend":12847.23,"max_budget":50000.0,"created_at":"${time.ago.120d}","expires":null},{"token_id":"litellm-key-prod-002","key_name":"sk-...Mn2qR","user_id":"mchen@{{ persona.identity.public_domain }}","team_id":"team-data","spend":3421.88,"max_budget":10000.0,"created_at":"${time.ago.120d}","expires":null},{"token_id":"litellm-key-prod-003","key_name":"sk-...Zt7vB","user_id":"oncall-rotation@{{ persona.identity.public_domain }}","team_id":"team-sre","spend":1247.56,"max_budget":25000.0,"created_at":"${time.ago.120d}","expires":null},{"token_id":"litellm-key-ci-001","key_name":"sk-...Yp4wL","user_id":"{{ persona.coherence.world.people.ci_service.handle }}","team_id":"team-platform-eng","spend":89234.11,"max_budget":250000.0,"created_at":"${time.ago.120d}","expires":"2027-01-01T00:00:00Z"},{"token_id":"litellm-key-aruiz","key_name":"sk-...Aq8jN","user_id":"aruiz@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","spend":876.42,"max_budget":5000.0,"created_at":"${time.ago.120d}","expires":null}],"total":5}'
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "WWW-Authenticate: Bearer"
+    statusCode: 401
+    handler: '{"error":{"message":"Authentication Error, key not found. To register a new key, see /key/generate (requires master_key).","type":"authentication_error","param":"None","code":"401"}}'
 
   # GET /user/info — current-caller-shaped response.
   - regex: "^/user/info$"
