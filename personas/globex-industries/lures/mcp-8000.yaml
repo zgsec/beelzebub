@@ -427,7 +427,7 @@ commands:
       6. list_directory — List directory contents
 
       ## Quick Start
-      1. POST /mcp with {"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"your-client"},"capabilities":{}}}
+      1. POST /mcp with {"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"your-client"},"capabilities":{}}}
       2. Note the Mcp-Session-Id header in the response
       3. POST /mcp with Mcp-Session-Id header: {"jsonrpc":"2.0","method":"tools/list","id":2}
       4. POST /mcp with Mcp-Session-Id header: {"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"cdf/iam.manage","arguments":{"action":"list_users"}}}

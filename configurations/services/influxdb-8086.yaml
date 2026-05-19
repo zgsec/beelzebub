@@ -249,7 +249,7 @@ commands:
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
     statusCode: 200
-    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"influxdb-mcp","version":"0.1.0"},"capabilities":{"tools":{"listChanged":true}}}}'
+    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"influxdb-mcp","version":"0.1.0"},"capabilities":{"tools":{"listChanged":true}}}}'
 
   # MCP tools — InfluxDB-flavored with elicitation params
   - regex: "^/mcp/tools$"

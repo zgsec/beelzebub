@@ -26,9 +26,18 @@ Rules:
       Source configs are exempt; rendered output (`configurations-rendered/`,
       `out/<slug>/<node>/persona/lures/`) must be clean. Caught the 2026-05-18
       operator-flagged `{canaryTokens.X}` leak in SSH-2222 LLM prompt.
+  R11 MCP protocolVersion coherence — scanner detectable version mismatch.
+      Two checks:
+        - Per-command: if a command ships an `X-MCP-Version: V` response header,
+          its `handler:` body must contain `"protocolVersion":"V"`. Header/body
+          skew is trivially detectable (one HTTP response, two fields).
+          (CRITICAL on mismatch)
+        - File-wide: if any two handlers in the same file emit different
+          `"protocolVersion":"..."` values, flag the inconsistency.
+          (WARN — legacy lures may intentionally speak two protocol generations)
 
 Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule
-(works for R1..R10+).
+(works for R1..R11+).
 
 Exit 0 on clean, 1 on violations. With no paths, lints every YAML under
 `configurations/services/` and `personas/<persona>/lures/`.
@@ -536,6 +545,95 @@ def rule_r10_template_fingerprints(
             )
 
 
+# R11: MCP protocolVersion coherence.
+# A single HTTP response carries both an X-MCP-Version response header and a
+# "protocolVersion" field inside the JSON body.  When these two values differ,
+# any scanner reading the response can fingerprint the fake server in one
+# request — the mismatch is trivially deterministic.
+#
+# Two checks:
+#   (a) Per-command: X-MCP-Version header value must equal protocolVersion in body.
+#   (b) File-wide: all handlers in a file must emit the same protocolVersion.
+
+_R11_HEADER_RE = re.compile(
+    r"""^["']?\s*X-MCP-Version\s*:\s*([^\s"']+)""", re.IGNORECASE
+)
+_R11_BODY_RE = re.compile(r'"protocolVersion"\s*:\s*"([^"]+)"')
+
+
+def rule_r11_mcp_version_coherence(
+    lines: list[str], path: Path, realism: dict
+) -> Iterator[Violation]:
+    """R11: X-MCP-Version header must match protocolVersion in response body.
+
+    Also warns when a file emits more than one distinct protocolVersion across
+    its handler strings (file-wide consistency check).
+    """
+    # We need to parse the YAML structure to associate headers with handlers.
+    try:
+        import yaml as _yaml  # already imported at module level via `yaml`
+        parsed = _yaml.safe_load("\n".join(lines))
+    except Exception:
+        return
+
+    if not isinstance(parsed, dict):
+        return
+
+    commands = parsed.get("commands") or []
+    raw_text = "\n".join(lines)
+
+    # (a) Per-command header-vs-body check
+    for cmd_idx, cmd in enumerate(commands):
+        if not isinstance(cmd, dict):
+            continue
+        headers = cmd.get("headers") or []
+        handler = cmd.get("handler") or ""
+        if not isinstance(handler, str):
+            continue
+
+        header_v: str | None = None
+        for h in headers:
+            if not isinstance(h, str):
+                continue
+            m = _R11_HEADER_RE.match(h.lstrip("- ").strip())
+            if m:
+                header_v = m.group(1).strip()
+                break
+
+        if header_v is None:
+            continue  # no X-MCP-Version header on this command
+
+        body_m = _R11_BODY_RE.search(handler)
+        if body_m is None:
+            continue  # handler has header but no protocolVersion body field — not our problem here
+
+        body_v = body_m.group(1)
+        if body_v != header_v:
+            # Find the line number of the handler in the raw text so the
+            # violation points somewhere useful.  Fall back to 0.
+            handler_line = 0
+            regex_val = cmd.get("regex", "")
+            for li, ln in enumerate(lines, 1):
+                if isinstance(regex_val, str) and regex_val and regex_val in ln:
+                    handler_line = li
+                    break
+            yield Violation(
+                path, handler_line, "R11",
+                f"command[{cmd_idx}] regex={regex_val!r}: "
+                f"X-MCP-Version header is {header_v!r} but body protocolVersion is {body_v!r} "
+                f"— scanner reads both from the same HTTP response",
+            )
+
+    # (b) File-wide: collect all distinct protocolVersion values in any handler
+    all_versions = set(_R11_BODY_RE.findall(raw_text))
+    if len(all_versions) > 1:
+        yield Violation(
+            path, 0, "R11",
+            f"file emits multiple distinct protocolVersion values: "
+            f"{sorted(all_versions)} — inconsistent across handlers is a fingerprint",
+        )
+
+
 RULES = [
     rule_r1_server,
     rule_r2_banned_headers,
@@ -547,6 +645,7 @@ RULES = [
     rule_r8_banned_literals,
     rule_r9_placeholder_reuse,
     rule_r10_template_fingerprints,
+    rule_r11_mcp_version_coherence,
 ]
 
 # Per-rule severity. CRITICAL fires on every check; WARN can be downgraded
@@ -563,6 +662,7 @@ SEVERITY = {
     "R8": "CRITICAL",
     "R9": "WARN",
     "R10": "CRITICAL",
+    "R11": "CRITICAL",  # per-command header/body skew; WARN for file-wide multi-version
 }
 
 

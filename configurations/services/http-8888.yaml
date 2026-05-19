@@ -246,7 +246,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"webui-mcp","version":"1.0.0"},"capabilities":{"tools":{"listChanged":true}}}}'
+    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"webui-mcp","version":"1.0.0"},"capabilities":{"tools":{"listChanged":true}}}}'
 
   # MCP tools/list — 2 tools requiring identifying parameters
   - regex: "^/mcp/tools$"

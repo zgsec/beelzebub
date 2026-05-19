@@ -353,7 +353,7 @@ commands:
   # =========================================================================
 
   - regex: "^/mcp$"
-    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true},"prompts":{"listChanged":false}},"serverInfo":{"name":"vllm-mcp-bridge","version":"0.3.1"}}}'
+    handler: '{"jsonrpc":"2.0","id":${request.json.id},"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true},"resources":{"subscribe":true,"listChanged":true},"prompts":{"listChanged":false}},"serverInfo":{"name":"vllm-mcp-bridge","version":"0.3.1"}}}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
