@@ -31,6 +31,8 @@ HITS=$(grep -rln -iE 'openclaw|18789|OPENCLAW_CANARY' \
   | grep -v 'test_no_openclaw' \
   | grep -v 'test_phase_b21_classify_mirror' \
   | grep -v 'classify_test' \
+  | grep -v 'post-overhaul-smoke-test' \
+  | grep -v 'sensor-openclaw-rip-runbook' \
   || true)
 
 if [[ -n "$HITS" ]]; then

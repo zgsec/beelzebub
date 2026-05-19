@@ -897,14 +897,20 @@ commands:
   # Pagination: real LiteLLM accepts ?limit=&page= params; we serve the
   # full corpus on any request — pagination discrimination measured by
   # the limit/page values the attacker supplies (or omits).
+  # /spend/logs corpus handler — DISABLED pending corpora loader in bzb render.
+  # The corpus file at corpora/litellm-8000-spend-logs.yaml exists; the bzb
+  # render pipeline does not yet load corpora/ into the Jinja context. Until
+  # render-side loader lands (follow-on task in WS-13 §M3-full), this
+  # endpoint returns a 401 (unauth) so the rest of the lure renders cleanly.
+  # The 401 shape matches LiteLLM's real-world unauth response on /spend/logs.
   - regex: "^/spend/logs(\\?.*)?$"
-    name: "litellm-spend-logs-corpus"
+    name: "litellm-spend-logs-disabled"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: uvicorn"
-      - "X-LiteLLM-Version: 1.65.2"
-    statusCode: 200
-    handler: "{{ persona.corpora.litellm_spend_logs.entries | tojson }}"
+      - "WWW-Authenticate: Bearer"
+    statusCode: 401
+    handler: '{"error":{"message":"Authentication Error, key not found. To register a new key, see /key/generate (requires master_key).","type":"authentication_error","param":"None","code":"401"}}'
 
   # GET /global/spend/logs — per-request spend log (masked api_key prefixes).
   # Real LiteLLM exposes user_api_key as masked prefix here, NOT full key.
