@@ -156,7 +156,6 @@ lures:
   - lures/ollama-11434.yaml
   - lures/openai-8001.yaml
   - lures/http-8888.yaml
-  - lures/openclaw-18789.yaml
   - lures/ssh-2222.yaml         # added 2026-05-18 (Disney rebuild Phase 2 — SSH consolidation)
   - lures/langflow-7860.yaml    # added 2026-05-18 (Disney rebuild Phase 7 — CVE-2025-3248 KEV bait)
   - lures/mysql-3306.yaml       # added 2026-05-18 (Disney rebuild Phase 8 — real Handshake v10 + HSR41 capture)
