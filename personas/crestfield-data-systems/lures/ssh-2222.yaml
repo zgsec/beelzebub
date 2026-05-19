@@ -24,7 +24,7 @@
 #   - Ubuntu 22.04.4 LTS, kernel 5.15.0-91-generic, ip 10.0.1.100
 #   - Hosts the Crestfield Platform's FastAPI service at /opt/app,
 #     plus the local Ollama (:11434), the MCP server (:8000), and
-#     the OpenClaw evaluation deployment (:18789)
+#     the Open WebUI (:8888)
 #   - 23 days of fake uptime; running real-looking systemd services
 #   - LLM-backed shell (gpt-4o-mini) drives all command output via
 #     the persona-shaped prompt below
@@ -34,7 +34,7 @@
 #   - /opt/app/.env reveals the cdf_prod_2026Q2-1e6f8b27 watermark password
 #     adjacent to a ${MCP_CANARY_DB_PASS} DNS canary
 #   - /root/.bash_history shows engineer cross-lure activity (kubectl,
-#     psql to db-primary, curls to MCP/Ollama/OpenClaw)
+#     psql to db-primary, curls to MCP/Ollama/Open WebUI)
 #   - /var/log/messages includes the 2026-03-05 OOM kill for
 #     crestfield-worker-7f8b9c
 #   - INC-4401 LDAP sync failure shows up in cron logs
@@ -69,7 +69,7 @@ serverName: "{{ persona.coherence.world.hosts.prod_web.hostname }}"
 #       actors at scale.
 #   (b) Cross-lure watermark regex: `[a-z]{3,4}_prod_20\d\dQ[1-4]-[0-9a-f]{8}` —
 #       accepts any persona-generation watermark (cdf_, alt_, future-prefix)
-#       harvested from MCP/HTTP/Ollama/OpenAI/OpenClaw/LangFlow lures.
+#       harvested from MCP/HTTP/Ollama/OpenAI/LangFlow lures.
 #       Each lure renders a UNIQUE 8-hex suffix; the class above accepts
 #       all of them and the captured password attributes back to the source
 #       lure via the persona.coherence.world.watermark_passwords map.
@@ -172,7 +172,6 @@ plugin:
     - Crestfield Platform API + MCP server (port 8000, behind nginx 1.25.4) — uvicorn
     - LiteLLM 1.65.2 proxy (bundled with MCP, same :8000) — fronts OpenAI/Anthropic/Bedrock
     - Open WebUI 0.5.3 (port 8888) — team chat
-    - OpenClaw 0.7.2 (port 18789) — third-party agent gateway, eval deployment
     - Ollama 0.5.4 (port 11434, but the IN-PROD ollama runs on the GPU worker
       crestfield-worker-7f8b9c at 10.0.12.91 — what's here is the dev mirror)
     - PostgreSQL client tools (psql) — connects to db-primary.int.crestfielddata.io
@@ -235,7 +234,6 @@ plugin:
       curl -s http://localhost:11434/api/tags
       curl -s http://localhost:8000/.well-known/mcp.json | jq
       curl -s http://localhost:8000/health
-      curl -s http://localhost:18789/api/agents
       curl -s http://localhost:8888/api/config
       docker logs crestfield-platform --tail 50
       git -C /opt/app pull origin main
@@ -277,7 +275,6 @@ plugin:
       OLLAMA_BASE_URL=http://localhost:11434
       LITELLM_PROXY_URL=http://localhost:8000
       MCP_ENDPOINT=http://localhost:8000/mcp
-      OPENCLAW_URL=http://localhost:18789
 
     /opt/app/.env.production — duplicate of .env (real-world inconsistency
     where the .env is symlinked or copied to .env.production). Same content.
@@ -338,7 +335,6 @@ plugin:
       8f3e2d1a9c4b   registry.int.crestfielddata.io/crestfield-platform:v3.12.1-rc1   "uvicorn app.main:ap…"   Up 23 days     0.0.0.0:8000->8000/tcp                             crestfield-platform
       6b2d4a7e9f1c   ollama/ollama:0.5.4                                  "/bin/ollama serve"      Up 23 days     0.0.0.0:11434->11434/tcp                           crestfield-ollama-mirror
       4c1e8b2a5d3f   ghcr.io/open-webui/open-webui:v0.5.3                 "bash start.sh"          Up 23 days     0.0.0.0:8888->8080/tcp                             crestfield-openwebui
-      9a5f3c1b8e2d   openclaw/gateway:0.7.2                               "/openclaw"              Up 23 days     0.0.0.0:18789->18789/tcp                           crestfield-openclaw
       2e7b4c9a1f6d   datadog/agent:7.52.0                                 "/bin/entrypoint.sh"     Up 23 days     8125/udp, 8126/tcp                                 datadog-agent
 
     kubectl get pods -n crestfield-prod (when run) — always include these:

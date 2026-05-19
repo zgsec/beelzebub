@@ -222,7 +222,7 @@ coherence:
       langflow:         { num: 7860, host: langflow,            service: "LangFlow 1.2.0" }
       open_webui:       { num: 8888, host: prod_web,            service: "Open WebUI v0.5.3" }
       ollama:           { num: 11434, host: flagship_worker,    service: "Ollama 0.5.4" }
-      openclaw:         { num: 18789, host: prod_web,           service: "OpenClaw Gateway v0.7.2 (third-party agent gateway)" }
+
       vault:            { num: 8200, host: vault,               service: "HashiCorp Vault" }
       ldap:             { num: 636,  host: ldap,                service: "OpenLDAP" }
       docker_registry:  { num: 5000, host: docker_registry,     service: "Docker Registry v2" }
@@ -268,7 +268,7 @@ coherence:
       http:     "cdf_prod_2026Q2-9b4e1ac5"   # http-8888 / Open-WebUI app DB
       ollama:   "cdf_prod_2026Q2-2d8f6b3a"   # ollama-11434 LLM-emitted env vars
       openai:   "cdf_prod_2026Q2-c5a92eef"   # openai-8001 / vLLM debug endpoints
-      openclaw: "cdf_prod_2026Q2-4a7b81cd"   # openclaw-18789 webhook configs
+
       langflow: "cdf_prod_2026Q2-5e8d3f1b"   # langflow-7860 (Phase 7)
       redis:    "cdf_prod_2026Q2-8a4d2c9e"   # redis-6379 CONFIG GET requirepass (Phase 8)
       influxdb: "cdf_prod_2026Q2-3b6f7a91"   # influxdb-8086 (Phase 8) — embedded in /debug/vars cmdline

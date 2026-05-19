@@ -107,8 +107,7 @@ of these five. Do not invent new names. Disney rule.
   - LiteLLM 1.65.2 on prod-web-01:8000 (the proxy to OpenAI/Anthropic/Bedrock)
   - vLLM 0.6.3 on `gpu-worker-01/02:8001` (batch jobs)
   - Open WebUI 0.5.3 on prod-web-01:8888 (team chat interface)
-  - OpenClaw 0.7.2 on prod-web-01:18789 (third-party agent gateway,
-    Crestfield is evaluating it for production)
+
   - LangFlow 1.2.x on langflow.int.crestfielddata.io:7860 (workflow
     automation — vulnerable to CVE-2025-3248, on engineering's TODO
     to upgrade)
@@ -144,8 +143,7 @@ of these five. Do not invent new names. Disney rule.
   in any handler).
 - Crestfield is NOT using GitLab — entirely GitHub Actions for CI.
 - Crestfield does NOT use AWS GovCloud — `us-east-1` is the region.
-- The "office NAS" at `nas-backup-01` (the QNAP TS-453D referenced in
-  the OpenClaw lure) is a SEPARATE asset from the platform. Office
+- The "office NAS" at `nas-backup-01` (QNAP TS-453D) is a SEPARATE asset from the platform. Office
   IT, not engineering. Attackers who pivot to it should find a
   realistic isolated NAS, not platform infrastructure.
 - Crestfield does NOT use ScreenConnect (removed from estate 2026-05-18
