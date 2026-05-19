@@ -35,9 +35,14 @@ Rules:
         - File-wide: if any two handlers in the same file emit different
           `"protocolVersion":"..."` values, flag the inconsistency.
           (WARN — legacy lures may intentionally speak two protocol generations)
+  R12 Frozen ISO timestamps in handler bodies — a scanner re-probing weeks
+      later sees identical "last activity" values, trivially detectable as a
+      honeypot tell. Use ${time.ago.<N><s|m|h|d>} or ${time.now} instead.
+      Skips description/summary/notes/comment fields and YAML comments.
+      (WARN — some timestamps are legitimately persona-locked; use waiver)
 
 Per-line waiver: append `# lure-lint: ignore-R<N>` to suppress one rule
-(works for R1..R11+).
+(works for R1..R12+).
 
 Exit 0 on clean, 1 on violations. With no paths, lints every YAML under
 `configurations/services/` and `personas/<persona>/lures/`.
@@ -634,6 +639,52 @@ def rule_r11_mcp_version_coherence(
         )
 
 
+def rule_r12_no_frozen_timestamps(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
+    """R12: handler response bodies must not contain literal ISO timestamps.
+
+    Use ${time.now} or ${time.ago.<N><s|m|h|d>} for plausible drift.
+
+    Rationale: a scanner re-probing weeks later sees identical "last activity"
+    values — a trivially detectable honeypot tell.
+
+    Skips:
+      - YAML comment lines (# ...)
+      - description/summary/notes/comment fields (not over-the-wire content)
+      - Lines that already contain ${time.*} substitutions
+
+    Severity: WARN — some timestamps are legitimately persona-locked (e.g.
+    founded_year, a specific past incident in the show-bible). Use a
+    `# lure-lint: ignore-R12` waiver to suppress individual lines.
+    """
+    _FROZEN_TS_RE = re.compile(
+        r'"([a-zA-Z_]+)"\s*:\s*"(20\d{2}-\d{2}-\d{2}T[\d:.+Z-]+)"'
+    )
+    _DOC_FIELD_RE = re.compile(
+        r'^\s*(description|summary|notes?|comment|label|title|message)\s*:', re.IGNORECASE
+    )
+
+    for line_no, line in enumerate(lines, start=1):
+        stripped = line.lstrip()
+        # Skip comment lines
+        if stripped.startswith("#"):
+            continue
+        # Skip documentation fields
+        if _DOC_FIELD_RE.match(stripped):
+            continue
+        # Skip lines that already contain ${time.*} (already templated)
+        if "${time." in line:
+            continue
+        for m in _FROZEN_TS_RE.finditer(line):
+            field, ts = m.group(1), m.group(2)
+            yield Violation(
+                path, line_no, "R12",
+                f"frozen timestamp in handler "
+                f"(field={field!r}, value={ts!r}) — "
+                f"use ${{time.ago.<duration>}} for plausible drift; "
+                f"re-probers see identical values as a honeypot tell",
+            )
+
+
 RULES = [
     rule_r1_server,
     rule_r2_banned_headers,
@@ -646,6 +697,7 @@ RULES = [
     rule_r9_placeholder_reuse,
     rule_r10_template_fingerprints,
     rule_r11_mcp_version_coherence,
+    rule_r12_no_frozen_timestamps,
 ]
 
 # Per-rule severity. CRITICAL fires on every check; WARN can be downgraded
@@ -663,6 +715,7 @@ SEVERITY = {
     "R9": "WARN",
     "R10": "CRITICAL",
     "R11": "CRITICAL",  # per-command header/body skew; WARN for file-wide multi-version
+    "R12": "WARN",      # frozen timestamps; WARN allows persona-locked values via waiver
 }
 
 

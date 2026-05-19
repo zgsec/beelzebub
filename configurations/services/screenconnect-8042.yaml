@@ -133,7 +133,7 @@ commands:
       - "X-Powered-By: ASP.NET"
       - "Content-Type: application/json"
     handler: |
-      {"SessionID":"a1b2c3d4-0003-4000-8000-000000000003","Hostname":"MULLER-DC01","OS":"Windows Server 2022","Organization":"Müller Fertigung GmbH","Online":true,"ConnectedSince":"2026-04-30T10:00:00Z"}
+      {"SessionID":"a1b2c3d4-0003-4000-8000-000000000003","Hostname":"MULLER-DC01","OS":"Windows Server 2022","Organization":"Müller Fertigung GmbH","Online":true,"ConnectedSince":"${time.ago.2h}"}
 
   # ---- extension_upload (CVE-2024-1708) — the prize --------------------
 

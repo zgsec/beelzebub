@@ -129,7 +129,7 @@ commands:
   # 9. GET /api/v1/chats with Bearer — Returns canary-seeded chat history
   #    Note: Beelzebub can't check headers, so this catches /api/v1/chats/list
   - regex: "^/api/v1/chats/list$"
-    handler: '{"data":[{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","updated_at":"2026-03-05T14:22:00Z","created_at":"2026-03-05T14:00:00Z"},{"id":"chat-d4e5f6","title":"Fix Kubernetes GPU scheduling","updated_at":"2026-03-04T09:15:00Z","created_at":"2026-03-04T08:30:00Z"},{"id":"chat-g7h8i9","title":"Database migration script","updated_at":"2026-03-03T16:45:00Z","created_at":"2026-03-03T16:00:00Z"},{"id":"chat-j0k1l2","title":"vLLM deployment troubleshooting","updated_at":"2026-03-02T11:30:00Z","created_at":"2026-03-02T10:00:00Z"},{"id":"chat-m3n4o5","title":"Ollama model optimization","updated_at":"2026-03-01T08:00:00Z","created_at":"2026-02-28T22:15:00Z"}]}'
+    handler: '{"data":[{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","updated_at":"${time.ago.3h}","created_at":"${time.ago.120d}"},{"id":"chat-d4e5f6","title":"Fix Kubernetes GPU scheduling","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-g7h8i9","title":"Database migration script","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-j0k1l2","title":"vLLM deployment troubleshooting","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-m3n4o5","title":"Ollama model optimization","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -137,7 +137,7 @@ commands:
 
   # 10. GET /api/v1/chats/{id} — Individual chat with canary data
   - regex: "^/api/v1/chats/chat-a1b2c3$"
-    handler: '{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","messages":[{"id":"msg-1","role":"user","content":"How do I configure the S3 bucket for our model cache?","timestamp":"2026-03-05T14:00:00Z"},{"id":"msg-2","role":"assistant","content":"For the model cache bucket, you can use the existing credentials in your environment:\n\n```bash\nexport AWS_ACCESS_KEY_ID=${HTTP_CANARY_AWS_KEY}\nexport AWS_SECRET_ACCESS_KEY=${HTTP_CANARY_AWS_SECRET}\nexport AWS_DEFAULT_REGION=us-east-2\n\naws s3 mb s3://ml-model-cache.${HTTP_CANARY_DNS}\naws s3 sync /models/ s3://ml-model-cache.${HTTP_CANARY_DNS}/ollama/\n```\n\nThe bucket policy should allow read access from the vLLM container on port 8000 and the Ollama instance on 11434.","timestamp":"2026-03-05T14:02:00Z"},{"id":"msg-3","role":"user","content":"What about the database connection for the chat history?","timestamp":"2026-03-05T14:05:00Z"},{"id":"msg-4","role":"assistant","content":"Open WebUI stores chat history in the local SQLite by default, but we moved to PostgreSQL for reliability:\n\n```\nDATABASE_URL=postgresql://webui:Pr0d_chat!2026@db-webui.${HTTP_CANARY_DNS}:5432/open_webui\n```\n\nThe connection is configured in the docker-compose.yml under the open-webui service.","timestamp":"2026-03-05T14:07:00Z"}],"updated_at":"2026-03-05T14:22:00Z"}'
+    handler: '{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","messages":[{"id":"msg-1","role":"user","content":"How do I configure the S3 bucket for our model cache?","timestamp":"${time.ago.1h}"},{"id":"msg-2","role":"assistant","content":"For the model cache bucket, you can use the existing credentials in your environment:\n\n```bash\nexport AWS_ACCESS_KEY_ID=${HTTP_CANARY_AWS_KEY}\nexport AWS_SECRET_ACCESS_KEY=${HTTP_CANARY_AWS_SECRET}\nexport AWS_DEFAULT_REGION=us-east-2\n\naws s3 mb s3://ml-model-cache.${HTTP_CANARY_DNS}\naws s3 sync /models/ s3://ml-model-cache.${HTTP_CANARY_DNS}/ollama/\n```\n\nThe bucket policy should allow read access from the vLLM container on port 8000 and the Ollama instance on 11434.","timestamp":"${time.ago.1h}"},{"id":"msg-3","role":"user","content":"What about the database connection for the chat history?","timestamp":"${time.ago.1h}"},{"id":"msg-4","role":"assistant","content":"Open WebUI stores chat history in the local SQLite by default, but we moved to PostgreSQL for reliability:\n\n```\nDATABASE_URL=postgresql://webui:Pr0d_chat!2026@db-webui.${HTTP_CANARY_DNS}:5432/open_webui\n```\n\nThe connection is configured in the docker-compose.yml under the open-webui service.","timestamp":"${time.ago.1h}"}],"updated_at":"${time.ago.3h}"}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -154,7 +154,7 @@ commands:
   # 12. POST /api/chat — Chat completion endpoint (main inference path)
   - regex: "^/api/chat$"
     handler: |
-      {"id":"chatcmpl-webui-abc123","model":"phi:2.7b","created_at":"2026-03-06T12:00:00Z","message":{"role":"assistant","content":"I'd be happy to help! What would you like to work on?"},"done":true}
+      {"id":"chatcmpl-webui-abc123","model":"phi:2.7b","created_at":"${time.ago.120d}","message":{"role":"assistant","content":"I'd be happy to help! What would you like to work on?"},"done":true}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -196,7 +196,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"{{ persona.lure_content.service_name | default('platform') }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"{{ persona.lure_content.service_name | default("platform") }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # Root-level /sse — scanners check this first for MCP SSE transport
   - regex: "^/sse$"

@@ -107,7 +107,7 @@ commands:
   # Cross-port coherence: same hosted_model_name as Ollama / vLLM / LiteLLM.
   - regex: "^/api/models$"
     method: "GET"
-    handler: '{"data":[{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","name":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"ollama","ollama":{"name":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest","model":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest","modified_at":"2026-05-03T11:24:18+08:00","size":4731010048,"digest":"7b4c9d2e8a1f3b6c","details":{"parameter_size":"7.0B","quantization_level":"Q4_K_M"}}}]}'
+    handler: '{"data":[{"id":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","name":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}","object":"model","created":1746230400,"owned_by":"ollama","ollama":{"name":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest","model":"{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}:latest","modified_at":"${time.ago.45d}","size":4731010048,"digest":"7b4c9d2e8a1f3b6c","details":{"parameter_size":"7.0B","quantization_level":"Q4_K_M"}}}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"

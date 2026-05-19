@@ -115,14 +115,98 @@ def test_R11_multi_version_file_fires_warn():
     )
 
 
+
+# ---------------------------------------------------------------------------
+# R12 — frozen ISO timestamps in handler bodies
+# ---------------------------------------------------------------------------
+
+_R12_FROZEN_YAML = """\
+apiVersion: v1
+protocol: http
+address: ":1234"
+commands:
+  - regex: "^/agents$"
+    headers:
+      - "Content-Type: application/json"
+    handler: '{"agents":[{"id":"a1","created":"2026-01-15T08:30:00Z"}]}'
+    statusCode: 200
+  - regex: "^.*$"
+    handler: '{"error":"not found"}'
+    statusCode: 404
+"""
+
+_R12_TEMPLATE_YAML = """\
+apiVersion: v1
+protocol: http
+address: ":1234"
+commands:
+  - regex: "^/agents$"
+    handler: '{"agents":[{"id":"a1","created":"${time.ago.120d}"}]}'
+    statusCode: 200
+  - regex: "^.*$"
+    handler: '{"error":"not found"}'
+    statusCode: 404
+"""
+
+_R12_DOC_YAML = """\
+apiVersion: v1
+protocol: http
+address: ":1234"
+description: "Lure deployed 2026-03-05T18:30:00Z to capture..."
+commands:
+  - regex: "^/$"
+    # As of 2026-04-15T08:30:00Z — last seen
+    handler: '{"ok":true}'
+    statusCode: 200
+  - regex: "^.*$"
+    handler: '{"error":"not found"}'
+    statusCode: 404
+"""
+
+
+def test_R12_catches_frozen_timestamp_in_handler():
+    """A literal ISO timestamp in a handler body must fire R12 WARN."""
+    result = _run_lint(_R12_FROZEN_YAML)
+    assert "R12" in result.stdout, (
+        f"R12 didn't fire on frozen timestamp.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "2026-01-15" in result.stdout, (
+        f"timestamp value should appear in R12 output.\nstdout: {result.stdout}"
+    )
+    assert "WARN" in result.stdout, (
+        f"R12 should be WARN severity.\nstdout: {result.stdout}"
+    )
+
+
+def test_R12_allows_time_ago_template():
+    """${time.ago.120d} replacement must NOT fire R12."""
+    result = _run_lint(_R12_TEMPLATE_YAML)
+    assert "R12" not in result.stdout, (
+        f"R12 false positive on ${'{time.ago.120d}'} template.\nstdout: {result.stdout}"
+    )
+
+
+def test_R12_skips_descriptions_and_comments():
+    """Documentation fields and YAML comments must not trigger R12."""
+    result = _run_lint(_R12_DOC_YAML)
+    assert "R12" not in result.stdout, (
+        f"R12 false positive on description/comment.\nstdout: {result.stdout}"
+    )
+
+
 if __name__ == "__main__":
-    tests = [
+    r12_tests = [
+        test_R12_catches_frozen_timestamp_in_handler,
+        test_R12_allows_time_ago_template,
+        test_R12_skips_descriptions_and_comments,
+    ]
+    all_tests = [
         test_R11_catches_header_body_mismatch,
         test_R11_coherent_handler_is_clean,
         test_R11_multi_version_file_fires_warn,
-    ]
+    ] + r12_tests
     failures = 0
-    for t in tests:
+    for t in all_tests:
         try:
             t()
             print(f"  PASS  {t.__name__}")
@@ -130,8 +214,8 @@ if __name__ == "__main__":
             print(f"  FAIL  {t.__name__}: {e}")
             failures += 1
     if failures:
-        print(f"\n{failures}/{len(tests)} tests FAILED")
+        print(f"\n{failures}/{len(all_tests)} tests FAILED")
         sys.exit(1)
     else:
-        print(f"\n{len(tests)}/{len(tests)} tests passed")
+        print(f"\n{len(all_tests)}/{len(all_tests)} tests passed")
         sys.exit(0)

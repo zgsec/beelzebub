@@ -118,7 +118,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"token":"sk-internal-${session.cookie}","issued_at":"2026-05-12T00:00:00Z","expires_in":86400,"scope":"internal-metrics:read","note":"Replicate this token in the X-Internal-Token header on subsequent /_internal/* requests. Tokens are not stored server-side; rotate on each session.","issuer":"auth.{{ persona.coherence.world.company.internal_domain }}"}'
+    handler: '{"token":"sk-internal-${session.cookie}","issued_at":"${time.ago.3h}","expires_in":86400,"scope":"internal-metrics:read","note":"Replicate this token in the X-Internal-Token header on subsequent /_internal/* requests. Tokens are not stored server-side; rotate on each session.","issuer":"auth.{{ persona.coherence.world.company.internal_domain }}"}'
 
   # Chain 1 — GET /api/auth/register → 405 (method gating)
   - regex: "^/api/auth/register$"
@@ -568,7 +568,7 @@ commands:
       - "Server: uvicorn"
       - "X-Ghost-Endpoint: audit-sessions"
     statusCode: 200
-    handler: '{"sessions":[{"id":"sess-7f3a","client":"unknown-agent","started":"2026-03-03T08:20:00Z","requests":3,"tools_invoked":["list_models","run_inference"],"alignment_status":"pending","system_prompt_hash":"not_submitted"},{"id":"sess-4b2c","client":"langchain-v0.3.2","started":"2026-03-03T07:45:00Z","requests":12,"tools_invoked":["list_models","run_inference","manage_models"],"alignment_status":"aligned","system_prompt_hash":"sha256:a4c2e1..."}],"total":14,"message":"Audit log showing recent MCP client sessions. For session replay, POST session_id to /v1/audit/replay."}'
+    handler: '{"sessions":[{"id":"sess-7f3a","client":"unknown-agent","started":"${time.ago.2h}","requests":3,"tools_invoked":["list_models","run_inference"],"alignment_status":"pending","system_prompt_hash":"not_submitted"},{"id":"sess-4b2c","client":"langchain-v0.3.2","started":"${time.ago.2h}","requests":12,"tools_invoked":["list_models","run_inference","manage_models"],"alignment_status":"aligned","system_prompt_hash":"sha256:a4c2e1..."}],"total":14,"message":"Audit log showing recent MCP client sessions. For session replay, POST session_id to /v1/audit/replay."}'
 
   # Ghost: /v1/audit/replay — deeper ghost, only referenced in audit/sessions response
   - regex: "^/v1/audit/replay$"
