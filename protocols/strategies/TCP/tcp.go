@@ -87,7 +87,7 @@ func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		// so banners can carry e.g. "${request.uuid_short}" without leaking a
 		// fleet-identical string across sensors.
 		if servConf.Banner != "" {
-			banner, _ := responsesubs.Apply(servConf.Banner, nil, nil)
+			banner, _ := responsesubs.Apply(servConf.Banner, nil, nil, nil)
 			if _, err := c.Write([]byte(banner)); err != nil {
 				return
 			}
@@ -230,7 +230,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		// placeholders so prompts can carry per-call UUIDs without
 		// leaking a fleet-identical literal.
 		if servConf.ServerName != "" {
-			prompt, _ := responsesubs.Apply(servConf.ServerName, nil, nil)
+			prompt, _ := responsesubs.Apply(servConf.ServerName, nil, nil, nil)
 			if _, err := conn.Write([]byte(prompt)); err != nil {
 				break
 			}
@@ -342,7 +342,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		// template strings. TCP has no header concept and no stateful
 		// session context, so headers=nil and sessionVars=nil. This is a
 		// no-op for plaintext lures that don't author placeholders.
-		commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil)
+		commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil, nil)
 		wireBytes := encodeReply(matchedCommand, commandOutput)
 		if len(wireBytes) > 0 {
 			if _, err := conn.Write(wireBytes); err != nil {

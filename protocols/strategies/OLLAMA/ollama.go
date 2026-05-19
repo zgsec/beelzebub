@@ -179,7 +179,10 @@ func ollamaLLMOfflineResponse(fb *parser.LLMOfflineResponse, model string) (int,
 	// llmOfflineResponse bodies can carry e.g. "${request.uuid_short}" without
 	// the literal template string landing on the wire. OLLAMA does not
 	// expose a stateful session context; only request-level vars fire.
-	body, _ = responsesubs.Apply(body, nil, nil)
+	// nil requestBody: ollamaLLMOfflineResponse is called without an HTTP
+	// request context (it formats a static error payload), so ${request.json.*}
+	// placeholders are not meaningful here and fall back to "null" per spec.
+	body, _ = responsesubs.Apply(body, nil, nil, nil)
 	return status, body
 }
 

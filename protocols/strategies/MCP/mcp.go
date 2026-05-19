@@ -1119,7 +1119,10 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// stateful per-request session context, so sessionVars=nil — only
 	// request-level vars fire. Substitution is non-mutating; the parser
 	// command pointer is shared across requests.
-	respBody, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil)
+	// Pass bodyBytes so ${request.json.*} placeholders (e.g. ${request.json.id}
+	// for JSON-RPC 2.0 id-echo) can be resolved from the request body.
+	// bodyBytes was read at line 1074 via io.ReadAll(io.LimitReader(r.Body, 1MB)).
+	respBody, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil, bodyBytes)
 
 	// MCP HTTP-fallback always records status code (mirrors HTTP/OLLAMA
 	// strategies). When matchedCommand.StatusCode is 0 the wire response

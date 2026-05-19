@@ -477,7 +477,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 	// c. Variable substitution on resp.Body and resp.Headers. See
 	// applyResponseSubstitutions for the variable inventory + safety rules.
-	applyResponseSubstitutions(&resp, sctx)
+	// bodyBytes is passed so ${request.json.*} placeholders can be resolved
+	// from the request body (e.g. echoing JSON-RPC id in lure responses).
+	applyResponseSubstitutions(&resp, sctx, bodyBytes)
 
 	// d. Artifact capture — write request body + session metadata to disk.
 	if command.ArtifactCapture && sctx != nil && sctx.artifactStore != nil {
@@ -812,7 +814,7 @@ func mapCookiesToString(cookies []*http.Cookie) string {
 // compat with the existing HTTP test suite; the actual substitution
 // logic now lives in protocols/strategies/responsesubs so MCP / OLLAMA
 // / TCP / TELNET share it.
-func applyResponseSubstitutions(resp *httpResponse, sctx *sessionContext) {
+func applyResponseSubstitutions(resp *httpResponse, sctx *sessionContext, reqBody []byte) {
 	var sessionVars map[string]string
 	if sctx != nil && sctx.sess != nil {
 		sessionVars = make(map[string]string, 2+len(sctx.sess.Captured))
@@ -826,7 +828,7 @@ func applyResponseSubstitutions(resp *httpResponse, sctx *sessionContext) {
 			sessionVars["capt:"+k] = v
 		}
 	}
-	resp.Body, resp.Headers = responsesubs.Apply(resp.Body, resp.Headers, sessionVars)
+	resp.Body, resp.Headers = responsesubs.Apply(resp.Body, resp.Headers, sessionVars, reqBody)
 }
 
 // extractServerHeader pulls the Server value from a header slice, falling back to "nginx/1.25.4".

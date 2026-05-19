@@ -11,7 +11,7 @@ import (
 func TestApply_RequestVarsUnconditional(t *testing.T) {
 	body := `{"trace_id":"${request.uuid}","ts":${request.unix_ms}}`
 	headers := []string{"X-Request-Id: req_${request.uuid_short}"}
-	gotBody, gotHeaders := Apply(body, headers, nil)
+	gotBody, gotHeaders := Apply(body, headers, nil, nil)
 
 	if strings.Contains(gotBody, "${request.uuid}") || strings.Contains(gotBody, "${request.unix_ms}") {
 		t.Fatalf("request placeholders left in body: %q", gotBody)
@@ -41,7 +41,7 @@ func TestApply_RequestVarsUnconditional(t *testing.T) {
 func TestApply_VariesAcrossInvocations(t *testing.T) {
 	seen := map[string]struct{}{}
 	for i := 0; i < 5; i++ {
-		body, _ := Apply("${request.uuid}", nil, nil)
+		body, _ := Apply("${request.uuid}", nil, nil, nil)
 		if _, dup := seen[body]; dup {
 			t.Fatalf("request.uuid repeated across calls: %q", body)
 		}
@@ -59,7 +59,7 @@ func TestApply_SessionVarsRespected(t *testing.T) {
 		"short":     "deadbeef",
 		"capt:role": "admin",
 	}
-	got, _ := Apply(body, nil, vars)
+	got, _ := Apply(body, nil, vars, nil)
 	if !strings.Contains(got, "cookie=deadbeef00112233") {
 		t.Errorf("session.cookie missing: %q", got)
 	}
@@ -80,7 +80,7 @@ func TestApply_HeadersRewrite(t *testing.T) {
 		"X-Trace-Id: ${request.uuid}",
 		"Content-Type: application/json",
 	}
-	_, got := Apply("", headers, nil)
+	_, got := Apply("", headers, nil, nil)
 	for _, h := range got {
 		if strings.Contains(h, "${request.") {
 			t.Fatalf("placeholder left in header: %q", h)
@@ -104,7 +104,7 @@ func TestApply_DoesNotMutateInputs(t *testing.T) {
 	bodyCopy := originalBody
 	headersCopy := append([]string(nil), originalHeaders...)
 
-	_, _ = Apply(originalBody, originalHeaders, nil)
+	_, _ = Apply(originalBody, originalHeaders, nil, nil)
 
 	if originalBody != bodyCopy {
 		t.Errorf("input body mutated: was %q, now %q", bodyCopy, originalBody)
@@ -126,7 +126,7 @@ func TestApply_CapturedValuesHTMLEscaped(t *testing.T) {
 	vars := map[string]string{
 		"capt:username": `<script>alert(1)</script>`,
 	}
-	got, _ := Apply(body, nil, vars)
+	got, _ := Apply(body, nil, vars, nil)
 	if strings.Contains(got, "<script>") {
 		t.Errorf("captured value not HTML-escaped: %q", got)
 	}
@@ -142,7 +142,7 @@ func TestApply_CapturedValuesHTMLEscaped(t *testing.T) {
 // stripped to "".
 func TestApply_UnknownPlaceholderUntouched(t *testing.T) {
 	body := `hello ${captured.unknown_key} and ${session.unset}`
-	got, _ := Apply(body, nil, nil)
+	got, _ := Apply(body, nil, nil, nil)
 	if !strings.Contains(got, "${captured.unknown_key}") {
 		t.Errorf("unknown captured.* placeholder altered: %q", got)
 	}
@@ -155,8 +155,66 @@ func TestApply_UnknownPlaceholderUntouched(t *testing.T) {
 // headers slice. Apply should not allocate an empty slice in that
 // case; nil-in / nil-out is the contract.
 func TestApply_NilHeadersReturnsNil(t *testing.T) {
-	_, got := Apply("body", nil, nil)
+	_, got := Apply("body", nil, nil, nil)
 	if got != nil {
 		t.Errorf("expected nil headers, got %v", got)
+	}
+}
+
+// Apply MUST resolve ${request.json.<dotted.path>} by parsing the request body
+// as JSON and looking up the dotted path. Numbers emit unquoted, strings quoted,
+// missing/parse-error fields emit "null". Closes the MCP id-echo protocol gap.
+
+func TestApply_RequestJSON_NumericID(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":42,"method":"initialize"}`)
+	tmpl := `{"jsonrpc":"2.0","id":${request.json.id},"result":{}}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"id":42`) {
+		t.Fatalf("expected id:42, got: %s", got)
+	}
+}
+
+func TestApply_RequestJSON_StringID(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","id":"req-abc","method":"x"}`)
+	tmpl := `{"id":${request.json.id}}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"id":"req-abc"`) {
+		t.Fatalf("expected id:\"req-abc\", got: %s", got)
+	}
+}
+
+func TestApply_RequestJSON_MissingFieldFallsBackToNull(t *testing.T) {
+	body := []byte(`{"jsonrpc":"2.0","method":"x"}`) // no id
+	tmpl := `{"id":${request.json.id}}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"id":null`) {
+		t.Fatalf("expected id:null fallback, got: %s", got)
+	}
+}
+
+func TestApply_RequestJSON_BodyParseErrorFallsBackToNull(t *testing.T) {
+	body := []byte(`not json`)
+	tmpl := `{"id":${request.json.id}}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"id":null`) {
+		t.Fatalf("expected null on parse error, got: %s", got)
+	}
+}
+
+func TestApply_RequestJSON_DottedPath(t *testing.T) {
+	body := []byte(`{"params":{"clientInfo":{"name":"censys-inspector"}}}`)
+	tmpl := `{"echo_client":${request.json.params.clientInfo.name}}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"echo_client":"censys-inspector"`) {
+		t.Fatalf("expected dotted lookup, got: %s", got)
+	}
+}
+
+func TestApply_RequestJSON_NoBodyDoesNotPanic(t *testing.T) {
+	// HTTP GET requests have no body. Apply must tolerate nil body.
+	tmpl := `{"id":${request.json.id}}`
+	got, _ := Apply(tmpl, nil, nil, nil)
+	if !strings.Contains(got, `"id":null`) {
+		t.Fatalf("expected null with nil body, got: %s", got)
 	}
 }

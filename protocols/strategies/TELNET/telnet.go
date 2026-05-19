@@ -251,7 +251,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				// timestamp instead of literal "${request.uuid_short}"
 				// strings on the wire. TELNET has no header concept and no
 				// stateful session context — sessionVars=nil, headers=nil.
-				commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil)
+				commandOutput, _ = responsesubs.Apply(commandOutput, nil, nil, nil)
 				_, err := conn.Write([]byte(commandOutput + "\r\n"))
 				if err != nil {
 					break

@@ -727,7 +727,7 @@ func TestApplyResponseSubstitutions_RequestVarsUnconditional(t *testing.T) {
 		Headers:    []string{"X-Request-Id: req_${request.uuid_short}"},
 		Body:       `{"trace_id":"${request.uuid}","ts":${request.unix_ms}}`,
 	}
-	applyResponseSubstitutions(&resp, nil)
+	applyResponseSubstitutions(&resp, nil, nil)
 
 	if strings.Contains(resp.Headers[0], "${request.uuid_short}") {
 		t.Fatalf("uuid_short placeholder not substituted: %q", resp.Headers[0])
@@ -758,7 +758,7 @@ func TestApplyResponseSubstitutions_RequestVarsUnconditional(t *testing.T) {
 func TestApplyResponseSubstitutions_VariesAcrossInvocations(t *testing.T) {
 	mk := func() string {
 		r := httpResponse{Headers: []string{"X-Request-Id: ${request.uuid}"}}
-		applyResponseSubstitutions(&r, nil)
+		applyResponseSubstitutions(&r, nil, nil)
 		return r.Headers[0]
 	}
 	a, b := mk(), mk()
@@ -780,7 +780,7 @@ func TestApplyResponseSubstitutions_SessionVarsStillWork(t *testing.T) {
 		Headers: []string{"X-Sess: ${session.short}"},
 		Body:    `cookie=${session.cookie};role=${captured.role};req=${request.uuid_short}`,
 	}
-	applyResponseSubstitutions(&resp, sctx)
+	applyResponseSubstitutions(&resp, sctx, nil)
 
 	if !strings.HasPrefix(resp.Headers[0], "X-Sess: ") || strings.Contains(resp.Headers[0], "${") {
 		t.Errorf("session header not substituted: %q", resp.Headers[0])
