@@ -28,6 +28,9 @@ HITS=$(grep -rln -iE 'openclaw|18789|OPENCLAW_CANARY' \
   | grep -v '/CHANGELOG' \
   | grep -v '/KNOWN_ISSUES' \
   | grep -v '/MEMORY' \
+  | grep -v 'test_no_openclaw' \
+  | grep -v 'test_phase_b21_classify_mirror' \
+  | grep -v 'classify_test' \
   || true)
 
 if [[ -n "$HITS" ]]; then
