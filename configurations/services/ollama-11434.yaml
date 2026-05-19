@@ -52,7 +52,7 @@ llmOfflineResponse:
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.6.2"
+  version: "0.7.0"
 
   # Models chosen to look like a well-provisioned GPU server worth hijacking.
   # Per-sensor prod configs can override with different model sets.
