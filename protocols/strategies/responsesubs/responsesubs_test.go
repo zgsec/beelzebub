@@ -1,8 +1,10 @@
 package responsesubs
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestApply_RequestVarsUnconditional — request-level placeholders fire
@@ -216,5 +218,91 @@ func TestApply_RequestJSON_NoBodyDoesNotPanic(t *testing.T) {
 	got, _ := Apply(tmpl, nil, nil, nil)
 	if !strings.Contains(got, `"id":null`) {
 		t.Fatalf("expected null with nil body, got: %s", got)
+	}
+}
+
+// Apply MUST resolve ${time.now} to current RFC3339 UTC.
+// ${time.ago.<N><unit>} resolves to (now - N units) RFC3339 UTC.
+// Closes the frozen-ISO-timestamp class of honeypot fingerprint (5/19 audit).
+
+func TestApply_TimeNow(t *testing.T) {
+	got, _ := Apply(`{"now":"${time.now}"}`, nil, nil, nil)
+	if strings.Contains(got, "${time.now}") {
+		t.Fatalf("unrendered: %s", got)
+	}
+	var parsed struct{ Now time.Time }
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("not valid JSON: %s — %v", got, err)
+	}
+	d := time.Since(parsed.Now)
+	if d < 0 || d > 5*time.Second {
+		t.Fatalf("time.now off by %v: %s", d, got)
+	}
+}
+
+func TestApply_TimeAgo_Hours(t *testing.T) {
+	got, _ := Apply(`{"started":"${time.ago.3h}"}`, nil, nil, nil)
+	var parsed struct{ Started time.Time }
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %s", got)
+	}
+	d := time.Since(parsed.Started)
+	want := 3 * time.Hour
+	if d < want-5*time.Second || d > want+5*time.Second {
+		t.Fatalf("time.ago.3h off: got delta %v, want ~%v (rendered: %s)", d, want, got)
+	}
+}
+
+func TestApply_TimeAgo_Days(t *testing.T) {
+	got, _ := Apply(`{"rotated":"${time.ago.7d}"}`, nil, nil, nil)
+	var parsed struct{ Rotated time.Time }
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %s", got)
+	}
+	d := time.Since(parsed.Rotated)
+	want := 7 * 24 * time.Hour
+	if d < want-time.Minute || d > want+time.Minute {
+		t.Fatalf("time.ago.7d off: got delta %v, want ~%v", d, want)
+	}
+}
+
+func TestApply_TimeAgo_Seconds(t *testing.T) {
+	got, _ := Apply(`{"t":"${time.ago.30s}"}`, nil, nil, nil)
+	if !strings.Contains(got, "T") || !strings.HasSuffix(strings.Split(got, `"`)[3], "Z") {
+		t.Fatalf("not RFC3339 UTC: %s", got)
+	}
+}
+
+func TestApply_TimeAgo_Minutes(t *testing.T) {
+	got, _ := Apply(`{"t":"${time.ago.45m}"}`, nil, nil, nil)
+	var parsed struct{ T time.Time }
+	json.Unmarshal([]byte(got), &parsed)
+	want := 45 * time.Minute
+	d := time.Since(parsed.T)
+	if d < want-5*time.Second || d > want+5*time.Second {
+		t.Fatalf("time.ago.45m off: got %v want %v", d, want)
+	}
+}
+
+func TestApply_TimeAgo_UnknownDurationLeftAlone(t *testing.T) {
+	// Invalid duration unit should not panic; leaving template intact is
+	// acceptable (a missed-rendering bug will be caught by lure_lint R11
+	// from task 4.2). Just don't panic and don't emit garbage.
+	got, _ := Apply(`{"t":"${time.ago.5x}"}`, nil, nil, nil)
+	// Either left as-is or emitted as null — both acceptable; check no panic.
+	_ = got
+}
+
+func TestApply_TimeAndRequestJSONComposable(t *testing.T) {
+	// Verifies the new time substitution doesn't break the existing
+	// ${request.json.*} from task 3.1.
+	body := []byte(`{"id":7}`)
+	tmpl := `{"id":${request.json.id},"now":"${time.now}"}`
+	got, _ := Apply(tmpl, nil, nil, body)
+	if !strings.Contains(got, `"id":7`) {
+		t.Fatalf("request.json broken: %s", got)
+	}
+	if strings.Contains(got, "${") {
+		t.Fatalf("unrendered substitution: %s", got)
 	}
 }

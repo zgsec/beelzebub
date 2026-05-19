@@ -1,5 +1,6 @@
-// Package responsesubs renders ${request.*}, ${session.*}, and ${captured.*}
-// placeholders in attacker-visible response data (bodies + header values).
+// Package responsesubs renders ${request.*}, ${session.*}, ${captured.*},
+// and ${time.*} placeholders in attacker-visible response data (bodies +
+// header values).
 //
 // Why a shared package:
 // The HTTP strategy historically owned this rewrite, but Crestfield's
@@ -31,6 +32,15 @@
 //	${captured.<key>}            — looked up in sessionVars; HTML-escaped because
 //	                               captured values may originate from attacker
 //	                               request bodies
+//	${time.now}                  — current UTC time in RFC3339 format. Emits a
+//	                               fresh timestamp on every call, preventing the
+//	                               frozen-ISO-timestamp class of honeypot
+//	                               fingerprint (5/19 audit, Task 4.1).
+//	${time.ago.<N><unit>}        — current UTC time minus N units in RFC3339.
+//	                               Supported units: s (seconds), m (minutes),
+//	                               h (hours), d (days). Integer count only.
+//	                               Example: ${time.ago.3h} → 3 hours ago.
+//	                               Unknown units are left untouched.
 //
 // Safety contract:
 //
@@ -48,6 +58,7 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +69,38 @@ import (
 // Compiled once at package init — the regex is stateless and safe for
 // concurrent use.
 var reRequestJSON = regexp.MustCompile(`\$\{request\.json\.([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
+
+// timeAgoRE matches ${time.ago.<N><unit>} where unit is one of s/m/h/d.
+// Compiled once at package init — stateless and safe for concurrent use.
+var timeAgoRE = regexp.MustCompile(`\$\{time\.ago\.(\d+)([smhd])\}`)
+
+// replaceTimeAgo is the replacement function for timeAgoRE. It is called
+// once per match by ReplaceAllStringFunc. Unknown unit letters are left
+// untouched so mistyped placeholders are visible in test traffic.
+func replaceTimeAgo(match string) string {
+	m := timeAgoRE.FindStringSubmatch(match)
+	if m == nil {
+		return match
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return match
+	}
+	var d time.Duration
+	switch m[2] {
+	case "s":
+		d = time.Duration(n) * time.Second
+	case "m":
+		d = time.Duration(n) * time.Minute
+	case "h":
+		d = time.Duration(n) * time.Hour
+	case "d":
+		d = time.Duration(n) * 24 * time.Hour
+	default:
+		return match
+	}
+	return time.Now().UTC().Add(-d).Format(time.RFC3339)
+}
 
 // Apply rewrites ${request.*}, ${session.*}, and ${captured.*}
 // placeholders in body and each entry of headers. sessionVars is an
@@ -103,15 +146,31 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 
 	newBody := replacer.Replace(body)
 	newBody = applyRequestJSON(newBody, requestBody)
+	newBody = applyTime(newBody)
 
 	if headers == nil {
 		return newBody, nil
 	}
 	newHeaders := make([]string, len(headers))
 	for i, h := range headers {
-		newHeaders[i] = applyRequestJSON(replacer.Replace(h), requestBody)
+		newHeaders[i] = applyTime(applyRequestJSON(replacer.Replace(h), requestBody))
 	}
 	return newBody, newHeaders
+}
+
+// applyTime resolves ${time.now} and ${time.ago.<N><unit>} placeholders in s.
+// ${time.now} emits the current UTC time in RFC3339 format. ${time.ago.<N><unit>}
+// emits (now - N units) in RFC3339. The function is a no-op when s contains
+// neither placeholder substring, keeping the zero-allocation fast path for
+// templates that don't use time substitutions.
+func applyTime(s string) string {
+	if strings.Contains(s, "${time.now}") {
+		s = strings.ReplaceAll(s, "${time.now}", time.Now().UTC().Format(time.RFC3339))
+	}
+	if strings.Contains(s, "${time.ago.") {
+		s = timeAgoRE.ReplaceAllStringFunc(s, replaceTimeAgo)
+	}
+	return s
 }
 
 // applyRequestJSON resolves ${request.json.<dotted.path>} placeholders in s
