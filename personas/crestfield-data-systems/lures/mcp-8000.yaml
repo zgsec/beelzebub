@@ -886,6 +886,26 @@ commands:
 
   # ── Tier C: Credential harvest ─────────────────────────────────────
 
+  # GET /spend/logs — T4 Archaeology corpus (constitution §4, 80/3 rule).
+  # M3-starter: 23 entries (20 mundane + 3 leaks) from
+  # personas/crestfield-data-systems/corpora/litellm-8000-spend-logs.yaml.
+  # Full 80+3 expansion follows in M3-full via LLM-generation.
+  #
+  # Response shape: LiteLLM /spend/logs array (same as /global/spend/logs
+  # but scoped to the virtual-key holder's team). Leak positions: 7, 13, 19.
+  #
+  # Pagination: real LiteLLM accepts ?limit=&page= params; we serve the
+  # full corpus on any request — pagination discrimination measured by
+  # the limit/page values the attacker supplies (or omits).
+  - regex: "^/spend/logs(\\?.*)?$"
+    name: "litellm-spend-logs-corpus"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
+    statusCode: 200
+    handler: "{{ persona.corpora.litellm_spend_logs.entries | tojson }}"
+
   # GET /global/spend/logs — per-request spend log (masked api_key prefixes).
   # Real LiteLLM exposes user_api_key as masked prefix here, NOT full key.
   # The accuracy IS the deception: looks like a correctly-deployed proxy
