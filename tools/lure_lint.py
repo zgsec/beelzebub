@@ -685,6 +685,71 @@ def rule_r12_no_frozen_timestamps(lines: list[str], path: Path, realism: dict) -
             )
 
 
+def rule_r13_no_meta_deception_vocabulary(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
+    """R13: handler response bodies must not contain meta-deception vocabulary
+    that names the project methodology to an attacker.
+
+    Forbidden tokens inside `handler:` block scalars:
+      honeypot, decoy, lure, canary, watermark, show.bible, cross.pollination,
+      poc, disney, play.along, act.as
+
+    Rationale (per feedback_no_meta_terms_in_llm_prompts +
+    feedback_no_disney_persona_name memories): when the served response
+    contains "Disney cross-pollination POC" or similar internal-methodology
+    text, every read by an attacker fingerprints the persona. The
+    canonical-leak case the 2026-05-19 audit caught was the LiteLLM
+    proxy_config.yaml handler emitting a YAML comment from inside its
+    block-scalar body.
+
+    Implementation: re-parse the YAML and inspect each command's `handler:`
+    string. Lines outside handler bodies (e.g. file-level YAML comments,
+    `description:` fields) are NOT served and not flagged.
+
+    Severity: CRITICAL.
+    """
+    _FORBIDDEN = re.compile(
+        r'\b(disney|cross.pollination|show.bible|honeypot|decoy|watermark|poc|play.along|act\s+as)\b',
+        re.IGNORECASE,
+    )
+    try:
+        doc = yaml.safe_load("\n".join(lines))
+    except yaml.YAMLError:
+        return  # parse errors are R6 territory, not R13
+
+    if not isinstance(doc, dict):
+        return
+    commands = doc.get("commands") or []
+    if not isinstance(commands, list):
+        return
+
+    for cmd_idx, cmd in enumerate(commands):
+        if not isinstance(cmd, dict):
+            continue
+        handler = cmd.get("handler")
+        if not isinstance(handler, str):
+            continue
+        for m in _FORBIDDEN.finditer(handler):
+            # Compute approximate file line: walk lines until we find the
+            # handler's content. Fall back to 0 if not found.
+            line_no = 0
+            token = m.group(0)
+            lines_in_handler = handler[: m.start()].count("\n")
+            # Locate the handler block start by regex on the cmd's first key
+            regex_val = cmd.get("regex", "")
+            for i, ln in enumerate(lines, start=1):
+                if regex_val and f'regex: "{regex_val}"' in ln or (regex_val and f"regex: '{regex_val}'" in ln):
+                    line_no = i + lines_in_handler + 1
+                    break
+            yield Violation(
+                path, line_no, "R13",
+                f"meta-deception vocabulary {token!r} in handler body "
+                f"(cmd[{cmd_idx}], regex={regex_val[:50]!r}) — "
+                f"this text is served over the wire; remove or rephrase. "
+                f"See [[feedback_no_disney_persona_name]] + "
+                f"[[feedback_no_meta_terms_in_llm_prompts]]",
+            )
+
+
 RULES = [
     rule_r1_server,
     rule_r2_banned_headers,
@@ -698,6 +763,7 @@ RULES = [
     rule_r10_template_fingerprints,
     rule_r11_mcp_version_coherence,
     rule_r12_no_frozen_timestamps,
+    rule_r13_no_meta_deception_vocabulary,
 ]
 
 # Per-rule severity. CRITICAL fires on every check; WARN can be downgraded
@@ -716,6 +782,7 @@ SEVERITY = {
     "R10": "CRITICAL",
     "R11": "CRITICAL",  # per-command header/body skew; WARN for file-wide multi-version
     "R12": "WARN",      # frozen timestamps; WARN allows persona-locked values via waiver
+    "R13": "CRITICAL",  # meta-deception vocabulary in over-the-wire handler bodies
 }
 
 

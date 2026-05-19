@@ -931,10 +931,6 @@ commands:
 
       general_settings:
         master_key: os.environ/LITELLM_MASTER_KEY
-        # Watermark password in DB URL — Disney cross-pollination POC.
-        # SSH-2222 accepts {{ persona.coherence.world.watermark_passwords.mcp }}
-        # as a login password (regex class includes this exact value);
-        # cross-correlate IP between this read and any SSH-attempt.
         database_url: postgresql://{{ persona.coherence.world.org.db_app_user | default('app') }}:{{ persona.coherence.world.watermark_passwords.mcp }}@db-primary.{{ persona.identity.internal_domain }}:5432/litellm_proxy
         database_connection_pool_limit: 100
         database_connection_timeout: 60

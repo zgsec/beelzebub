@@ -194,17 +194,72 @@ def test_R12_skips_descriptions_and_comments():
     )
 
 
+# R13 — meta-deception vocabulary in handler bodies (the canonical 5/19 leak
+# was a YAML comment from inside a `handler: |` block scalar literally
+# emitting "Disney cross-pollination POC" to every reader of proxy_config.yaml).
+
+_R13_LEAK_YAML = """\
+apiVersion: v1
+protocol: http
+address: ":1234"
+commands:
+  - regex: "^/proxy_config\\\\.yaml$"
+    handler: |
+      general_settings:
+        # Watermark password in DB URL — Disney cross-pollination POC.
+        database_url: postgresql://app:secret@db:5432/proxy
+    statusCode: 200
+"""
+
+_R13_CLEAN_YAML = """\
+apiVersion: v1
+protocol: http
+address: ":1234"
+# Top-of-file comment mentioning honeypot/disney/POC — NOT served over wire.
+# R13 must not flag these.
+commands:
+  - regex: "^/proxy_config\\\\.yaml$"
+    handler: |
+      general_settings:
+        database_url: postgresql://app:secret@db:5432/proxy
+    statusCode: 200
+"""
+
+
+def test_R13_catches_meta_vocabulary_in_handler():
+    """A handler body containing 'Disney' or 'POC' or 'honeypot' must fire R13 CRITICAL."""
+    result = _run_lint(_R13_LEAK_YAML)
+    assert "R13" in result.stdout, (
+        f"R13 didn't fire on handler-body leak.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "CRITICAL" in result.stdout, (
+        f"R13 must be CRITICAL severity.\nstdout: {result.stdout}"
+    )
+
+
+def test_R13_ignores_top_of_file_comments():
+    """Top-of-file YAML comments are stripped by parser; R13 must NOT fire on them."""
+    result = _run_lint(_R13_CLEAN_YAML)
+    assert "R13" not in result.stdout, (
+        f"R13 false positive on top-of-file comments.\nstdout: {result.stdout}"
+    )
+
+
 if __name__ == "__main__":
     r12_tests = [
         test_R12_catches_frozen_timestamp_in_handler,
         test_R12_allows_time_ago_template,
         test_R12_skips_descriptions_and_comments,
     ]
+    r13_tests = [
+        test_R13_catches_meta_vocabulary_in_handler,
+        test_R13_ignores_top_of_file_comments,
+    ]
     all_tests = [
         test_R11_catches_header_body_mismatch,
         test_R11_coherent_handler_is_clean,
         test_R11_multi_version_file_fires_warn,
-    ] + r12_tests
+    ] + r12_tests + r13_tests
     failures = 0
     for t in all_tests:
         try:
