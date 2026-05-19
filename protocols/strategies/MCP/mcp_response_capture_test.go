@@ -28,7 +28,7 @@ func (c *captureTracer) TraceEvent(e tracer.Event) {
 // vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §0).
 //
 // Before the patch: HTTP-fallback handlers under MCP-protocol services
-// (the 38-route mcp-8000.yaml + openclaw-18789.yaml architectures)
+// (the 38-route mcp-8000.yaml architecture)
 // computed respBody for the wire and hashed it into ResponseBodySha256,
 // but never persisted the body or status code to the tracer event.
 // `sessions.response_summary` in PG stayed null for every HTTP-fallback

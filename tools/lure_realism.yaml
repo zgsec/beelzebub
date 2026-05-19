@@ -59,9 +59,6 @@ known_servers:
   - docker             # Docker daemon API (Server: Docker/x.y.z (linux))
   - grandstream        # Grandstream VoIP gateways
   - screenconnect      # ConnectWise ScreenConnect
-  - openclaw           # OpenClaw/openclaw-gateway — our deception persona for an
-                       # AI-agent-orchestration product. Treat as plausible since
-                       # we control the persona's "is this product real" framing.
 
 # ---------------------------------------------------------------------------
 # Headers that should NEVER appear on lure responses — they leak persona

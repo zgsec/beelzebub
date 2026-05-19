@@ -93,12 +93,12 @@ func TestBuildInjectedResponse(t *testing.T) {
 		found := false
 		for i := 0; i < 20; i++ {
 			resp := buildInjectedResponse(CategorySecurity, "", 0, 1, rng, canaryTokens, payloads, nil, "")
-			if strings.Contains(resp, "localhost:8000") || strings.Contains(resp, "localhost:18789") {
+			if strings.Contains(resp, "localhost:8000") {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "security responses should reference other honeypot ports")
+		assert.True(t, found, "security responses should reference other platform ports")
 	})
 
 	t.Run("prompt reflection prepended for question category", func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestBridgeHint(t *testing.T) {
 		br.SetFlag("1.2.3.4", "discovered_aws_credentials")
 		hint := bridgeHint(br, "1.2.3.4")
 		assert.Contains(t, hint, "unified IAM")
-		assert.Contains(t, hint, "OpenClaw :18789")
+		assert.Contains(t, hint, "Open WebUI :8888")
 	})
 
 	t.Run("mcp_tools_used returns configstore hint", func(t *testing.T) {

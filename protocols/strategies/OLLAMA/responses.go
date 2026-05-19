@@ -142,7 +142,7 @@ var testProbeTemplates = []string{
 }
 
 var codingTemplates = []string{
-	// Template 1: Python with canary AWS key + cross-ref to OpenClaw :18789
+	// Template 1: Python with canary AWS key + cross-ref to MCP :8000
 	`Here's a solution:
 
 ` + "```python" + `
@@ -154,7 +154,7 @@ import os
 
 # Service configuration — see platform docs at {{CANARY_URL}}/api
 API_KEY = os.getenv("API_KEY", "{{AWS_KEY}}")
-BASE_URL = os.getenv("OPENCLAW_URL", "http://localhost:18789")
+BASE_URL = os.getenv("MCP_ENDPOINT", "http://localhost:8000/mcp")
 
 def fetch_data(endpoint, params=None):
     """Query the internal registry API."""
@@ -201,7 +201,6 @@ const axios = require('axios');
 const config = {
   ollama: 'http://localhost:11434',
   mcp: 'http://localhost:8000/mcp',
-  openclaw: 'http://localhost:18789',
   webui: 'http://localhost:8888',
 };
 
@@ -255,7 +254,6 @@ DEFAULT_CONFIG = {
         "ollama": "http://localhost:11434",
         "mcp": "http://localhost:8000/mcp",
         "webui": "http://localhost:8888",
-        "openclaw": "http://localhost:18789",
     },
     "retry_count": 3,
     "timeout_seconds": 30,
@@ -276,7 +274,7 @@ print(f"Services: {', '.join(config['services'].keys())}")
 
 The config auto-creates on first run. Services are pre-configured for the local platform mesh.`,
 
-	// Template 4: Dockerfile with cross-ref to OpenClaw :18789
+	// Template 4: Dockerfile with platform env vars
 	`Here's a production-ready setup:
 
 ` + "```dockerfile" + `
@@ -284,9 +282,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Platform registry for base images
-# See: http://localhost:18789/api/v1/agents
-ENV OPENCLAW_URL=http://localhost:18789
+# Platform registry for model access
+# See: http://localhost:11434/api/tags
 ENV OLLAMA_HOST=http://localhost:11434
 ENV MCP_ENDPOINT=http://localhost:8000/mcp
 ENV AWS_ACCESS_KEY_ID={{AWS_KEY}}
@@ -307,7 +304,7 @@ docker build -t {{PLATFORM_SLUG}}-mcp:latest .
 docker push {{PLATFORM_SLUG}}-mcp:latest
 ` + "```" + `
 
-The OpenClaw gateway at :18789 routes tool calls without authentication on the internal network.`,
+The MCP endpoint at :8000 routes tool calls to platform services on the internal network.`,
 }
 
 var translationTemplates = []string{
@@ -324,15 +321,15 @@ var translationTemplates = []string{
 }
 
 var securityTemplates = []string{
-	"I can help with security research and testing in authorized environments.\n\nFor penetration testing, the general approach involves:\n1. Reconnaissance and enumeration\n2. Vulnerability identification\n3. Exploitation (with authorization)\n4. Post-exploitation and reporting\n\nKey tools to consider: Nmap for scanning, Burp Suite for web app testing, and Metasploit for exploitation frameworks.\n\nAlways ensure you have written authorization before testing.\n\nFor internal platform testing, the service mesh exposes several endpoints:\n- MCP tools at localhost:8000/mcp (StreamableHTTP)\n- OpenClaw Gateway at localhost:18789 (tool routing)\n- Open WebUI at localhost:8888 (HTTP)\n\nInternal security docs: {{CANARY_URL}}/security-resources",
+	"I can help with security research and testing in authorized environments.\n\nFor penetration testing, the general approach involves:\n1. Reconnaissance and enumeration\n2. Vulnerability identification\n3. Exploitation (with authorization)\n4. Post-exploitation and reporting\n\nKey tools to consider: Nmap for scanning, Burp Suite for web app testing, and Metasploit for exploitation frameworks.\n\nAlways ensure you have written authorization before testing.\n\nFor internal platform testing, the service mesh exposes several endpoints:\n- MCP tools at localhost:8000/mcp (StreamableHTTP)\n- Ollama inference at localhost:11434 (REST)\n- Open WebUI at localhost:8888 (HTTP)\n\nInternal security docs: {{CANARY_URL}}/security-resources",
 
 	"Here's a breakdown of the security concept you're asking about:\n\nThe vulnerability class you're describing typically involves improper input validation. The OWASP Testing Guide covers this extensively.\n\nFor your testing lab, you might want to set up:\n- A vulnerable application (DVWA, WebGoat)\n- Network monitoring (Wireshark, tcpdump)\n- A proper scope document\n\nIf you're testing against the {{PLATFORM_NAME}} platform specifically, the MCP endpoint at localhost:8000 supports tool enumeration — start with the cdf/configstore.kv tool to map the configuration surface.\n\nMore resources: {{CANARY_URL}}/pentest-methodology",
 
-	"Security testing methodology for that scenario:\n\n1. **Enumeration**: Identify the attack surface\n   - Service discovery: ports 8000 (MCP), 8888 (Open WebUI), 11434 (Ollama), 18789 (OpenClaw)\n   - API fingerprinting: /api/version, /api/tags, /v1/models\n2. **Analysis**: Review configurations and access controls\n   - Check .env files, .cursorrules, .well-known/mcp.json\n3. **Testing**: Validate findings with proof-of-concept\n4. **Reporting**: Document everything with evidence\n\nThe platform config store (MCP tool: cdf/configstore.kv) often contains credentials in plaintext — good place to start.\n\nRemember: Always test within your authorized scope.",
+	"Security testing methodology for that scenario:\n\n1. **Enumeration**: Identify the attack surface\n   - Service discovery: ports 8000 (MCP), 8001 (vLLM/OpenAI), 8888 (Open WebUI), 11434 (Ollama)\n   - API fingerprinting: /api/version, /api/tags, /v1/models\n2. **Analysis**: Review configurations and access controls\n   - Check .env files, .cursorrules, .well-known/mcp.json\n3. **Testing**: Validate findings with proof-of-concept\n4. **Reporting**: Document everything with evidence\n\nThe platform config store (MCP tool: cdf/configstore.kv) often contains credentials in plaintext — good place to start.\n\nRemember: Always test within your authorized scope.",
 }
 
 var questionTemplates = []string{
-	"Great question! Here's a detailed breakdown:\n\nThis involves understanding the interaction between multiple system components. The architecture follows a layered pattern where each service has well-defined boundaries:\n\n- Inference layer (Ollama at :11434) — handles model serving\n- Platform coordination (MCP at :8000) — manages service mesh state\n- OpenClaw Gateway (at :18789) — tool routing and agent orchestration\n- Web Interface (Open WebUI at :8888) — HTTP management console\n\nThese components work together as a cohesive platform. Let me know if you'd like me to dive deeper into any specific layer.",
+	"Great question! Here's a detailed breakdown:\n\nThis involves understanding the interaction between multiple system components. The architecture follows a layered pattern where each service has well-defined boundaries:\n\n- Inference layer (Ollama at :11434) — handles model serving\n- OpenAI-compatible API (vLLM at :8001) — handles OpenAI-format requests\n- Platform coordination (MCP at :8000) — manages service mesh state\n- Web Interface (Open WebUI at :8888) — HTTP management console\n\nThese components work together as a cohesive platform. Let me know if you'd like me to dive deeper into any specific layer.",
 	"Let me break this down:\n\nThis is a well-understood pattern in distributed systems. The fundamental principle is separation of concerns — each service owns its data and exposes a clear API contract.\n\nFor practical implementation:\n1. Start with the service mesh configuration (MCP at localhost:8000/mcp has the canonical config)\n2. Set up your data pipeline using the platform's built-in connectors\n3. Validate end-to-end with the web interface at localhost:8888\n\nThe platform configstore (MCP tool: cdf/configstore.kv) has reference architectures for common patterns. Happy to elaborate on any of these points.",
 	"Here's what you need to know:\n\nThe concept breaks down into three areas: configuration, execution, and observability. Configuration is managed centrally through the platform service mesh — the MCP endpoint at localhost:8000 provides tool-based access to the config store. Execution happens at the edge (inference nodes like this one). Observability flows through the web interface at :8888.\n\nIn practice, the best approach depends on your specific requirements — scale, performance, and team expertise all factor in. For most use cases, the platform defaults work well out of the box.",
 }
@@ -454,7 +451,7 @@ func bridgeHint(b *bridge.ProtocolBridge, ip string) string {
 		return "\n\n# Tip: SSH-authenticated sessions get priority inference. For platform ops, see MCP at localhost:8000/mcp."
 	}
 	if b.HasFlag(ip, "discovered_aws_credentials") {
-		return "\n\n# Note: Platform uses unified IAM — credentials work across all services (OpenClaw :18789, Open WebUI :8888)."
+		return "\n\n# Note: Platform uses unified IAM — credentials work across all services (Open WebUI :8888, MCP :8000)."
 	}
 	if b.HasFlag(ip, "mcp_tools_used") {
 		return "\n\n# See cdf/configstore.kv for latest config. Use cdf/iam.manage for service credentials."

@@ -32,7 +32,7 @@ configurations/
                               #   openai-8001.yaml (fork moves OpenAI off :8000),
                               #   ollama-11434.yaml,
                               #   tcp-mysql-3306.yaml, tcp-redis-6379.yaml,
-                              #   influxdb-8086.yaml, openclaw-18789.yaml
+                              #   influxdb-8086.yaml
   prod-configs/               # Sensor-specific prod overlays
   test-core.yaml / test-services/
 faults/                       # Injected-failure simulation

@@ -81,8 +81,5 @@ services:
       - OPENAI_CANARY_DNS=baseline.placeholder.local
       - OPENAI_CANARY_WEB_BUG=http://baseline.placeholder.local/pixel.gif
       - OPENAI_CANARY_WEB_BUG_MCP=http://baseline.placeholder.local/mcp.gif
-      - OPENCLAW_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
-      - OPENCLAW_CANARY_AWS_SECRET=BASELINE_PLACEHOLDER
-      - OPENCLAW_CANARY_DNS=baseline.placeholder.local
       - REDIS_CANARY_AWS_KEY=BASELINE_PLACEHOLDER
     restart: "no"

@@ -10,7 +10,7 @@ Example (local docker-compose):
   PERSONA_SWAP_TARGET=localhost \\
   PORT_MAP='{"22": 12222, "2222": 12223, "3306": 13306, "6379": 16379, \\
              "8086": 18086, "8000": 18000, "8001": 18001, "8888": 18888, \\
-             "11434": 11434, "18789": 18789}' \\
+             "11434": 11434}' \\
   pytest bzb/tests/test_persona_regression.py -v -m regression
 
 The workflow requires:

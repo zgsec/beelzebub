@@ -628,7 +628,6 @@ func (ws *WorldState) handleReadFile(args map[string]interface{}) string {
 			"## Architecture\n" +
 			"- MCP endpoint: `POST http://localhost:8000/mcp` (StreamableHTTP)\n" +
 			"- Ollama inference: `http://localhost:11434`\n" +
-			"- OpenClaw gateway: `http://localhost:18789`\n" +
 			"- Open WebUI: `http://localhost:8888`\n\n" +
 			"## Credentials\n\n" +
 			fmt.Sprintf("See vault at https://vault.%s:8200\n", ws.internalDomain()) +
@@ -831,7 +830,6 @@ func (ws *WorldState) handleExecuteCommand(args map[string]interface{}) string {
 			"tcp  LISTEN 0 128 0.0.0.0:8001  0.0.0.0:*  users:((\"vllm\",pid=189))\n" +
 			"tcp  LISTEN 0 128 0.0.0.0:8888  0.0.0.0:*  users:((\"open-webui\",pid=195))\n" +
 			"tcp  LISTEN 0 128 0.0.0.0:11434 0.0.0.0:*  users:((\"ollama\",pid=156))\n" +
-			"tcp  LISTEN 0 128 0.0.0.0:18789 0.0.0.0:*  users:((\"openclaw\",pid=267))\n" +
 			"tcp  ESTAB  0 0   10.0.1.5:8000  10.0.12.88:45231\n"
 	case strings.HasPrefix(lc, "curl"):
 		output = "{\"status\":\"ok\",\"version\":\"3.12.1-rc1\",\"uptime\":\"14d 6h 23m\"}\n"
@@ -850,7 +848,6 @@ func (ws *WorldState) handleExecuteCommand(args map[string]interface{}) string {
 			output = fmt.Sprintf("CONTAINER ID   IMAGE                          COMMAND                  CREATED       STATUS       PORTS                    NAMES\n"+
 				"a3f8c1b29d74   %s-mcp:v3.12.1-rc1-hotfix   \"/usr/bin/%s-mcp\"     4 days ago    Up 4 days    0.0.0.0:8000->8000/tcp   %s-mcp\n"+
 				"7e2d5f1a8b93   ollama/ollama:0.6.2            \"/bin/ollama serve\"      12 days ago   Up 12 days   0.0.0.0:11434->11434/tcp ollama\n"+
-				"c2d3e4f5a6b7   openclaw/gateway:0.7.2         \"/usr/bin/openclaw\"      14 days ago   Up 14 days   0.0.0.0:18789->18789/tcp openclaw\n"+
 				"d8e9f0a1b2c3   open-webui:latest              \"bash start.sh\"          14 days ago   Up 14 days   0.0.0.0:8888->8080/tcp   open-webui\n",
 				svcName, svcName, svcName)
 		} else if strings.Contains(lc, "images") || strings.Contains(lc, "image") {
@@ -858,7 +855,6 @@ func (ws *WorldState) handleExecuteCommand(args map[string]interface{}) string {
 				"%s-mcp           v3.12.1-rc1-hotfix      d4e5f6a7b8c9   4 days ago    89.2MB\n"+
 				"%s-mcp           v3.12.1-rc1             a1b2c3d4e5f6   11 days ago   88.7MB\n"+
 				"ollama/ollama       0.6.2                   9f8e7d6c5b4a   12 days ago   2.14GB\n"+
-				"openclaw/gateway    0.7.2                   3a2b1c4d5e6f   2 weeks ago   67.4MB\n"+
 				"open-webui          latest                  7c8d9e0f1a2b   2 weeks ago   412MB\n",
 				svcName, svcName)
 		} else {
@@ -870,13 +866,11 @@ func (ws *WorldState) handleExecuteCommand(args map[string]interface{}) string {
 			output = fmt.Sprintf("NAME                          READY   STATUS    RESTARTS   AGE\n"+
 				"%s-mcp-7d5b8f9c4-x2k9n    1/1     Running   0          4d\n"+
 				"ollama-6f4a3c8d2-p7m1q        1/1     Running   1          12d\n"+
-				"backup-runner-28473219-rk4x   0/1     Error     3          2d\n"+
-				"openclaw-8a3f2d1c5-q4r7t      1/1     Running   0          14d\n", svcName)
+				"backup-runner-28473219-rk4x   0/1     Error     3          2d\n", svcName)
 		} else if strings.Contains(lc, "get svc") || strings.Contains(lc, "get service") {
 			output = fmt.Sprintf("NAME         TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)     AGE\n"+
 				"%s-mcp    ClusterIP   10.96.14.201   <none>        8000/TCP    18d\n"+
 				"ollama       ClusterIP   10.96.22.158   <none>        11434/TCP   18d\n"+
-				"openclaw     ClusterIP   10.96.31.42    <none>        18789/TCP   14d\n"+
 				"open-webui   ClusterIP   10.96.8.117    <none>        8888/TCP    14d\n", svcName)
 		} else if strings.Contains(lc, "get ns") || strings.Contains(lc, "get namespace") {
 			output = fmt.Sprintf("NAME              STATUS   AGE\ndefault           Active   47d\nkube-system       Active   47d\n"+
