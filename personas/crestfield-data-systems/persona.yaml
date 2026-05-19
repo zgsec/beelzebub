@@ -71,6 +71,8 @@ coherence:
       sentry_org: crestfielddata
       sentry_project_id: "7890123"                       # appears in SENTRY_DSN
       cluster_inference: crestfield-inference-1          # vLLM cluster name
+      db_app_user: crestfield_app
+      db_prod_name: crestfield_prod
 
     # ── People (canonical roster) ──
     # Every lure references this roster — never invent new names.

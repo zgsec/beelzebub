@@ -19,7 +19,247 @@ nodes:
 coherence:
   hosts_file_template: templates/etc-hosts.tmpl
   ssh_history_seeds: {}
-  vault_addr: vault.int.globex.example
+  vault_addr: vault.int.globex.com
+
+  # ─────────────────────────────────────────────────────────────────────
+  # `world` — single source of truth for all lure-shared identity values.
+  #
+  # Disney cohesion requirement: every Globex-specific string in every lure
+  # file MUST reference this block via {{ persona.coherence.world.<path> }}.
+  # Added 2026-05-19 (Task 2.5 — OpSec Engineering Overhaul).
+  # ─────────────────────────────────────────────────────────────────────
+  world:
+
+    # ── Company identity ──
+    company:
+      display_name: "Globex Industries"
+      legal_name: "Globex Industries, Inc."
+      public_domain: globex.com
+      internal_domain: int.globex.com
+      industry: industrial-multi-business
+      hq_city: Springfield
+      hq_state: MA
+      founded_year: 1989
+      employee_count_range: "8000-9000"
+      stage: "public"
+
+    # ── Product / platform ──
+    product:
+      service_name: globex
+      platform_display_name: "Globex Operations Platform"
+      platform_version: "v8.4.2"
+      build_sha: e7c1d8b3
+      region: us-east-1
+      jwt_signing_key: "glb-hmac-2026Q2-prod-9f2a4e7c"
+
+    # ── External org references ──
+    org:
+      docker_org: globex-industries
+      github_org: globex-industries
+      dd_scope: globex-prod
+      k8s_namespace: globex-prod
+      aws_iam_user: globex-svc-prod
+      s3_bucket_prefix: globex
+      sentry_org: globex-industries
+      sentry_project_id: "3140822"
+      cluster_inference: globex-inference-1
+      db_app_user: globex_app
+      db_prod_name: globex_prod
+
+    # ── People (canonical roster) ──
+    people:
+      platform_admin_1:
+        handle: hpowers
+        email_prefix: hpowers
+        full_name: "Hank Powers"
+        role: platform-admin
+        title: "Senior Platform Engineer"
+      platform_admin_2:
+        handle: lmartin
+        email_prefix: lmartin
+        full_name: "Lisa Martin"
+        role: platform-admin
+        title: "Staff Platform Engineer"
+        kubeconfig_path: "/home/lmartin/.kube/config"
+      data_viewer:
+        handle: rchang
+        email_prefix: rchang
+        full_name: "Robert Chang"
+        role: data
+        title: "Data Engineer"
+      sre_group:
+        handle: oncall-rotation
+        email_prefix: oncall-rotation
+        full_name: "SRE On-Call Rotation"
+        role: sre
+        title: "On-Call Group"
+      ci_service:
+        handle: svc-deployer
+        email_prefix: null
+        full_name: "CI Deploy Pipeline"
+        role: ci
+        title: "Service Account"
+        source_ip: "10.50.12.88"
+      platform_team_group:
+        handle: platform-team
+        email_prefix: platform-team
+        full_name: "Platform Team"
+        role: group
+
+    # ── Hosts and IPs (canonical /etc/hosts) ──
+    # Sub-octet allocation:
+    #   10.50.1.0/24 — prod web tier
+    #   10.50.2.0/24 — GPU / inference tier
+    #   10.50.3.0/24 — data tier (DB, redis, vault, LDAP)
+    #   10.50.10.0/24 — internal services
+    #   10.50.12.0/24 — CI / agents / worker pods
+    hosts:
+      prod_web:
+        hostname: globex-prod-web-01
+        ip: "10.50.1.100"
+        notes: "SSH lure runs here (port 2222)"
+      edge_nginx:
+        hostname: globex-nginx-edge-01
+        ip: "10.50.1.101"
+        port: 443
+        version: "1.25.4"
+        notes: "Serves Server: nginx/1.25.4 banner upstream"
+      db_primary:
+        hostname: globex-db-primary
+        ip: "10.50.3.50"
+        engine: postgresql
+        version: "15"
+      db_replica:
+        hostname: globex-db-replica-01
+        ip: "10.50.3.52"
+      db_billing_legacy:
+        hostname: globex-db-billing
+        ip: "10.50.3.55"
+        engine: mysql
+        version: "5.7.42"
+        notes: "Legacy ERP billing — MySQL on port 3306"
+      redis_sentinel:
+        hostname: globex-redis-sentinel
+        ip: "10.50.3.60"
+        port: 26379
+        notes: "Sentinel alias — Redis lure on port 6379"
+      redis_node_1:
+        hostname: globex-redis-01
+        ip: "10.50.3.61"
+        role: master
+      redis_node_2:
+        hostname: globex-redis-02
+        ip: "10.50.3.62"
+        role: slave
+      redis_node_3:
+        hostname: globex-redis-03
+        ip: "10.50.3.63"
+        role: slave
+      vault:
+        hostname: globex-vault
+        ip: "10.50.3.20"
+        port: 8200
+      ldap:
+        hostname: globex-ldap
+        ip: "10.50.3.30"
+        port: 636
+        notes: "Corporate LDAP sync"
+      flagship_worker:
+        hostname: globex-worker-4a2b8f
+        ip: "10.50.12.91"
+        notes: "OOM-killed pod — referenced in INC-7723 incident log"
+      gpu_worker_1:
+        hostname: globex-gpu-01
+        ip: "10.50.2.17"
+        gpu: "NVIDIA A100-SXM4-80GB"
+        gpu_count: 4
+      gpu_worker_2:
+        hostname: globex-gpu-02
+        ip: "10.50.2.18"
+        gpu: "NVIDIA A100-SXM4-80GB"
+        gpu_count: 4
+      docker_registry:
+        hostname: globex-registry
+        ip: "10.50.10.10"
+        port: 5000
+      langfuse:
+        hostname: globex-langfuse
+        ip: "10.50.10.30"
+        notes: "LLM observability"
+      n8n:
+        hostname: globex-n8n
+        ip: "10.50.10.40"
+        notes: "Workflow automation"
+      langflow:
+        hostname: globex-langflow
+        ip: "10.50.10.41"
+        port: 7860
+        notes: "LangFlow lure on port 7860"
+      influxdb:
+        hostname: globex-metrics-01
+        ip: "10.50.10.50"
+        port: 8086
+
+    # ── Service-port map ──
+    ports:
+      ssh:              { num: 2222,  host: prod_web,          service: "OpenSSH 8.9p1 Ubuntu" }
+      mysql_legacy:     { num: 3306,  host: db_billing_legacy, service: "MySQL 5.7.42" }
+      redis:            { num: 6379,  host: redis_node_1,      service: "Redis 7.2.4" }
+      mcp_litellm:      { num: 8000,  host: prod_web,          service: "Globex Operations Platform v8.4.2 (MCP + LiteLLM 1.65.2 behind nginx 1.25.4)" }
+      vllm:             { num: 8001,  host: gpu_worker_1,      service: "vLLM 0.6.3 OpenAI-compat" }
+      influxdb:         { num: 8086,  host: influxdb,          service: "InfluxDB 2.7.5" }
+      langflow:         { num: 7860,  host: langflow,          service: "LangFlow 1.2.0" }
+      open_webui:       { num: 8888,  host: prod_web,          service: "Open WebUI v0.5.3" }
+      ollama:           { num: 11434, host: flagship_worker,   service: "Ollama 0.5.4" }
+      vault:            { num: 8200,  host: vault,             service: "HashiCorp Vault" }
+      ldap:             { num: 636,   host: ldap,              service: "OpenLDAP" }
+      docker_registry:  { num: 5000,  host: docker_registry,   service: "Docker Registry v2" }
+
+    # ── Teams ──
+    teams:
+      platform_eng:
+        id: team-platform-ops
+        alias: "Platform Operations"
+        spend: 287341.20
+        max_budget: 800000.0
+        member_count: 12
+      data_science:
+        id: team-data-analytics
+        alias: "Data Analytics"
+        spend: 18934.50
+        max_budget: 120000.0
+        member_count: 5
+      sre:
+        id: team-sre
+        alias: "Site Reliability"
+        spend: 9412.88
+        max_budget: 60000.0
+        member_count: 3
+
+    # ── Active incidents ──
+    incidents:
+      active_id: INC-7723
+      active_summary: "Redis sentinel failover — replica lag on globex-redis-02"
+      active_owner: oncall-rotation
+      tls_cert_expiry: "2026-07-14"
+      oom_worker: globex-worker-4a2b8f
+      oom_timestamp: "2026-04-12T09:15:00Z"
+      deploy_tag: "v8.4.2"
+
+    # ── Watermark passwords for cross-lure attribution ──
+    watermark_passwords:
+      prefix: "glb_prod_2026Q2-"
+      mcp:      "glb_prod_2026Q2-4e9f1b7c"
+      http:     "glb_prod_2026Q2-8c3d5a2f"
+      ollama:   "glb_prod_2026Q2-1a6e4b9d"
+      openai:   "glb_prod_2026Q2-d7c2f8a3"
+      langflow: "glb_prod_2026Q2-3f8b1d6e"
+      redis:    "glb_prod_2026Q2-9b5a2c4f"
+      influxdb: "glb_prod_2026Q2-6d4f9e1a"
+      ssh:      "glb_prod_2026Q2-2c7b8d3f"
+
+    watermark_passwords_ssh_regex: "([a-z]{3,4}_prod_20[0-9]{2}Q[1-4]-[0-9a-f]{8})"
+
 llm_seed: "Mid-stage data-platform startup. Same shape as Crestfield for swap test."
 lure_content:
   # --- Database ---
