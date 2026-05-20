@@ -79,7 +79,7 @@ commands:
   # SHOW DIAGNOSTICS — canary-bearing response (network.hostname embeds
   # the canarytokens.org DNS canary that fires on resolution)
   - regex: "^/query\\?.*q=SHOW\\+DIAGNOSTICS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.{{ persona.coherence.world.company.internal_domain }}"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-05-18T06:01:12.483Z","2026-04-03T03:22:41.109Z","45d2h38m31s"]]}]}]}'
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.{{ persona.coherence.world.company.internal_domain }}"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"${time.now}","${time.ago.45d}","45d2h38m31s"]]}]}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
@@ -142,7 +142,7 @@ commands:
 
   # Generic SELECT — single-series placeholder
   - regex: "^/query\\?.*q=SELECT"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean"],"values":[["2026-05-18T00:00:00Z",4.217],["2026-05-18T00:05:00Z",4.312],["2026-05-18T00:10:00Z",4.183]]}]}]}'
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean"],"values":[["${time.ago.15m}",4.217],["${time.ago.10m}",4.312],["${time.ago.5m}",4.183]]}]}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"

@@ -382,7 +382,7 @@ commands:
       - "X-Request-Id: req_${request.uuid_short}"
     statusCode: 200
     handler: |
-      {"status":true,"collection_name":"web_retrieval_${request.uuid_short}","filename":"AWS IAM Instance Profile Credentials","loaded_data":[{"page_content":"{\n  \"Code\" : \"Success\",\n  \"LastUpdated\" : \"${time.ago.45d}\",\n  \"Type\" : \"AWS-HMAC\",\n  \"AccessKeyId\" : \"${HTTP_CANARY_AWS_KEY}\",\n  \"SecretAccessKey\" : \"${HTTP_CANARY_AWS_SECRET}\",\n  \"Token\" : \"FwoGZXIvYXdzECoaDDM3MzlhYjQ4N2YyMjIwIksRyKzN2dnhYy3HQ9rTrFI3a5fqWFGZ2KhO\",\n  \"Expiration\" : \"2027-01-01T00:00:00Z\"\n}","metadata":{"source":"<request body url>","title":"IAM Instance Profile Credentials","content_type":"text/plain","retrieved_at":"${time.ago.1h}"}}],"docs":1}
+      {"status":true,"collection_name":"web_retrieval_${request.uuid_short}","filename":"AWS IAM Instance Profile Credentials","loaded_data":[{"page_content":"{\n  \"Code\" : \"Success\",\n  \"LastUpdated\" : \"${time.ago.45d}\",\n  \"Type\" : \"AWS-HMAC\",\n  \"AccessKeyId\" : \"${HTTP_CANARY_AWS_KEY}\",\n  \"SecretAccessKey\" : \"${HTTP_CANARY_AWS_SECRET}\",\n  \"Token\" : \"FwoGZXIvYXdzECoaDDM3MzlhYjQ4N2YyMjIwIksRyKzN2dnhYy3HQ9rTrFI3a5fqWFGZ2KhO\",\n  \"Expiration\" : \"${time.in.6h}\"\n}","metadata":{"source":"<request body url>","title":"IAM Instance Profile Credentials","content_type":"text/plain","retrieved_at":"${time.ago.1h}"}}],"docs":1}
 
   # GET variant returns 405 (real Open-WebUI behavior — endpoint is POST-only)
   - regex: "^/api/v1/retrieval/process/web(\\?.*)?$"
