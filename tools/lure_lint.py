@@ -642,10 +642,11 @@ def rule_r11_mcp_version_coherence(
 def rule_r12_no_frozen_timestamps(lines: list[str], path: Path, realism: dict) -> Iterator[Violation]:
     """R12: handler response bodies must not contain literal ISO timestamps.
 
-    Use ${time.now} or ${time.ago.<N><s|m|h|d>} for plausible drift.
+    Use ${time.now}, ${time.ago.<N><s|m|h|d>} (past), or
+    ${time.in.<N><s|m|h|d>} (future, added 2026-05-20) for plausible drift.
 
     Rationale: a scanner re-probing weeks later sees identical "last activity"
-    values — a trivially detectable honeypot tell.
+    or "expires_at" values — a trivially detectable honeypot tell.
 
     Skips:
       - YAML comment lines (# ...)
@@ -680,7 +681,8 @@ def rule_r12_no_frozen_timestamps(lines: list[str], path: Path, realism: dict) -
                 path, line_no, "R12",
                 f"frozen timestamp in handler "
                 f"(field={field!r}, value={ts!r}) — "
-                f"use ${{time.ago.<duration>}} for plausible drift; "
+                f"use ${{time.ago.<duration>}} for past or "
+                f"${{time.in.<duration>}} for future drift; "
                 f"re-probers see identical values as a honeypot tell",
             )
 

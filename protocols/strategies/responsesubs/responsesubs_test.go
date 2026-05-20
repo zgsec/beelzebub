@@ -306,3 +306,55 @@ func TestApply_TimeAndRequestJSONComposable(t *testing.T) {
 		t.Fatalf("unrendered substitution: %s", got)
 	}
 }
+
+// 2026-05-20: ${time.in.<N><unit>} — future-direction counterpart of time.ago.
+// Used for STS-token Expiration, session expires_at, cert renewal cutoffs so
+// they roll forward with wall-clock time instead of being frozen literals.
+func TestApply_TimeIn_Hours(t *testing.T) {
+	got, _ := Apply(`{"expires_at":"${time.in.12h}"}`, nil, nil, nil)
+	// Body wraps the ISO into a JSON string; extract.
+	var resp struct {
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("got non-JSON response: %s", got)
+	}
+	parsed, err := time.Parse(time.RFC3339, resp.ExpiresAt)
+	if err != nil {
+		t.Fatalf("expires_at %q is not RFC3339: %v", resp.ExpiresAt, err)
+	}
+	want := 12 * time.Hour
+	d := time.Until(parsed)
+	if d < want-30*time.Second || d > want+30*time.Second {
+		t.Fatalf("time.in.12h off: got delta %v, want ~%v", d, want)
+	}
+}
+
+func TestApply_TimeIn_Days(t *testing.T) {
+	got, _ := Apply(`{"renew_by":"${time.in.7d}"}`, nil, nil, nil)
+	var resp struct {
+		RenewBy string `json:"renew_by"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("got non-JSON response: %s", got)
+	}
+	parsed, err := time.Parse(time.RFC3339, resp.RenewBy)
+	if err != nil {
+		t.Fatalf("renew_by %q is not RFC3339: %v", resp.RenewBy, err)
+	}
+	if d := time.Until(parsed); d < 7*24*time.Hour-time.Minute || d > 7*24*time.Hour+time.Minute {
+		t.Fatalf("time.in.7d off: got delta %v, want ~%v", d, 7*24*time.Hour)
+	}
+}
+
+func TestApply_TimeIn_Mixed_With_TimeAgo(t *testing.T) {
+	// Real-world: a session lure shows last_login in the past + expires_at
+	// in the future. Both placeholders must coexist without interference.
+	got, _ := Apply(`{"last_login":"${time.ago.2h}","expires_at":"${time.in.12h}"}`, nil, nil, nil)
+	if !strings.Contains(got, `"last_login"`) || !strings.Contains(got, `"expires_at"`) {
+		t.Fatalf("missing field in mixed-substitution output: %s", got)
+	}
+	if strings.Contains(got, "${time.") {
+		t.Fatalf("unresolved placeholder remains: %s", got)
+	}
+}
