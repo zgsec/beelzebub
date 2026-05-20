@@ -132,8 +132,10 @@ coherence:
         hostname: nginx-edge-01
         ip: "10.0.1.101"
         port: 443
-        version: "1.25.4"          # CVE-2026-42945 vulnerable range
-        notes: "Serves Server: nginx/1.25.4 banner upstream"
+        version: "1.25.4"          # CVE-2026-42945 vulnerable range (lure-only; not banner-leaked)
+        # Wire-emitted Server header is bare "nginx" (server_tokens off);
+        # the precise build is internal-context only. See W8 audit fix.
+        notes: "Emits bare `Server: nginx` upstream (server_tokens off)"
       db_primary:
         hostname: db-primary
         ip: "10.0.3.50"

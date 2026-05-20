@@ -215,11 +215,11 @@ plugin:
       */15 * * * *  root  curl -fsS http://localhost:8000/health > /dev/null || systemctl restart crestfield-platform
       0 */6 * * *   root  /opt/crestfield-deploy/scripts/ldap-sync.sh    # INC-4401: failing for ou=engineering
 
-    Recent /var/log/messages excerpts (always include these when tail/cat is run):
-      2026-03-04 09:30:14 prod-web-01 cron-runner[14823]: ldap-sync.sh exit 1 (ou=engineering failed: connection refused to ldap.int.crestfielddata.io:636) — INC-4401 routed to oncall-rotation
-      2026-03-05 18:30:42 prod-web-01 kubelet[1023]: OOM kill on pod crestfield-worker-7f8b9c (mem 2.1GiB > limit 2.0GiB; ollama model loader)
-      2026-03-06 04:12:08 prod-web-01 cert-manager[3411]: TLS renewal pending for *.int.crestfielddata.io (expires 2026-06-09)
-      2026-03-06 03:45:21 prod-web-01 nginx[1105]: rate limit triggered for upstream 10.0.12.88 (svc-deployer) on /api/v2/deployments — 847 req/min
+    Recent /var/log/messages excerpts (always include these when tail/cat is run; timestamps below resolve at session start via responsesubs and stay stable for the life of the session):
+      ${time.ago.18h} prod-web-01 cron-runner[14823]: ldap-sync.sh exit 1 (ou=engineering failed: connection refused to ldap.int.crestfielddata.io:636) — INC-4401 routed to oncall-rotation
+      ${time.ago.10h} prod-web-01 kubelet[1023]: OOM kill on pod crestfield-worker-7f8b9c (mem 2.1GiB > limit 2.0GiB; ollama model loader)
+      ${time.ago.22m} prod-web-01 cert-manager[3411]: TLS renewal pending for *.int.crestfielddata.io (expires ${time.in.3d})
+      ${time.ago.49m} prod-web-01 nginx[1105]: rate limit triggered for upstream 10.0.12.88 (svc-deployer) on /api/v2/deployments — 847 req/min
 
     /root/.bash_history (always show these as a sample when `history` or `cat /root/.bash_history` is run; mix in plausible additional lines):
       docker ps

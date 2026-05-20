@@ -123,7 +123,9 @@ coherence:
         ip: "10.50.1.101"
         port: 443
         version: "1.25.4"
-        notes: "Serves Server: nginx/1.25.4 banner upstream"
+        # Wire-emitted Server header is bare "nginx" (server_tokens off);
+        # the precise build is internal-context only. See W8 audit fix.
+        notes: "Emits bare `Server: nginx` upstream (server_tokens off)"
       db_primary:
         hostname: globex-db-primary
         ip: "10.50.3.50"

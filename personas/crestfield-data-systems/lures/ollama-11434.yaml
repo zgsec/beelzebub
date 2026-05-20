@@ -41,7 +41,10 @@ responseBodyMaxBytes: 65536
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.7.0"
+  # See configurations/services/ollama-11434.yaml — keep within ~1 release of
+  # upstream/main on ollama/ollama; year-stale versions burn the persona on
+  # capability-probes (W9 audit finding, 2026-05-20).
+  version: "0.24.0"
 
   # Models chosen to look like a well-provisioned GPU server worth hijacking.
   # Per-sensor prod configs can override with different model sets.

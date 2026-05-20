@@ -10,7 +10,27 @@ import (
 	"time"
 
 	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 )
+
+// resolveTimePlaceholder runs a worldSeed timestamp string through the
+// shared response-substitution engine to bake ${time.ago.<N><unit>} (and
+// ${time.in.*}, ${time.now}) tokens into concrete RFC3339 values at world
+// creation. Resolving once at birth — rather than at every emit —
+// preserves the immutability invariant relied on by handleIAM /
+// handleLogs (repeat queries from the same IP must see identical
+// payloads). Without this, lures emitting "lastLogin: ${time.ago.2d}"
+// from YAML would either ship the literal token on the wire (the very
+// honeypot tell responsesubs exists to fix) or drift forward between
+// reads (an even more obvious tell). Strings that contain no ${} token
+// are returned untouched so static literals still work.
+func resolveTimePlaceholder(s string) string {
+	if !strings.Contains(s, "${time.") {
+		return s
+	}
+	out, _ := responsesubs.Apply(s, nil, nil, nil)
+	return out
+}
 
 // User represents a mutable user record in the world state.
 type User struct {
@@ -133,11 +153,17 @@ func NewWorldState(seed WorldSeed, persona *parser.Persona) *WorldState {
 			Email:     u.Email,
 			Role:      u.Role,
 			Active:    true,
-			LastLogin: u.LastLogin,
+			LastLogin: resolveTimePlaceholder(u.LastLogin),
 		}
 	}
 
-	copy(ws.Logs, seed.Logs)
+	for i, le := range seed.Logs {
+		ws.Logs[i] = LogEntry{
+			Timestamp: resolveTimePlaceholder(le.Timestamp),
+			Level:     le.Level,
+			Message:   le.Message,
+		}
+	}
 
 	for k, v := range seed.Resources {
 		ws.Resources[k] = v
