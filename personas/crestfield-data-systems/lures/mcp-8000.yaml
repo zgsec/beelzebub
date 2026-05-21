@@ -540,32 +540,41 @@ commands:
     statusCode: 200
     handler: '{"data":[{"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-4","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"{{ persona.coherence.world.product.service_name }}-internal-llm","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"}],"object":"list"}'
 
-  # /api/version — Ollama version check
+  # /api/version — Ollama-specific endpoint that this service does not expose.
+  # Real LiteLLM/FastAPI gateways return the framework-default 404 here. Prior
+  # response leaked the persona display name + MCP endpoint + platform_version
+  # to anyone running a basic Ollama scanner — a one-shot fingerprint.
   - regex: "^/api/version$"
-    name: "ollama-version-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"{{ persona.coherence.world.product.platform_version | replace("v", "", 1) }}","protocol":"MCP","endpoint":"/mcp"}}'
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
-  # /v1/chat/completions — OpenAI chat endpoint
+  # /v1/chat/completions — OpenAI chat endpoint. Returning 404 here is realistic
+  # for an admin/auth-only LiteLLM proxy that gates inference behind a bearer
+  # token; the prior message body explicitly described the cluster's port map
+  # ("Ollama on port 11434 or OpenAI-compatible API on port 8001"), which is
+  # never something a real service would tell an unauth'd caller.
   - regex: "^/v1/chat/completions$"
-    name: "openai-chat-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"not_found","message":"No chat completion endpoint on this service. This is an MCP platform server. For inference, use Ollama on port 11434 or the OpenAI-compatible API on port 8001."}'
+    handler: '{"detail":"Not Found"}'
 
-  # /api/generate, /api/chat, etc. — Ollama inference endpoints
+  # /api/generate, /api/chat, etc. — Ollama-specific endpoints. Real LiteLLM
+  # returns generic 404. Prior body advertised the MCP endpoint and the Ollama
+  # service port — a free attribution for the cluster topology.
   - regex: "^/api/(generate|chat|show|pull|push|copy|create|delete|embed|embeddings|blobs)$"
-    name: "ollama-api-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"wrong_service","message":"Ollama API is on port 11434, not here. This is an MCP platform server.","ollama_port":11434,"mcp_endpoint":"/mcp"}'
+    handler: '{"detail":"Not Found"}'
 
   # =========================================================================
   # L6 — Recon / Scanner Breadcrumbs
@@ -815,7 +824,7 @@ commands:
       - "Server: nginx/1.25.4"
       - "X-Request-Id: req_${request.uuid_short}"
     statusCode: 200
-    handler: '{"key":"sk-litellm-${request.uuid_short}wK2pM8xQ","key_name":"sk-...wK2pM8xQ","expires":"2027-01-01T00:00:00Z","token":"sk-litellm-${request.uuid_short}wK2pM8xQ","token_id":"litellm-key-${request.uuid_short}","models":[],"aliases":{},"spend":0.0,"max_budget":100.0,"user_id":"default_user_id","team_id":null,"max_parallel_requests":null,"metadata":{"created_by":"unknown","created_at":"${time.ago.3h}"},"tpm_limit":null,"rpm_limit":null,"budget_duration":"30d","allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}' # TODO: time-template for future dates not yet supported (expires)
+    handler: '{"key":"sk-litellm-${request.uuid_short}wK2pM8xQ","key_name":"sk-...wK2pM8xQ","expires":"${time.in.90d}","token":"sk-litellm-${request.uuid_short}wK2pM8xQ","token_id":"litellm-key-${request.uuid_short}","models":[],"aliases":{},"spend":0.0,"max_budget":100.0,"user_id":"default_user_id","team_id":null,"max_parallel_requests":null,"metadata":{"created_by":"unknown","created_at":"${time.ago.3h}"},"tpm_limit":null,"rpm_limit":null,"budget_duration":"30d","allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}'
 
   # GET /key/info — key metadata lookup (real LiteLLM masks).
   - regex: "^/key/info$"
@@ -824,7 +833,7 @@ commands:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 200
-    handler: '{"key":"REDACTED","info":{"token":"REDACTED","key_name":"sk-...REDACTED","spend":47.32,"max_budget":1000.0,"expires":"2027-01-01T00:00:00Z","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"aliases":{},"config":{},"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","metadata":{"created_by":"jpark@{{ persona.identity.public_domain }}","environment":"production"},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}}' # lure-lint: ignore-R12 — TODO: time-template for future dates not yet supported (expires)
+    handler: '{"key":"REDACTED","info":{"token":"REDACTED","key_name":"sk-...REDACTED","spend":47.32,"max_budget":1000.0,"expires":"${time.in.90d}","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"aliases":{},"config":{},"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","metadata":{"created_by":"jpark@{{ persona.identity.public_domain }}","environment":"production"},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"permissions":{},"model_max_budget":{},"soft_budget_cooldown":false}}'
 
   # GET /key/list — T2: visible-but-locked (I5b), requires master_key Bearer token.
   # Tantalizes with /key/generate elevation path (I5a Tantalize Rule).
@@ -936,7 +945,7 @@ commands:
       - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
-      [{"api_key":"sk-litellm-prod-Hr9pK2mN4xQ8vL3wR7Bzv6KqP1yT5XuS","key_alias":null,"spend":12847.23,"max_budget":50000.0,"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-prod-Mn2qR8wT5xV3yL9pK0Zj","key_alias":null,"spend":3421.88,"max_budget":10000.0,"user_id":"mchen@{{ persona.identity.public_domain }}","team_id":"team-data","models":["gpt-4o","claude-sonnet-4"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-prod-Zt7vB4nL2qX9wK1mR5pY","key_alias":null,"spend":1247.56,"max_budget":25000.0,"user_id":"oncall-rotation@{{ persona.identity.public_domain }}","team_id":"team-sre","models":["claude-sonnet-4"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-ci-Yp4wL8mR2xQ7nK1vB5pZ","key_alias":"deploy-pipeline","spend":89234.11,"max_budget":250000.0,"user_id":"{{ persona.coherence.world.people.ci_service.handle }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","{{ persona.coherence.world.product.service_name }}-internal-llm"],"created_at":"${time.ago.120d}","expires":"2027-01-01T00:00:00Z","metadata":{"environment":"prod","underlying_keys":{"bedrock_access_key":"${MCP_CANARY_AWS_KEY}","bedrock_secret_key":"${MCP_CANARY_AWS_SECRET}","bedrock_region":"us-east-1"}}},{"api_key":"sk-litellm-prod-Aq8jN4mR2wK1pX7nL9vB","key_alias":null,"spend":876.42,"max_budget":5000.0,"user_id":"aruiz@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","{{ persona.coherence.world.product.service_name }}-internal-llm"],"created_at":"${time.ago.120d}","metadata":{}}]
+      [{"api_key":"sk-litellm-prod-Hr9pK2mN4xQ8vL3wR7Bzv6KqP1yT5XuS","key_alias":null,"spend":12847.23,"max_budget":50000.0,"user_id":"jpark@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-prod-Mn2qR8wT5xV3yL9pK0Zj","key_alias":null,"spend":3421.88,"max_budget":10000.0,"user_id":"mchen@{{ persona.identity.public_domain }}","team_id":"team-data","models":["gpt-4o","claude-sonnet-4"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-prod-Zt7vB4nL2qX9wK1mR5pY","key_alias":null,"spend":1247.56,"max_budget":25000.0,"user_id":"oncall-rotation@{{ persona.identity.public_domain }}","team_id":"team-sre","models":["claude-sonnet-4"],"created_at":"${time.ago.120d}","metadata":{}},{"api_key":"sk-litellm-ci-Yp4wL8mR2xQ7nK1vB5pZ","key_alias":"deploy-pipeline","spend":89234.11,"max_budget":250000.0,"user_id":"{{ persona.coherence.world.people.ci_service.handle }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","{{ persona.coherence.world.product.service_name }}-internal-llm"],"created_at":"${time.ago.120d}","expires":"${time.in.30d}","metadata":{"environment":"prod","underlying_keys":{"bedrock_access_key":"${MCP_CANARY_AWS_KEY}","bedrock_secret_key":"${MCP_CANARY_AWS_SECRET}","bedrock_region":"us-east-1"}}},{"api_key":"sk-litellm-prod-Aq8jN4mR2wK1pX7nL9vB","key_alias":null,"spend":876.42,"max_budget":5000.0,"user_id":"aruiz@{{ persona.identity.public_domain }}","team_id":"team-platform-eng","models":["gpt-4o","claude-sonnet-4","bedrock-claude","{{ persona.coherence.world.product.service_name }}-internal-llm"],"created_at":"${time.ago.120d}","metadata":{}}]
 
   # ── Tier D: Config-file exfil (crown jewel) ────────────────────────
 
@@ -1228,7 +1237,7 @@ commands:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 200
-    handler: '{"session_token":"mcps-${session.cookie}","role":"platform_admin","expires_at":"2027-01-01T00:00:00Z","transport":"streamable-http","endpoint":"/mcp","header":"X-MCP-Session","note":"Include this token in the X-MCP-Session header for tools/call requests within the requested scope.","session_id":"${request.uuid_short}"}' # lure-lint: ignore-R12 — TODO: time-template for future dates not yet supported
+    handler: '{"session_token":"mcps-${session.cookie}","role":"platform_admin","expires_at":"${time.in.6h}","transport":"streamable-http","endpoint":"/mcp","header":"X-MCP-Session","note":"Include this token in the X-MCP-Session header for tools/call requests within the requested scope.","session_id":"${request.uuid_short}"}'
 
   # Chain 2 — GET /mcp/session/create → 405 (method gating)
   - regex: "^/mcp/session/create$"

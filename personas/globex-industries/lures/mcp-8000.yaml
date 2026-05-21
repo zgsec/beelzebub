@@ -472,50 +472,51 @@ commands:
   # L5 — LLM Compatibility (Ollama/OpenAI scanners)
   # =========================================================================
 
-  # /api/tags — Ollama model listing
+  # /api/tags, /v1/models, /api/version, /v1/chat/completions, /api/generate,
+  # /api/chat, etc. — Ollama- and OpenAI-specific endpoints that this service
+  # does not expose. Prior bodies advertised the persona name, MCP endpoint,
+  # and cluster port map ("Ollama on 11434", "OpenAI API on 8001"), which is
+  # a one-shot attribution any informed scanner would read on first probe.
+  # Real LiteLLM/FastAPI gateways return the framework-default 404 here.
   - regex: "^/api/tags$"
-    name: "ollama-tags-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"This is an MCP platform server, not Ollama. Ollama is running on port 11434. Try: curl http://localhost:11434/api/tags","redirect_port":11434}'
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
-  # /v1/models — OpenAI-compatible model listing
   - regex: "^/v1/models$"
-    name: "openai-models-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"This is an MCP platform server. The OpenAI-compatible API runs on port 8001. Ollama inference is on port 11434.","see_also":{"/mcp":"MCP tools endpoint (StreamableHTTP)","/.well-known/mcp.json":"MCP server discovery","port 8001":"OpenAI-compatible API","port 11434":"Ollama inference"}}'
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
-  # /api/version — Ollama version check
   - regex: "^/api/version$"
-    name: "ollama-version-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"3.12.1-rc1","protocol":"MCP","endpoint":"/mcp"}}'
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
-  # /v1/chat/completions — OpenAI chat endpoint
   - regex: "^/v1/chat/completions$"
-    name: "openai-chat-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"not_found","message":"No chat completion endpoint on this service. This is an MCP platform server. For inference, use Ollama on port 11434 or the OpenAI-compatible API on port 8001."}'
+    handler: '{"detail":"Not Found"}'
 
-  # /api/generate, /api/chat, etc. — Ollama inference endpoints
   - regex: "^/api/(generate|chat|show|pull|push|copy|create|delete|embed|embeddings|blobs)$"
-    name: "ollama-api-compat"
+    name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "Server: nginx/1.25.4"
     statusCode: 404
-    handler: '{"error":"wrong_service","message":"Ollama API is on port 11434, not here. This is an MCP platform server.","ollama_port":11434,"mcp_endpoint":"/mcp"}'
+    handler: '{"detail":"Not Found"}'
 
   # =========================================================================
   # L6 — Recon / Scanner Breadcrumbs

@@ -74,9 +74,29 @@ var reRequestJSON = regexp.MustCompile(`\$\{request\.json\.([a-zA-Z_][a-zA-Z0-9_
 // Compiled once at package init — stateless and safe for concurrent use.
 var timeAgoRE = regexp.MustCompile(`\$\{time\.ago\.(\d+)([smhd])\}`)
 
-// replaceTimeAgo is the replacement function for timeAgoRE. It is called
-// once per match by ReplaceAllStringFunc. Unknown unit letters are left
-// untouched so mistyped placeholders are visible in test traffic.
+// timeInRE matches ${time.in.<N><unit>} — the future-direction counterpart
+// of timeAgoRE. Used for expiry-type fields (STS-token Expiration, session
+// expires_at, cert renewal cutoffs) so they roll forward with wall-clock
+// time instead of being frozen ISO literals that drift stale.
+var timeInRE = regexp.MustCompile(`\$\{time\.in\.(\d+)([smhd])\}`)
+
+// replaceTimeAgo / replaceTimeIn share their unit parsing. Unknown unit
+// letters are left untouched so mistyped placeholders are visible in test
+// traffic instead of silently rendering as zero offsets.
+func parseTimeUnit(n int, unit string) (time.Duration, bool) {
+	switch unit {
+	case "s":
+		return time.Duration(n) * time.Second, true
+	case "m":
+		return time.Duration(n) * time.Minute, true
+	case "h":
+		return time.Duration(n) * time.Hour, true
+	case "d":
+		return time.Duration(n) * 24 * time.Hour, true
+	}
+	return 0, false
+}
+
 func replaceTimeAgo(match string) string {
 	m := timeAgoRE.FindStringSubmatch(match)
 	if m == nil {
@@ -86,20 +106,27 @@ func replaceTimeAgo(match string) string {
 	if err != nil {
 		return match
 	}
-	var d time.Duration
-	switch m[2] {
-	case "s":
-		d = time.Duration(n) * time.Second
-	case "m":
-		d = time.Duration(n) * time.Minute
-	case "h":
-		d = time.Duration(n) * time.Hour
-	case "d":
-		d = time.Duration(n) * 24 * time.Hour
-	default:
+	d, ok := parseTimeUnit(n, m[2])
+	if !ok {
 		return match
 	}
 	return time.Now().UTC().Add(-d).Format(time.RFC3339)
+}
+
+func replaceTimeIn(match string) string {
+	m := timeInRE.FindStringSubmatch(match)
+	if m == nil {
+		return match
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return match
+	}
+	d, ok := parseTimeUnit(n, m[2])
+	if !ok {
+		return match
+	}
+	return time.Now().UTC().Add(d).Format(time.RFC3339)
 }
 
 // Apply rewrites ${request.*}, ${session.*}, and ${captured.*}
@@ -158,17 +185,21 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 	return newBody, newHeaders
 }
 
-// applyTime resolves ${time.now} and ${time.ago.<N><unit>} placeholders in s.
-// ${time.now} emits the current UTC time in RFC3339 format. ${time.ago.<N><unit>}
-// emits (now - N units) in RFC3339. The function is a no-op when s contains
-// neither placeholder substring, keeping the zero-allocation fast path for
-// templates that don't use time substitutions.
+// applyTime resolves ${time.now}, ${time.ago.<N><unit>}, and ${time.in.<N><unit>}
+// placeholders in s. ${time.now} emits the current UTC time in RFC3339 format.
+// ${time.ago.<N><unit>} emits (now - N units); ${time.in.<N><unit>} emits
+// (now + N units). The function is a no-op when s contains none of these
+// placeholder substrings, keeping the zero-allocation fast path for templates
+// that don't use time substitutions.
 func applyTime(s string) string {
 	if strings.Contains(s, "${time.now}") {
 		s = strings.ReplaceAll(s, "${time.now}", time.Now().UTC().Format(time.RFC3339))
 	}
 	if strings.Contains(s, "${time.ago.") {
 		s = timeAgoRE.ReplaceAllStringFunc(s, replaceTimeAgo)
+	}
+	if strings.Contains(s, "${time.in.") {
+		s = timeInRE.ReplaceAllStringFunc(s, replaceTimeIn)
 	}
 	return s
 }
