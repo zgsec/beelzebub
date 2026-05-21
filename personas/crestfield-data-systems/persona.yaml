@@ -53,7 +53,16 @@ coherence:
 
     # ── Product / platform ──
     product:
-      service_name: crestfield                          # used in k8s names, deploy refs
+      # service_name MUST be `cdf` for the crestfield persona — the Go MCP
+      # router (protocols/strategies/MCP/state.go::HandleToolCall) only
+      # dispatches `cdf/iam.manage`, `cdf/logs.query`, `cdf/configstore.kv`.
+      # Any other value (including `crestfield`) silently falls through to
+      # the LLM-fabricated generic handler, killing structured worldSeed
+      # delivery and live canary substitution. tool_route_lint.py enforces
+      # this match at build time. See:
+      #   docs/superpowers/specs/2026-05-21-standardized-sensor-deploy-design.md
+      # for the 2026-05-21 finding that motivated this pin.
+      service_name: cdf                                 # tool prefix; route-gated
       platform_display_name: "Crestfield Platform"      # human-facing
       platform_version: "v3.12.1-rc1"                   # appears in /health, headers
       build_sha: a8f3e2d1                                # appears in /health

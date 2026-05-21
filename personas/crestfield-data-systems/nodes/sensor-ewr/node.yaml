@@ -1,0 +1,27 @@
+schema_version: 1
+node_id: sensor-ewr
+role: fork-sensor
+region: us-east
+notes: >
+  Newark Linode (AS63949 Akamai Connected Cloud). Crestfield Data Systems
+  persona, fork sensor (stateful MCP + agent detection). Pairs with sensor-fra
+  on the same persona — bundles render identically for both, only host-side
+  .env differs (per-sensor canaries).
+
+# Lure set deployed on this node. Renderer reads each path relative to
+# personas/<slug>/, resolves Jinja against ../../persona.yaml, and writes
+# the flat output to the bundle's services/ directory.
+lures:
+  - lures/mcp-8000.yaml
+  - lures/http-8888.yaml
+  - lures/openai-8001.yaml
+  - lures/ollama-11434.yaml
+  - lures/ssh-2222.yaml
+  - lures/langflow-7860.yaml
+  - lures/mysql-3306.yaml
+  - lures/redis-6379.yaml
+  - lures/influxdb-8086.yaml
+
+# Per-sensor render-time overrides for the persona. Empty for now — both
+# fork sensors render identically.
+overrides: {}
