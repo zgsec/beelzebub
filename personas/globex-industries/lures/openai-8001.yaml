@@ -69,7 +69,7 @@ commands:
     plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: vllm/0.6.6"
+      - "Server: uvicorn"
     statusCode: 200
 
   # 5. POST /v1/completions — LLM-powered legacy completion
@@ -77,7 +77,7 @@ commands:
     plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: vllm/0.6.6"
+      - "Server: uvicorn"
     statusCode: 200
 
   # 6. POST /v1/embeddings — Embedding endpoint (1024 dims, correct model name)

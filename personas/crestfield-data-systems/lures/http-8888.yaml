@@ -71,7 +71,7 @@ commands:
   # 3. GET /api/config — Open WebUI configuration (cross-port coherence)
   - regex: "^/api/config$"
     handler: |
-      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
+      {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"}]},"auth":{"type":"basic"}}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -196,7 +196,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"webui-mcp":{"url":"http://localhost:8888/mcp/sse","transport":"sse","description":"Open WebUI MCP bridge — chat management and model interaction","capabilities":["tools"]},"{{ persona.lure_content.service_name | default("platform") }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"{{ persona.lure_content.service_name | default("platform") }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # Root-level /sse — scanners check this first for MCP SSE transport
   - regex: "^/sse$"
@@ -402,6 +402,17 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 401
+
+  # Sensitive-path deny: dotfiles + compose manifests
+  # See configurations/services/http-8888.yaml — hardened nginx-style 403
+  # for dotfiles and compose manifests so the WS-11 Phase A deletion
+  # doesn't fingerprint via uniform 404s.
+  - regex: "^/(\\.|docker-compose\\.ya?ml).*"
+    handler: '{"detail":"Forbidden"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 403
 
   # Catch-all 404
   - regex: ".*"

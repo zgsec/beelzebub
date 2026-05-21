@@ -2,7 +2,9 @@ package MCP
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -30,6 +32,43 @@ func TestNewWorldState(t *testing.T) {
 	assert.True(t, ws.Users["usr_001"].Active)
 	assert.Equal(t, "HONEYTOKEN00EXAMPLE01", ws.Resources["aws_key"])
 	assert.Len(t, ws.Logs, 2)
+}
+
+// W4/W5 — worldSeed timestamps frozen for 75+ days were a top honeypot tell
+// (2026-05-20 PG audit round 2). Seeds may now use ${time.ago.<N><unit>}
+// tokens; NewWorldState must resolve them to concrete RFC3339 timestamps
+// once at world birth so the world stays internally consistent across
+// repeat reads from the same IP while distinct sessions see freshly-rolled
+// recency. This test guards both halves of that contract.
+func TestNewWorldState_ResolvesTimePlaceholders(t *testing.T) {
+	seed := WorldSeed{
+		Users: []UserSeed{
+			{ID: "u1", Email: "a@x", Role: "admin", LastLogin: "${time.ago.2h}"},
+			{ID: "u2", Email: "b@x", Role: "dev", LastLogin: "2026-03-05"},
+		},
+		Logs: []LogEntry{
+			{Timestamp: "${time.ago.10m}", Level: "error", Message: "x"},
+		},
+	}
+	ws := NewWorldState(seed, nil)
+
+	// ${time.*} tokens resolve to RFC3339 (no literal "${" survives).
+	assert.False(t, strings.Contains(ws.Users["u1"].LastLogin, "${"),
+		"lastLogin still contains placeholder: %q", ws.Users["u1"].LastLogin)
+	if _, err := time.Parse(time.RFC3339, ws.Users["u1"].LastLogin); err != nil {
+		t.Fatalf("u1 LastLogin not RFC3339: %v", err)
+	}
+	// Static literals pass through unchanged — no double-resolution.
+	assert.Equal(t, "2026-03-05", ws.Users["u2"].LastLogin)
+	// Logs[].Timestamp also resolves.
+	assert.False(t, strings.Contains(ws.Logs[0].Timestamp, "${"))
+
+	// Resolved values stick — handleIAM list_users emits the same concrete
+	// timestamp on repeat calls (immutability across reads invariant).
+	r1 := ws.HandleToolCall("tool:user-account-manager", map[string]interface{}{"action": "list_users"})
+	r2 := ws.HandleToolCall("tool:user-account-manager", map[string]interface{}{"action": "list_users"})
+	assert.Contains(t, r1, ws.Users["u1"].LastLogin)
+	assert.Contains(t, r2, ws.Users["u1"].LastLogin)
 }
 
 func TestUserGetDetails(t *testing.T) {

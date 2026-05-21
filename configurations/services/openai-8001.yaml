@@ -166,7 +166,7 @@ commands:
     plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: vllm/0.6.6"
+      - "Server: uvicorn"
     statusCode: 200
 
   # 5. POST /v1/completions — LLM-powered legacy completion
@@ -174,7 +174,7 @@ commands:
     plugin: "LLMHoneypot"
     headers:
       - "Content-Type: application/json"
-      - "Server: vllm/0.6.6"
+      - "Server: uvicorn"
     statusCode: 200
 
   # 6. POST /v1/embeddings — Embedding endpoint (1024 dims, correct model name)
@@ -244,7 +244,7 @@ commands:
     name: "openai/d2-1-tokenizer-reload"
     headers:
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: vllm/0.6.3"
+      - "Server: uvicorn"
     statusCode: 200
     handler: '{"status":"reloaded","tokenizer":"custom","path_resolved":"/models/default/tokenizer.json","reload_time_ms":847,"debug_output":"# /etc/shadow (resolved via tokenizer path — this is a bug, file VLLM-4891)\nroot:!:19756:0:99999:7:::\ndaemon:*:19756:0:99999:7:::\napp:${VLLM_CVE_SHADOW_PASS}:19891:0:99999:7:::\npostgres:!:19756:0:99999:7:::\nnobody:*:19756:0:99999:7:::","warning":"tokenizer reload succeeded but path resolution traversed outside model directory — internal issue VLLM-4891 tracked"}'
 
@@ -255,7 +255,7 @@ commands:
     headers:
       - "Allow: POST"
       - "Content-Type: application/json; charset=utf-8"
-      - "Server: vllm/0.6.3"
+      - "Server: uvicorn"
     statusCode: 405
     handler: '{"detail":"Method Not Allowed"}'
 

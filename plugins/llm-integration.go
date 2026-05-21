@@ -13,6 +13,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/mariocandela/beelzebub/v3/internal/cache"
 	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/protocols/strategies/responsesubs"
 	"github.com/mariocandela/beelzebub/v3/tracer"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -140,6 +141,26 @@ func FromStringToLLMProvider(llmProvider string) (LLMProvider, error) {
 	}
 }
 
+// resolveCustomPrompt rewrites ${time.*} / ${request.*} placeholders in
+// the per-lure CustomPrompt at honeypot-construction time. Lure yamls
+// (notably the SSH shell emulator's /var/log/messages excerpts and
+// /root/.bash_history snippets) carry "ground truth" timestamps the
+// LLM is told to surface verbatim — without this resolution they would
+// remain frozen at whatever literal date the lure author typed, which
+// the 2026-05-20 audit (W6) flagged as a top fingerprint for capability
+// probes that diff log freshness across sessions. Resolving once per
+// honeypot build (which corresponds to one attacker session for SSH/
+// TCP/TELNET, one request for HTTP/MCP/OLLAMA) keeps the values stable
+// across turns in the same session while rolling forward across
+// distinct sessions, matching how a real platform behaves.
+func resolveCustomPrompt(p string) string {
+	if !strings.Contains(p, "${") {
+		return p
+	}
+	out, _ := responsesubs.Apply(p, nil, nil, nil)
+	return out
+}
+
 func BuildHoneypot(
 	histories []Message,
 	protocol tracer.Protocol,
@@ -153,7 +174,7 @@ func BuildHoneypot(
 		Host:                    servConf.Plugin.Host,
 		Model:                   servConf.Plugin.LLMModel,
 		Provider:                llmProvider,
-		CustomPrompt:            servConf.Plugin.Prompt,
+		CustomPrompt:            resolveCustomPrompt(servConf.Plugin.Prompt),
 		Temperature:             servConf.Plugin.Temperature,
 		MaxTokens:               servConf.Plugin.MaxTokens,
 		InputValidationEnabled:  servConf.Plugin.InputValidationEnabled,

@@ -52,7 +52,11 @@ llmOfflineResponse:
 # No exporter changes needed.
 
 ollamaConfig:
-  version: "0.7.0"
+  # Keep within ~1 release of upstream/main on ollama/ollama. Stale versions
+  # (>6 months behind) are a capability-probe tell — scanners that read
+  # /api/version and see year-old strings flag the host as deprecated or
+  # honeypot. 0.24.0 is the current "Latest" tag as of 2026-05-20.
+  version: "0.24.0"
 
   # Models chosen to look like a well-provisioned GPU server worth hijacking.
   # Per-sensor prod configs can override with different model sets.
