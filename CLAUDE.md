@@ -11,7 +11,9 @@ Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. T
 - **Fault injection** (`faults/`): grace-period-gated failure simulation.
 - **Novelty scoring** (`noveltydetect/`): per-session novelty distinct from agent classification.
 
-Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Current tag: `v3.6.7`.
+Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Verify the current fork tag via `git -C /home/dev/projects/beelzebub describe --tags` rather than trusting this doc — it has drifted between updates.
+
+> Refreshed 2026-05-22: re-verified the "dead Go packages" claim that an earlier audit raised — `agentdetect`, `noveltydetect`, `historystore`, `artifactstore`, `bridge`, `lifecycle`, `faults` are ALL live in the wire path. Four are used by per-protocol strategy files (`protocols/strategies/{HTTP,SSH,TELNET,OLLAMA,TCP,MCP}/*.go`); three are imported by `builder/`. Per `go list -deps .`, only `integration_test/` is unreachable from main — and that's the project's E2E test suite (intentional), not dead code.
 
 ## Layout
 
@@ -50,7 +52,7 @@ beelzebub-chart/              # Helm chart
 logs/                         # Runtime test logs (gitignored / not authoritative)
 ```
 
-Note: root also holds committed binary artifacts (`beelzebub`, `beelzebub-fork`, `beelzebub-fra`, `beelzebub-test`, `collector`) — these are build outputs, not source. Prefer `make` / `go build` over assuming they're fresh.
+Note: root also holds build artifacts (`beelzebub`, `beelzebub-fork`, `beelzebub-test`, `collector`) — these are `.gitignore`-d build outputs, NOT git-tracked. Prefer `make` / `go build` over assuming the on-disk binary is fresh. Per `git ls-files`, none of these names are tracked as of 2026-05-22.
 
 ## Build / run / test
 
