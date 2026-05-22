@@ -187,8 +187,9 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
 
-  # 13. POST /key/info / GET — leakage of which keys exist (admin)
+  # 13. GET /key/info — leakage of which keys exist (admin)
   - regex: "^/key/info$"
+    method: "GET"
     handler: '{"key":"sk-...EXPL","info":{"models":["{{ persona.lure_content.hosted_model_name | default("aurora-7b") }}"],"max_budget":10.0,"spend":0.0,"created_at":"${time.ago.120d}","key_alias":null}}'
     headers:
       - "Content-Type: application/json"

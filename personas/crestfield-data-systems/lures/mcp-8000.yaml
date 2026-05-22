@@ -480,6 +480,7 @@ commands:
 
   # SSE transport endpoint (MCP legacy transport)
   - regex: "^/sse$"
+    method: "GET"
     name: "sse-endpoint"
     headers:
       - "Content-Type: text/event-stream"

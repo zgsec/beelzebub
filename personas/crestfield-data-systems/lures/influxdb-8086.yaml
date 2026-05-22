@@ -44,6 +44,7 @@ responseBodyMaxBytes: 65536
 commands:
   # Ping — health check, returns version headers (no body)
   - regex: "^/ping$"
+    method: "GET"
     handler: ''
     headers:
       - "Content-Type: application/json"
@@ -54,6 +55,7 @@ commands:
 
   # Health endpoint
   - regex: "^/health$"
+    method: "GET"
     handler: '{"name":"influxdb","message":"ready for queries and writes","status":"pass","version":"1.8.10"}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
@@ -150,7 +152,8 @@ commands:
     statusCode: 200
 
   # Fallback /query — empty results
-  - regex: "^/query"
+  # R4 waiver: real InfluxDB v1.x /query accepts both GET and POST.
+  - regex: "^/query"  # lure-lint: ignore-R4
     handler: '{"results":[{"statement_id":0}]}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
@@ -169,7 +172,8 @@ commands:
     statusCode: 204
 
   # Non-POST /write — 405
-  - regex: "^/write"
+  # R4 waiver: intentional non-POST catch-all returning 405; method-aware via paired handler above.
+  - regex: "^/write"  # lure-lint: ignore-R4
     handler: '{"error":"method not allowed"}'
     headers:
       - "Content-Type: application/json"
@@ -180,6 +184,7 @@ commands:
 
   # Root — InfluxDB 1.8 returns 404 on / (real behavior)
   - regex: "^/$"
+    method: "GET"
     handler: '404 page not found'
     headers:
       - "Content-Type: text/plain; charset=utf-8"
@@ -195,6 +200,7 @@ commands:
   # WATERMARK + CANARY: cmdline embeds the InfluxDB watermark password
   # (real ops mistake — credentials in os.Args[]) AND the canary AWS key.
   - regex: "^/debug/vars$"
+    method: "GET"
     handler: '{"cmdline":["/usr/bin/influxd","-config","/etc/influxdb/influxdb.conf","-set-password={{ persona.coherence.world.watermark_passwords.influxdb }}"],"memstats":{"Alloc":48721920,"TotalAlloc":412847291520,"Sys":256197640,"Lookups":0,"Mallocs":893999444,"Frees":892714528,"HeapAlloc":48721920,"HeapSys":172982272,"HeapIdle":115310592,"HeapInuse":57671680,"HeapReleased":79429632,"HeapObjects":284916,"NumGC":14827,"NumGoroutine":42,"PauseTotalNs":3847291000},"database":{"numMeasurements":847,"numSeries":12483},"queryExecutor":{"queriesActive":0,"queriesExecuted":284716,"queriesFinished":284716,"queryDurationNs":892471000000},"runtime":{"GOARCH":"amd64","GOMAXPROCS":4,"GOOS":"linux","version":"go1.21.12"},"subscriber":{"pointsWritten":0},"write":{"pointsWritten":48293716,"pointsWrittenFail":0,"writeReq":284912,"writeReqErr":0}}'
     headers:
       - "Content-Type: application/json; charset=utf-8"

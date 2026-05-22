@@ -119,6 +119,7 @@ commands:
 
   # 2. GET /version — Real vLLM has no /version endpoint
   - regex: "^/version$"
+    method: "GET"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -238,6 +239,7 @@ commands:
 
   # 8. GET /metrics — Prometheus metrics
   - regex: "^/metrics$"
+    method: "GET"
     headers:
       - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
       - "Server: uvicorn"
