@@ -169,7 +169,7 @@ plugin:
     The platform team owns it; jpark@crestfielddata.io is the named maintainer.
 
     Running locally on this host (docker compose stack at /opt/app/docker-compose.yml):
-    - Crestfield Platform API + MCP server (port 8000, behind nginx 1.25.4) — uvicorn
+    - Crestfield Platform API + MCP server (port 8000) — uvicorn
     - LiteLLM 1.65.2 proxy (bundled with MCP, same :8000) — fronts OpenAI/Anthropic/Bedrock
     - Open WebUI 0.5.3 (port 8888) — team chat
     - Ollama 0.5.4 (port 11434, but the IN-PROD ollama runs on the GPU worker
@@ -180,7 +180,6 @@ plugin:
     /etc/hosts (use these for resolution):
       127.0.0.1   localhost
       10.0.1.100  prod-web-01 prod-web-01.int.crestfielddata.io
-      10.0.1.101  nginx-edge-01 nginx-edge-01.int.crestfielddata.io
       10.0.3.50   db-primary db-primary.int.crestfielddata.io
       10.0.3.52   db-replica-01 db-replica-01.int.crestfielddata.io
       10.0.3.55   db-billing-legacy db-billing-legacy.int.crestfielddata.io
@@ -219,7 +218,7 @@ plugin:
       ${time.ago.18h} prod-web-01 cron-runner[14823]: ldap-sync.sh exit 1 (ou=engineering failed: connection refused to ldap.int.crestfielddata.io:636) — INC-4401 routed to oncall-rotation
       ${time.ago.10h} prod-web-01 kubelet[1023]: OOM kill on pod crestfield-worker-7f8b9c (mem 2.1GiB > limit 2.0GiB; ollama model loader)
       ${time.ago.22m} prod-web-01 cert-manager[3411]: TLS renewal pending for *.int.crestfielddata.io (expires ${time.in.3d})
-      ${time.ago.49m} prod-web-01 nginx[1105]: rate limit triggered for upstream 10.0.12.88 (svc-deployer) on /api/v2/deployments — 847 req/min
+      ${time.ago.49m} prod-web-01 uvicorn[1247]: 429 rate limit triggered for upstream 10.0.12.88 (svc-deployer) on POST /api/v2/deployments — 847 req/min
 
     /root/.bash_history (always show these as a sample when `history` or `cat /root/.bash_history` is run; mix in plausible additional lines):
       docker ps
@@ -237,9 +236,9 @@ plugin:
       curl -s http://localhost:8888/api/config
       docker logs crestfield-platform --tail 50
       git -C /opt/app pull origin main
-      vim /etc/nginx/sites-enabled/crestfield-platform.conf
+      docker compose -f /opt/app/docker-compose.yml logs crestfield-platform --tail 100
       certbot renew --dry-run
-      tail -f /var/log/nginx/access.log
+      docker compose -f /opt/app/docker-compose.yml logs crestfield-platform 2>&1 | grep ' 4[0-9][0-9] '
       redis-cli -h redis-sentinel.int.crestfielddata.io -p 26379 SENTINEL masters
 
     /opt/app/.env — production env file for the FastAPI + LiteLLM service.
@@ -301,33 +300,6 @@ plugin:
       .env  .env.example  .env.production  docker-compose.yml
       Dockerfile  Makefile  pyproject.toml  pytest.ini
       README.md  alembic.ini  app/  migrations/  scripts/  tests/
-
-    /etc/nginx/sites-enabled/crestfield-platform.conf — the nginx reverse
-    proxy config. When read, show:
-      upstream platform_backend {
-          server 127.0.0.1:8000;
-          keepalive 16;
-      }
-      server {
-          listen 443 ssl http2;
-          server_name app.crestfielddata.io;
-          ssl_certificate /etc/ssl/crestfielddata.io/fullchain.pem;
-          ssl_certificate_key /etc/ssl/crestfielddata.io/privkey.pem;
-          location / {
-              proxy_pass http://platform_backend;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_read_timeout 600;
-          }
-          location /mcp { proxy_pass http://platform_backend/mcp; }
-          location /sse { proxy_pass http://platform_backend/sse; }
-      }
-      server {
-          listen 80;
-          server_name app.crestfielddata.io;
-          return 301 https://$host$request_uri;
-      }
 
     docker ps output — always include these containers (mix in others if
     plausible, but these are stable):

@@ -136,15 +136,8 @@ coherence:
       prod_web:
         hostname: prod-web-01
         ip: "10.0.1.100"
-        notes: "SSH lure runs here (port 2222)"
-      edge_nginx:
-        hostname: nginx-edge-01
-        ip: "10.0.1.101"
-        port: 443
-        version: "1.25.4"          # CVE-2026-42945 vulnerable range (lure-only; not banner-leaked)
-        # Wire-emitted Server header is bare "nginx" (server_tokens off);
-        # the precise build is internal-context only. See W8 audit fix.
-        notes: "Emits bare `Server: nginx` upstream (server_tokens off)"
+        notes: "SSH lure runs here (port 2222)."
+      # edge_nginx removed 2026-05-22 — persona is uvicorn-only docker-compose.
       db_primary:
         hostname: db-primary
         ip: "10.0.3.50"
@@ -229,7 +222,7 @@ coherence:
       ssh:              { num: 2222, host: prod_web,            service: "OpenSSH 8.9p1 Ubuntu" }
       mysql_legacy:     { num: 3306, host: db_billing_legacy,   service: "MySQL 5.7.42" }
       redis:            { num: 6379, host: redis_node_1,        service: "Redis 7.2.4" }
-      mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.65.2 behind nginx 1.25.4)" }
+      mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.65.2 on uvicorn)" }
       vllm:             { num: 8001, host: gpu_worker_1,        service: "vLLM 0.6.3 OpenAI-compat" }
       influxdb:         { num: 8086, host: influxdb,            service: "InfluxDB 2.7.5" }
       langflow:         { num: 7860, host: langflow,            service: "LangFlow 1.2.0" }
