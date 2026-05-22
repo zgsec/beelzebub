@@ -480,6 +480,7 @@ commands:
 
   # SSE transport endpoint (MCP legacy transport)
   - regex: "^/sse$"
+    method: "GET"
     name: "sse-endpoint"
     headers:
       - "Content-Type: text/event-stream"
@@ -514,14 +515,14 @@ commands:
   # L5 — LLM Compatibility (Ollama/OpenAI scanners)
   # =========================================================================
 
-  # /api/tags — Ollama model listing
+  # /api/tags — Ollama model listing (not implemented on this service)
   - regex: "^/api/tags$"
     name: "ollama-tags-compat"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"This is an MCP platform server, not Ollama. Ollama is running on port 11434. Try: curl http://localhost:11434/api/tags","redirect_port":11434}'
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
   # /v1/models — T1: OpenAI-compatible model listing (oracle wire-truth override)
   # Oracle bare: 200 {"data":[],"object":"list"} (no models configured)
@@ -540,32 +541,32 @@ commands:
     statusCode: 200
     handler: '{"data":[{"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-4","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"{{ persona.coherence.world.product.service_name }}-internal-llm","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"}],"object":"list"}'
 
-  # /api/version — Ollama version check
+  # /api/version — Ollama version check (not implemented on this service)
   - regex: "^/api/version$"
     name: "ollama-version-compat"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
-    statusCode: 200
-    handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"{{ persona.coherence.world.product.platform_version | replace("v", "", 1) }}","protocol":"MCP","endpoint":"/mcp"}}'
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+    handler: '{"detail":"Not Found"}'
 
-  # /v1/chat/completions — OpenAI chat endpoint
+  # /v1/chat/completions — OpenAI chat endpoint (not implemented on this service)
   - regex: "^/v1/chat/completions$"
     name: "openai-chat-compat"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
     statusCode: 404
-    handler: '{"error":"not_found","message":"No chat completion endpoint on this service. This is an MCP platform server. For inference, use Ollama on port 11434 or the OpenAI-compatible API on port 8001."}'
+    handler: '{"detail":"Not Found"}'
 
-  # /api/generate, /api/chat, etc. — Ollama inference endpoints
+  # /api/generate, /api/chat, etc. — Ollama inference endpoints (not implemented on this service)
   - regex: "^/api/(generate|chat|show|pull|push|copy|create|delete|embed|embeddings|blobs)$"
     name: "ollama-api-compat"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
-      - "Server: nginx/1.25.4"
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
     statusCode: 404
-    handler: '{"error":"wrong_service","message":"Ollama API is on port 11434, not here. This is an MCP platform server.","ollama_port":11434,"mcp_endpoint":"/mcp"}'
+    handler: '{"detail":"Not Found"}'
 
   # =========================================================================
   # L6 — Recon / Scanner Breadcrumbs
@@ -579,7 +580,6 @@ commands:
       - "Server: nginx/1.25.4"
     statusCode: 200
     handler: |
-      # {{ persona.lure_content.platform_display_name | default(persona.display_name) }} — robots.txt
       User-agent: *
       Disallow: /mcp
       Disallow: /api/v2/
@@ -589,8 +589,6 @@ commands:
       Disallow: /.env
       Disallow: /.env.production
       Disallow: /.well-known/mcp.json
-
-      # Sitemap
       Sitemap: /sitemap.xml
 
   # /sitemap.xml — Site structure

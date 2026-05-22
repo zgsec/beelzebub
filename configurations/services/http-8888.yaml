@@ -31,6 +31,7 @@ responseBodyMaxBytes: 65536
 commands:
   # 1. GET / — Open WebUI SPA shell
   - regex: "^/$"
+    method: "GET"
     handler: |
       <!DOCTYPE html>
       <html lang="en">
@@ -62,6 +63,7 @@ commands:
 
   # 2. GET /health — Real Open WebUI health check
   - regex: "^/health$"
+    method: "GET"
     handler: "true"
     headers:
       - "Content-Type: application/json"
@@ -70,6 +72,7 @@ commands:
 
   # 3. GET /api/config — Open WebUI configuration (cross-port coherence)
   - regex: "^/api/config$"
+    method: "GET"
     handler: |
       {"status":true,"name":"Open WebUI","version":"0.5.3","default_models":"phi:2.7b","default_prompt_suggestions":[{"title":["Help me study","vocabulary for a language"],"content":"Help me study vocabulary: $INPUT"},{"title":["Give me ideas","for a birthday gift"],"content":"Give me ideas for a birthday gift for someone who likes $INPUT"}],"features":{"enable_signup":true,"enable_login_form":true,"enable_web_loader":false,"enable_image_generation":false,"enable_community_sharing":false,"enable_admin_export":true},"ollama":{"base_url":"http://localhost:11434","enable":true},"openai":{"base_url":"http://localhost:8001/v1","enable":true},"mcp":{"servers":[{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","url":"http://localhost:8000/mcp","transport":"streamable-http","status":"connected"},{"name":"webui-mcp","url":"http://localhost:8888/mcp/sse","transport":"sse","status":"connected"}]},"auth":{"type":"basic"}}
     headers:
@@ -110,6 +113,7 @@ commands:
 
   # 7. GET /api/models — Lists models from connected Ollama (cross-port coherence)
   - regex: "^/api/models$"
+    method: "GET"
     handler: |
       {"models":[{"id":"phi:2.7b","name":"phi:2.7b","object":"model","created":1739214000,"owned_by":"ollama","ollama":{"name":"phi:2.7b","model":"phi:2.7b","size":1700000000,"digest":"a1b2c3d4e5f6","details":{"parameter_size":"2.7B","quantization_level":"Q4_0"}}},{"id":"nomic-embed-text","name":"nomic-embed-text","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"nomic-embed-text","model":"nomic-embed-text","size":274000000,"digest":"7850acbc7150","details":{"parameter_size":"137M","quantization_level":"F16"}}},{"id":"cdf-embed-v1","name":"cdf-embed-v1","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"cdf-embed-v1","model":"cdf-embed-v1","size":274000000,"digest":"d4e5f6a7b8c9","details":{"parameter_size":"137M","quantization_level":"F16"}}}]}
     headers:
@@ -117,8 +121,9 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
 
-  # 8. GET /api/v1/chats — Chat history (requires auth, returns 401)
+  # 8. POST /api/v1/chats — Chat history (requires auth, returns 401)
   - regex: "^/api/v1/chats$"
+    method: "POST"
     handler: |
       {"detail":"Unauthorized"}
     headers:
@@ -129,6 +134,7 @@ commands:
   # 9. GET /api/v1/chats with Bearer — Returns canary-seeded chat history
   #    Note: Beelzebub can't check headers, so this catches /api/v1/chats/list
   - regex: "^/api/v1/chats/list$"
+    method: "GET"
     handler: '{"data":[{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","updated_at":"${time.ago.3h}","created_at":"${time.ago.120d}"},{"id":"chat-d4e5f6","title":"Fix Kubernetes GPU scheduling","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-g7h8i9","title":"Database migration script","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-j0k1l2","title":"vLLM deployment troubleshooting","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-m3n4o5","title":"Ollama model optimization","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"}]}'
     headers:
       - "Content-Type: application/json"
@@ -153,6 +159,7 @@ commands:
 
   # 12. POST /api/chat — Chat completion endpoint (main inference path)
   - regex: "^/api/chat$"
+    method: "POST"
     handler: |
       {"id":"chatcmpl-webui-abc123","model":"phi:2.7b","created_at":"${time.ago.120d}","message":{"role":"assistant","content":"I'd be happy to help! What would you like to work on?"},"done":true}
     headers:
@@ -162,6 +169,7 @@ commands:
 
   # 13. GET /api/v1/users — User listing (requires admin)
   - regex: "^/api/v1/users$"
+    method: "GET"
     handler: |
       {"detail":"Unauthorized"}
     headers:
@@ -171,6 +179,7 @@ commands:
 
   # 14. GET /api/v1/users/me — Current user (requires auth)
   - regex: "^/api/v1/users/me$"
+    method: "GET"
     handler: |
       {"detail":"Unauthorized"}
     headers:
@@ -330,11 +339,6 @@ commands:
       Disallow: /api/
       Disallow: /static/
       Disallow: /admin/
-
-      # Agent discovery
-      # A2A: /.well-known/agent.json
-      # MCP: /.well-known/mcp.json
-      # LLMs: /llms.txt
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"
