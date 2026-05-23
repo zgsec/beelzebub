@@ -11,6 +11,14 @@ description: "{{ persona.lure_content.platform_display_name | default(persona.di
 # protocol — see plan §1.5-A.
 captureResponseBody: true
 responseBodyMaxBytes: 65536
+# captureRequestBody: dedicated RequestBody field on the event record (in
+# addition to the legacy Body field which is already populated). Added
+# 2026-05-23 alongside the Anthropic-passthrough routes (/anthropic/v1/messages,
+# /v1/messages) so the operator's "model", "system" prompt, "messages",
+# "max_tokens", and any tool definitions land in a dedicated, larger-cap
+# field for retro-analysis of Claude-API-gateway hunters.
+captureRequestBody: true
+requestBodyMaxBytes: 65536
 
 # === STATEFUL WORLD MODEL ===
 # Each connecting IP gets a fresh copy of this state.
@@ -532,6 +540,11 @@ commands:
   #   lure with master_key active returns 200 for unauth + real model list.
   #   Covered by wildcard different_status allowlist entry.
   # M2 (2026-05-19): replaced error-redirect with oracle-conformant model list.
+  # 2026-05-23: model list expanded to include current Claude IDs + deliberately-
+  #   unreleased IDs (claude-opus-5, claude-sonnet-5, claude-haiku-5). Operators
+  #   in the "unreleased model namespace recon" class probe for the future IDs
+  #   and self-identify against the working release IDs. See memory
+  #   reference_unreleased_model_namespace_recon.md.
   - regex: "^/v1/models$"
     name: "litellm-v1-models"
     headers:
@@ -539,7 +552,93 @@ commands:
       - "Server: uvicorn"
       - "X-LiteLLM-Version: 1.65.2"
     statusCode: 200
-    handler: '{"data":[{"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-4","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"{{ persona.coherence.world.product.service_name }}-internal-llm","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"}],"object":"list"}'
+    handler: '{"data":[{"id":"gpt-4o","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-opus-4-7","object":"model","created":1735000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-4-6","object":"model","created":1730000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-haiku-4-5-20251001","object":"model","created":1727740800,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-opus-5","object":"model","created":1740000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-sonnet-5","object":"model","created":1740000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"claude-haiku-5","object":"model","created":1740000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"},{"id":"{{ persona.coherence.world.product.service_name }}-internal-llm","object":"model","created":1715000000,"owned_by":"org-{{ persona.coherence.world.org.github_org }}"}],"object":"list"}'
+
+  # /anthropic/v1/models — LiteLLM Anthropic-passthrough route. Real LiteLLM
+  # gateways expose Anthropic-shaped model lists at this path; operators looking
+  # for Claude-API gateways (cf. silver.inc 3.0 Anthropic-passthrough hunter,
+  # blaze-scanner/0.1, and the 208.84.101.83 2026-05-23 POST /anthropic/v1/messages
+  # probe) hit this first to confirm Anthropic provider is wired before issuing
+  # a real /v1/messages or /anthropic/v1/messages call. Anthropic shape per
+  # https://docs.anthropic.com/en/api/models-list; LiteLLM proxies through.
+  # Model release dates below are real fixed events on the real Anthropic
+  # /v1/models endpoint; frozen timestamps here are accurate, not a tell.
+  - regex: "^/anthropic/v1/models$"  # lure-lint: ignore-R12
+    name: "anthropic-models-passthrough"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
+      - "Anthropic-Version: 2023-06-01"
+    statusCode: 200
+    handler: '{"data":[{"type":"model","id":"claude-opus-4-7","display_name":"Claude Opus 4.7","created_at":"2026-01-15T00:00:00Z"},{"type":"model","id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6","created_at":"2025-11-05T00:00:00Z"},{"type":"model","id":"claude-haiku-4-5-20251001","display_name":"Claude Haiku 4.5","created_at":"2025-10-01T00:00:00Z"},{"type":"model","id":"claude-opus-5","display_name":"Claude Opus 5","created_at":"2026-04-01T00:00:00Z"},{"type":"model","id":"claude-sonnet-5","display_name":"Claude Sonnet 5","created_at":"2026-04-01T00:00:00Z"},{"type":"model","id":"claude-haiku-5","display_name":"Claude Haiku 5","created_at":"2026-04-01T00:00:00Z"}],"first_id":"claude-opus-4-7","has_more":false,"last_id":"claude-haiku-5"}'
+
+  # POST /anthropic/v1/messages — LiteLLM Anthropic-passthrough chat endpoint.
+  # Returns 200 with a constant Anthropic-shaped completion regardless of the
+  # request body content. Two guardrails baked in:
+  #   1. The reply text is a CONSTANT — every request gets the same string. This
+  #      stops the lure from contributing variable output to LLM-driven spam or
+  #      jailbreak workloads. See memory feedback_deception_must_not_assist_third_party_harm.
+  #   2. The "model" field in the response is a fixed claude-opus-4-7 (proxy
+  #      routing override is realistic LiteLLM behavior — see the model_info
+  #      "litellm_params.model" override pattern in /model/info above).
+  # Request body is captured via the lure-level captureRequestBody flag — every
+  # operator's "model", "system", "messages", "max_tokens", and tool definitions
+  # land in the session record for retro-analysis.
+  # Fault-injection (errorRate ~0.10) naturally produces some 429/503 noise on
+  # this route, matching LiteLLM-under-load behavior; no yaml-level body-shape
+  # rate-limit is implemented because beelzebub regex matchers are path-only.
+  - regex: "^/anthropic/v1/messages$"
+    method: POST
+    name: "anthropic-messages-passthrough"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
+      - "X-Request-Id: req_${request.uuid_short}"
+      - "Anthropic-Version: 2023-06-01"
+    statusCode: 200
+    handler: '{"id":"msg_01${request.uuid_short}","type":"message","role":"assistant","content":[{"type":"text","text":"Hello. How can I help you today?"}],"model":"claude-opus-4-7","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":10}}'
+
+  # POST /v1/messages — Anthropic-native shape (no /anthropic/ prefix). Some
+  # operators target the Anthropic-SDK base path directly when probing for proxies
+  # that expose the Anthropic API surface without a vendor-prefix. Same response
+  # shape and guardrails as /anthropic/v1/messages above.
+  - regex: "^/v1/messages$"
+    method: POST
+    name: "anthropic-v1-messages-native"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-LiteLLM-Version: 1.65.2"
+      - "X-Request-Id: req_${request.uuid_short}"
+      - "Anthropic-Version: 2023-06-01"
+    statusCode: 200
+    handler: '{"id":"msg_01${request.uuid_short}","type":"message","role":"assistant","content":[{"type":"text","text":"Hello. How can I help you today?"}],"model":"claude-opus-4-7","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":10}}'
+
+  # GET /v1/messages — Anthropic's real API returns 405 method_not_allowed here.
+  # Mimicking the exact error shape avoids the "honeypot returns wrong error"
+  # tell that operator-class scanners look for.
+  - regex: "^/v1/messages$"
+    method: GET
+    name: "anthropic-v1-messages-405"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "Allow: POST"
+    statusCode: 405
+    handler: '{"type":"error","error":{"type":"not_allowed_error","message":"GET requests are not allowed at this endpoint. Use POST."}}'
+
+  # GET /anthropic/v1/messages — same 405 shape as /v1/messages GET.
+  - regex: "^/anthropic/v1/messages$"
+    method: GET
+    name: "anthropic-passthrough-messages-405"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "Allow: POST"
+    statusCode: 405
+    handler: '{"type":"error","error":{"type":"not_allowed_error","message":"GET requests are not allowed at this endpoint. Use POST."}}'
 
   # /api/version — Ollama-specific endpoint that this service does not expose.
   # Real LiteLLM/FastAPI gateways return the framework-default 404 here. Prior
