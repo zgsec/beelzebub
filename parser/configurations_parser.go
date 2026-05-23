@@ -440,6 +440,23 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 			return nil, fmt.Errorf("in file %s: %v", filePath, err)
 		}
 
+		// Substitute ${UPPER_CASE_VAR} placeholders from os.Environ BEFORE
+		// yaml.Unmarshal — that way every served response body, handler
+		// string, plugin prompt, etc. has the resolved canary value baked
+		// into the in-memory config. Without this step, ${VAR} placeholders
+		// would only get substituted in code paths that explicitly call
+		// os.ExpandEnv (e.g. SSH/shellemulator/defaults.go) — leaving HTTP/
+		// MCP response bodies serving the LITERAL ${VAR} string to attackers,
+		// which is the lure burn observed on sensor-fra 2026-05-23 for
+		// ${HTTP_CANARY_WEB_BUG}.
+		//
+		// Scoped to ${UPPER_CASE_VAR} via envVarRefRegex so the lowercase
+		// request-time pseudo-vars (${request.*}, ${session.*}, ${time.*})
+		// are left intact for per-request resolution by the responsesubs
+		// package. Unset vars are left as literal placeholders so the
+		// warnMissingEnvVars call below catches them.
+		buf = substituteEnvVarsInBuf(buf)
+
 		beelzebubServiceConfiguration := &BeelzebubServiceConfiguration{}
 		err = yaml.Unmarshal(buf, beelzebubServiceConfiguration)
 
@@ -448,10 +465,9 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 		}
 
 		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
-		// Without the env var, beelzebub's runtime substitution leaves the
-		// literal placeholder in served responses — a deception break that's
-		// trivial to fingerprint. See lessons from sensor-fra 2026-05-23 where
-		// ${HTTP_CANARY_WEB_BUG} was being served literally for days.
+		// Discovered when sensor-fra served literal "${HTTP_CANARY_WEB_BUG}"
+		// in 374+ Open WebUI responses since 2026-05-19. Runs after the
+		// substitution above so it sees only the UNRESOLVED literals.
 		warnMissingEnvVars(filePath, buf)
 
 		if beelzebubServiceConfiguration.Plugin.RateLimitEnabled {
@@ -507,11 +523,34 @@ func readFileBytesByFilePath(filePath string) ([]byte, error) {
 }
 
 // envVarRefRegex matches ${UPPER_CASE_VAR} placeholders that beelzebub
-// substitutes from the process environment at runtime. Deliberately
-// excludes the lowercase request-time pseudo-vars (${request.*},
-// ${session.*}, ${time.*}) which are resolved per-request inside the
-// HTTP/MCP/TCP handlers, not from os.Environ.
+// substitutes from the process environment at config-load time (via
+// substituteEnvVarsInBuf below). Deliberately excludes the lowercase
+// request-time pseudo-vars (${request.*}, ${session.*}, ${time.*})
+// which are resolved per-request inside the HTTP/MCP/TCP handlers via
+// the responsesubs package, not from os.Environ.
 var envVarRefRegex = regexp.MustCompile(`\$\{([A-Z][A-Z0-9_]*)\}`)
+
+// substituteEnvVarsInBuf replaces ${UPPER_CASE_VAR} placeholders with their
+// os.Getenv values, in-place on the raw yaml bytes. Called before yaml
+// unmarshal so the in-memory config carries resolved canary values into
+// every handler/response/plugin-prompt string. Unset vars are left as the
+// literal placeholder string (downstream warnMissingEnvVars logs them).
+//
+// The regex deliberately matches only UPPER_CASE_VAR shape so lowercase
+// request-time pseudo-vars (${request.uuid_short}, ${session.cookie},
+// ${time.ago.3h}) survive intact for per-request resolution. Using
+// os.ExpandEnv directly would clobber those (it expands any ${...} via
+// os.Getenv, which returns "" for non-env names — destructive).
+func substituteEnvVarsInBuf(buf []byte) []byte {
+	return envVarRefRegex.ReplaceAllFunc(buf, func(m []byte) []byte {
+		// m looks like ${HTTP_CANARY_WEB_BUG} — extract the name.
+		name := string(m[2 : len(m)-1])
+		if val := os.Getenv(name); val != "" {
+			return []byte(val)
+		}
+		return m // leave literal; warnMissingEnvVars will log it.
+	})
+}
 
 // warnMissingEnvVars scans raw yaml bytes for ${ENV_VAR} placeholders and
 // emits a WARN line for each unique reference whose env var is unset.

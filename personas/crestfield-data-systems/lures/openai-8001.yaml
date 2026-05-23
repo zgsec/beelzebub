@@ -31,6 +31,17 @@ description: "OpenAI-compatible inference API"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
 
+# Persona-shaped fallback when ExecuteModel returns no usable content (no API
+# key, OpenAI 5xx, rate limit, network error). vLLM real wire shape on engine
+# error: 500 + {"object":"error",...}. Without this, applyLLMOfflineResponse
+# emits the legacy bare-text "500 Internal Server Error" — wrong shape, leaks
+# "this is a generic HTTP responder" to anyone fingerprinting the inference
+# path. Observed missing on 2026-05-23 (sensor-fra returned 25-byte legacy
+# default); restored from configurations/services/openai-8001.yaml.
+llmOfflineResponse:
+  status: 500
+  body: '{"object":"error","message":"InternalServerError - inference engine: CUDA OOM after 47 sessions, KV cache 100% utilized; try a smaller model or wait for sessions to drain","type":"server_error","param":null,"code":null}'
+
 # === FAULT INJECTION (WS-11 Phase D Slice 4) ===
 faultInjection:
   enabled: true
