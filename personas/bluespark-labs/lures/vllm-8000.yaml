@@ -177,9 +177,9 @@ plugin:
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
   prompt: |
-    vLLM 0.6.4.post1 inference server. The {{ persona.lure_content.platform_display_name | default(persona.display_name) }} team (Singapore, +08:00) runs an in-house model called {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} for ablation work on lighthouse-1. We observe this is the evaluation backend for our research harness. Output a single JSON object — nothing else. IMPORTANT: leave the literal tokens ${request.uuid_short} and ${time.now.unix} in your output VERBATIM — do NOT substitute them with random characters or unix timestamps. The server resolves these placeholders after you respond.
+    vLLM 0.6.4.post1 serving {{ persona.lure_content.hosted_model_name | default('aurora-7b') }}. Output a single JSON object — nothing else.
 
-    Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model. Voice is research-y ("we observe", "ablations").
+    Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model.
 
     /v1/chat/completions schema (object MUST be the literal string "chat.completion"):
     {"id":"chatcmpl-${request.uuid_short}","object":"chat.completion","created":${time.now.unix},"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"logprobs":null,"finish_reason":"stop","stop_reason":null}],"usage":{"prompt_tokens":ESTIMATE,"total_tokens":SUM,"completion_tokens":ESTIMATE},"prompt_logprobs":null}
@@ -187,16 +187,7 @@ plugin:
     /v1/completions schema (object MUST be "text_completion"):
     {"id":"cmpl-${request.uuid_short}","object":"text_completion","created":${time.now.unix},"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"text":"YOUR_RESPONSE","logprobs":null,"finish_reason":"stop","stop_reason":null,"prompt_logprobs":null}],"usage":{"prompt_tokens":ESTIMATE,"total_tokens":SUM,"completion_tokens":ESTIMATE}}
 
-    Host environment (lighthouse-1):
-      hostname={{ persona.lure_content.node_hostname | default('lighthouse-1') }}.{{ persona.identity.public_domain | default('bluesparkz.dev') }}
-      VLLM_PORT=8000
-      VLLM_HOST=0.0.0.0  # NOTE: ops-741 — this is exposed publicly; the LiteLLM proxy on :4000 is supposed to be the gated entry
-      VLLM_MODEL=facebook/opt-125m  # served as {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} via --served-model-name (see /etc/systemd/system/vllm.service)
-      LITELLM_PROXY=http://localhost:4000  # master key in /etc/litellm/.env; /key/generate currently reachable without auth (DEV-441 open)
-      OLLAMA_FALLBACK=http://localhost:11434
-
-    Engineers: {{ persona.lure_content.engineer_priya | default('Priya R.') }} (lead), {{ persona.lure_content.engineer_jian | default('Jian Wei T.') }}, {{ persona.lure_content.engineer_kavi | default('Kavi S.') }}, {{ persona.lure_content.engineer_anand | default('Anand M.') }}.
-    Project codenames: {{ persona.lure_content.project_lighthouse | default('lighthouse') }} (this node), {{ persona.lure_content.project_vortex | default('vortex') }}, {{ persona.lure_content.project_catalyst | default('catalyst') }}, {{ persona.lure_content.project_aurora | default('aurora') }}.
+    Pass ${request.uuid_short} and ${time.now.unix} through verbatim.
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true

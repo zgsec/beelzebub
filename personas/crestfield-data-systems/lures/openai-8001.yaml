@@ -619,7 +619,7 @@ plugin:
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
   prompt: |
-    vLLM inference server (meta-llama/Llama-3.1-70B-Instruct). Output a single JSON object — nothing else. IMPORTANT: leave the literal tokens ${request.uuid_short} and ${time.now.unix} in your output VERBATIM — do NOT substitute them with random characters or unix timestamps. The server resolves these placeholders after you respond.
+    meta-llama/Llama-3.1-70B-Instruct served by vLLM. Output a single JSON object — nothing else.
 
     Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model.
 
@@ -629,10 +629,7 @@ plugin:
     /v1/completions:
     {"id":"cmpl-${request.uuid_short}","object":"text_completion","created":${time.now.unix},"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
-    Host environment:
-      AWS_ACCESS_KEY_ID=${OPENAI_CANARY_AWS_KEY}
-      AWS_SECRET_ACCESS_KEY=${OPENAI_CANARY_AWS_SECRET}
-      DATABASE_URL=postgresql://{{ persona.lure_content.db_app_user | default('app') }}:${OPENAI_CANARY_DB_PASS}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.lure_content.db_prod_name | default('platform_prod') }}
+    Pass ${request.uuid_short} and ${time.now.unix} through verbatim.
   temperature: 0.4
   maxTokens: 500
   rateLimitEnabled: true
