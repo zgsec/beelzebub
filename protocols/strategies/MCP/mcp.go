@@ -1060,11 +1060,20 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	var matched bool
 
 	for _, command := range servConf.Commands {
-		if command.Regex != nil && command.Regex.MatchString(r.RequestURI) {
-			matchedCommand = command
-			matched = true
-			break
+		if command.Regex == nil || !command.Regex.MatchString(r.RequestURI) {
+			continue
 		}
+		// Method gating: when a command declares Method, it only matches the
+		// declared HTTP verb. Empty Method = match-any (preserves prior
+		// behavior). Without this, GET requests to a POST-only route like
+		// /key/generate or /anthropic/v1/messages would silently fall through
+		// to the first regex match instead of returning the realistic 405.
+		if command.Method != "" && !strings.EqualFold(command.Method, r.Method) {
+			continue
+		}
+		matchedCommand = command
+		matched = true
+		break
 	}
 	if !matched {
 		matchedCommand = servConf.FallbackCommand
