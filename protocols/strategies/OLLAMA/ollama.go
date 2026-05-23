@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -204,6 +205,91 @@ func wrapDegradedTier(originalPrompt string) string {
 	return degradedTierPreamble + "\n\n" + originalPrompt
 }
 
+// mutateForDegradedTier post-processes an LLM response into a plausibly-shaped
+// but DELIBERATELY WRONG variant when the calling session is flagged
+// llmjacking_sustained. The wrap-prompt approach (wrapDegradedTier) instructs
+// the LLM to give off-by-one / near-neighbor answers, but stronger upstream
+// models (gpt-4.1-mini observed 2026-05-23) ignore the soft user-message
+// constraint and answer correctly anyway — so we mutate the output explicitly
+// after the LLM call.
+//
+// Mutation rules (only applied to SHORT responses ≤ 32 trimmed chars, the
+// length range that matters for CAPTCHA-bypass / form-spam pipelines —
+// longer responses are likely not captcha targets and pass through):
+//
+//  1. Pure-digit response (e.g. "12", "5"): increment last digit by 1 with
+//     carry (12→13, 9→10, 99→100). Trivially defeats math-CAPTCHA.
+//  2. Single ASCII word (e.g. "cat", "blue", "yks"): swap two interior
+//     chars, or change last char to a deterministic neighbor. Defeats
+//     word-answer / reverse-string CAPTCHAs.
+//  3. Anything else (multi-word, punctuation, JSON-shaped, longer than 32
+//     trimmed chars): pass through unchanged. We can't safely mutate longer
+//     text without breaking lure realism for legitimate persona traffic.
+//
+// The returned value preserves the original's leading/trailing whitespace
+// since some clients are whitespace-sensitive on captcha submissions.
+//
+// Discovered 2026-05-23: captcha-bypass operator 5.182.204.221 was receiving
+// 7/8 correct answers from sensor-ewr despite llmjacking_sustained being
+// flagged — the wrap-prompt was ineffective against gpt-4.1-mini.
+func mutateForDegradedTier(response string) string {
+	trimmed := strings.TrimSpace(response)
+	if len(trimmed) == 0 || len(trimmed) > 32 {
+		return response
+	}
+
+	// Preserve leading + trailing whitespace.
+	leadEnd := len(response) - len(strings.TrimLeft(response, " \t\r\n"))
+	trailStart := leadEnd + len(trimmed)
+	leading := response[:leadEnd]
+	trailing := response[trailStart:]
+
+	// Rule 1: pure digits → increment last digit with carry.
+	allDigit := true
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			allDigit = false
+			break
+		}
+	}
+	if allDigit {
+		// Parse as int, increment by 1 (mod 1<<63 to avoid overflow).
+		n, parseErr := strconv.ParseInt(trimmed, 10, 64)
+		if parseErr == nil {
+			return leading + strconv.FormatInt(n+1, 10) + trailing
+		}
+		// Fallthrough — treat as word if parse failed (e.g. leading zeros).
+	}
+
+	// Rule 2: single ASCII word (letters only, no spaces/punct) → mutate last char.
+	isWord := true
+	for _, r := range trimmed {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+			isWord = false
+			break
+		}
+	}
+	if isWord && len(trimmed) >= 2 {
+		// Change the last char to the next letter in the alphabet (z→a, Z→A).
+		// This produces "blud" from "blue", "kix" from "kit", "kbu" from "yks" etc —
+		// deterministic, single-char drift, defeats lexical-CAPTCHA pipelines.
+		runes := []rune(trimmed)
+		last := runes[len(runes)-1]
+		switch {
+		case last == 'z':
+			runes[len(runes)-1] = 'a'
+		case last == 'Z':
+			runes[len(runes)-1] = 'A'
+		case (last >= 'a' && last < 'z') || (last >= 'A' && last < 'Z'):
+			runes[len(runes)-1] = last + 1
+		}
+		return leading + string(runes) + trailing
+	}
+
+	// Rule 3: anything else — pass through unchanged.
+	return response
+}
+
 func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
 	if servConf.Plugin.LLMProvider == "" {
 		return "", false
@@ -219,11 +305,10 @@ func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser
 	// Quality-degradation wrapper for sustained extraction sessions. Framed as
 	// router/gateway operational metadata so that prompt-extraction probes see
 	// what reads as infrastructure noise (degraded inference tier, cache-miss
-	// signaling) rather than a defensive measure. The numeric/lexical drift
-	// produced by the wrapper is sufficient to defeat downstream CAPTCHA-bypass
-	// and form-spam pipelines without breaking the response envelope shape.
+	// signaling) rather than a defensive measure.
 	effectivePrompt := prompt
-	if s.Bridge != nil && s.Bridge.HasFlag(host, "llmjacking_sustained") {
+	degraded := s.Bridge != nil && s.Bridge.HasFlag(host, "llmjacking_sustained")
+	if degraded {
 		effectivePrompt = wrapDegradedTier(prompt)
 	}
 
@@ -235,6 +320,16 @@ func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser
 			log.WithFields(log.Fields{"host": host, "error": err}).Warn("Ollama LLM failed, falling back to templates")
 		}
 		return "", false
+	}
+
+	// Post-LLM mutation for sustained-llmjacking sessions. The prompt wrap above
+	// instructs the upstream model toward off-by-one outputs, but stronger
+	// upstream models (gpt-4.1-mini observed 2026-05-23) ignore that soft
+	// constraint and answer correctly anyway. Mutating the response after the
+	// LLM call guarantees the captcha-bypass / form-spam payload returns wrong
+	// answers while preserving response shape, response time, and envelope.
+	if degraded {
+		response = mutateForDegradedTier(response)
 	}
 	return response, true
 }

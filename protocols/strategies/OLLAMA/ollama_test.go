@@ -959,3 +959,77 @@ func TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
 		t.Errorf("body = %q, want model 'm2' interpolated", body)
 	}
 }
+
+// TestMutateForDegradedTier covers the captcha-defeating post-LLM mutation
+// applied when the calling session is flagged llmjacking_sustained.
+// Discovered 2026-05-23: captcha-bypass operator 5.182.204.221 was
+// receiving 7/8 correct answers from sensor-ewr despite the flag being
+// set, because the wrap-prompt approach (wrapDegradedTier) doesn't bind
+// gpt-4.1-mini's behavior. Mutation runs after the LLM call to guarantee
+// wrong-but-plausibly-shaped output.
+func TestMutateForDegradedTier(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		want  string
+	}{
+		// Rule 1: pure digits → increment last digit with carry.
+		{"single digit", "5", "6"},
+		{"single digit with carry", "9", "10"},
+		{"two digits no carry", "12", "13"},
+		{"two digits with carry", "19", "20"},
+		{"trailing newline preserved", "12\n", "13\n"},
+		{"leading whitespace preserved", "  12", "  13"},
+
+		// Rule 2: single ASCII word → next-char-in-alphabet on last letter.
+		{"lowercase word", "cat", "cau"},
+		{"lowercase word ending z", "buzz", "buza"},
+		{"uppercase word", "BLUE", "BLUF"},
+		{"single uppercase Z", "AZ", "AA"},
+		{"three letters reversed", "yks", "ykt"},
+
+		// Rule 3: pass-through unchanged.
+		{"multi-word — passes through", "Hello world", "Hello world"},
+		{"json-shaped — passes through", `{"a":1}`, `{"a":1}`},
+		{"too long — passes through", strings.Repeat("a", 33), strings.Repeat("a", 33)},
+		{"empty — passes through", "", ""},
+		{"whitespace-only — passes through", "   \n", "   \n"},
+		{"punctuation present — passes through", "yes!", "yes!"},
+		{"mixed alnum — passes through", "abc123", "abc123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mutateForDegradedTier(tc.in)
+			if got != tc.want {
+				t.Errorf("mutateForDegradedTier(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMutateForDegradedTier_DefeatsCaptchaPayloads asserts the mutation
+// produces WRONG answers for every CAPTCHA response shape observed in the
+// 5.182.204.221 captcha-bypass burst on sensor-ewr 2026-05-23.
+func TestMutateForDegradedTier_DefeatsCaptchaPayloads(t *testing.T) {
+	captures := []struct {
+		challenge string
+		correct   string
+	}{
+		{"5 + 7 = ?", "12"},
+		{"Kolik je 8 a 1", "9"},
+		{"What animal says meow?", "cat"},
+		{"Type the word 'sky' backwards", "yks"},
+		{"What color is the sky", "blue"},
+		{"How many letters in 'house'?", "5"},
+		{"2 × one =", "2"},
+	}
+	for _, tc := range captures {
+		t.Run(tc.challenge, func(t *testing.T) {
+			got := mutateForDegradedTier(tc.correct)
+			if got == tc.correct {
+				t.Errorf("mutation FAILED — challenge %q correct answer %q passed through unchanged (would still defeat captcha)",
+					tc.challenge, tc.correct)
+			}
+		})
+	}
+}
