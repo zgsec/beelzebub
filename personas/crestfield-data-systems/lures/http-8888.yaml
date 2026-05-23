@@ -9,7 +9,16 @@
 # CANARY TOKENS:
 #   AWS Key:  ${HTTP_CANARY_AWS_KEY}  (canarytokens.org — fires on AWS API call)
 #   DNS:      ${HTTP_CANARY_DNS} (fires on resolution)
-#   Web:      ${HTTP_CANARY_WEB_BUG}
+#   Web:      ${HTTP_CANARY_WEB_BUG}  — REMOVED 2026-05-23: literal
+#             `canarytokens.com` URL in the response body of GET / was an
+#             unconditional "this is a honeypot" tell on view-source. The
+#             web-bug also rarely fired in practice — most scanners GET /
+#             and never fetch sub-resources, so the intel value was near
+#             zero against the high opsec cost. Other canary surfaces
+#             (email, DNS subdomain, AWS key) remain in their respective
+#             contexts where they're less visible. See vault note + the
+#             session log 47.251.246.154 2026-05-23T20:53:02Z which made
+#             the leak visible.
 #
 # DESIGN: 100% static handlers. Captures credential stuffing, account creation,
 #   chat history exfiltration, and model enumeration via Open WebUI API.
@@ -53,7 +62,6 @@ commands:
           "ollama_base_url": "http://localhost:11434"
         };
       </script>
-      <img src="${HTTP_CANARY_WEB_BUG}" style="display:none" width="1" height="1" alt="">
       </body></html>
     headers:
       - "Content-Type: text/html; charset=utf-8"
