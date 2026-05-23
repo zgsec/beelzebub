@@ -314,9 +314,11 @@ func TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig(t *testing.T) {
 		RequestBodyMaxBytes: 50,
 		State:               &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	fireTrace(&resp)
 	got := tt.last()
 	if len(got.RequestBody) != 50 {
 		t.Fatalf("RequestBody truncation via servConf: want 50 bytes, got %d (%q)",
@@ -360,10 +362,12 @@ func TestHTTP_SessionCreateSetsCookieAndCaptures(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	fireTrace(&resp)
 
 	// Set-Cookie header must be injected into resp.Headers.
 	foundSetCookie := false
@@ -427,10 +431,12 @@ func TestHTTP_SessionRequireRejectsUnauthed(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	fireTrace(&resp)
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 Unauthorized, got %d", resp.StatusCode)
@@ -491,10 +497,12 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 		},
 	}
 
-	_, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	fireTrace(&resp)
 
 	// Tracer event must have artifact_sha256 set.
 	got := tt.last()
@@ -528,9 +536,11 @@ func TestHTTP_RawBodyFirst8KB(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	fireTrace(&resp)
 	got := tt.last()
 	raw, ok := got.Captured["svc.raw_body_first_8kb"]
 	if !ok {
@@ -566,9 +576,11 @@ func TestHTTP_HeaderCaptures(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	if _, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx); err != nil {
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	fireTrace(&resp)
 	got := tt.last()
 	if got.Captured["svc.referer"] != "https://example.com/path" {
 		t.Errorf("svc.referer mismatch: %q", got.Captured["svc.referer"])
@@ -613,10 +625,12 @@ func TestHTTP_CookieForgery_JWT(t *testing.T) {
 	}
 	// Even though sessionAction is require and sess is nil (so we 401),
 	// the forgery info must still appear in Captured.
-	resp, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	fireTrace(&resp)
 	if resp.StatusCode != 401 {
 		t.Errorf("expected 401 on require + no live session, got %d", resp.StatusCode)
 	}

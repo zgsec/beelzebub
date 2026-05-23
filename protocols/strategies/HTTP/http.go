@@ -215,6 +215,12 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		var matched bool
 		var resp httpResponse
 		var err error
+		// fireTrace holds the trace-fire callback returned by buildHTTPResponse.
+		// We invoke it AFTER applyLLMOfflineResponse + fault injection have
+		// finalized resp, so the tracer event records what was actually written
+		// to the wire — fixes the 2026-05-23 divergence where corpus showed
+		// "404 Not Found!" while attackers received the configured vLLM envelope.
+		var fireTrace fireTraceFunc
 		for _, command := range servConf.Commands {
 			var err error
 			// URI regex must match. Method, when set, must also match
@@ -229,7 +235,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -242,7 +248,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -269,6 +275,12 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 		}
 		_ = faultType // available for tracer event if needed
+
+		// Fire the trace AFTER all resp modifications, so the event captures
+		// the final wire values (post-fallback, post-fault-injection).
+		if fireTrace != nil {
+			fireTrace(&resp)
+		}
 
 		setResponseHeaders(responseWriter, resp.Headers, resp.StatusCode)
 		fmt.Fprint(responseWriter, resp.Body)
@@ -326,9 +338,24 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 	return nil
 }
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext) (httpResponse, error) {
+// fireTraceFunc is invoked by the caller AFTER all post-build response
+// modifications (applyLLMOfflineResponse + fault injection) so the tracer
+// event reflects what was actually written to the wire — not the in-memory
+// state at buildHTTPResponse's return point.
+//
+// Discovered 2026-05-23: when ExecuteModel failed on sensor-fra, the wire
+// response was correctly the configured llmOfflineResponse envelope (curl
+// received 500 + 219 bytes), but the tracer event recorded the pre-fix
+// "404 Not Found!" bare-text from inside buildHTTPResponse's deferred
+// trace fire. Corpus on research-1 looked like the lure was still broken
+// when it wasn't. Returning the trace as a callback the caller invokes
+// fixes the ordering.
+type fireTraceFunc func(finalResp *httpResponse)
+
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
-	// deferred trace fire (covers static-handler + LLM plugin paths uniformly).
+	// trace fire (covers static-handler + LLM plugin paths uniformly).
+	// Trace fires from the caller AFTER all resp modifications complete.
 	startedAt := time.Now()
 
 	resp := httpResponse{
@@ -347,19 +374,18 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 	var artifactSHA string
 
-	// Trace AFTER the response body is finalized (including LLM-plugin generated
-	// content) so tracer.Event.CommandOutput reflects what was actually served
-	// to the attacker. Defer ensures the trace fires on both success and error
-	// return paths. This aligns the HTTP handler with MCP/SSH/TELNET handlers,
-	// which all populate CommandOutput; the HTTP omission was historical and
-	// broke downstream canary/response-correlation analytics.
+	// Build the trace-fire callback. Caller invokes with &resp AFTER any
+	// applyLLMOfflineResponse / fault-injection mods, so the event captures
+	// final wire values. Previously this ran in a defer inside buildHTTPResponse,
+	// which fired before the caller could modify resp — the trace recorded
+	// pre-fix values that diverged from what attackers actually received.
 	//
-	// v8 Phase 0 additions: ResponseBody (opt-in), ResponseHeaders (opt-in),
+	// v8 Phase 0 captures: ResponseBody (opt-in), ResponseHeaders (opt-in),
 	// ResponseBytes (always), ResponseTimeMs (always). Gated by
 	// servConf.CaptureResponseBody to keep storage cost opt-in.
 	//
-	// v8 Phase 5 additions: Captured map + SessionKey override for stateful services.
-	defer func() {
+	// v8 Phase 5 captures: Captured map + SessionKey override for stateful services.
+	fireTrace := func(finalResp *httpResponse) {
 		responseTimeMs := time.Since(startedAt).Milliseconds()
 
 		// Build the captured metadata map for the tracer event.
@@ -423,11 +449,11 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 
 		traceRequest(request, tr, command, servConf.Description, servConf.ServiceType,
-			body, ns, resp.Body, resp.StatusCode, strings.Join(resp.Headers, ", "),
+			body, ns, finalResp.Body, finalResp.StatusCode, strings.Join(finalResp.Headers, ", "),
 			servConf.CaptureResponseBody, servConf.ResponseBodyMaxBytes, responseTimeMs,
 			servConf.CaptureRequestBody, servConf.RequestBodyMaxBytes,
 			nilIfEmpty(eventCaptured), sessionKeyOverride, handlerOverride)
-	}()
+	}
 
 	// -------------------------------------------------------------------------
 	// Stateful session logic
@@ -438,7 +464,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		resp.StatusCode = http.StatusUnauthorized
 		resp.Body = "Unauthorized"
 		resp.Headers = nil
-		return resp, nil
+		return resp, nil, fireTrace
 	}
 
 	// b. sessionAction:create — extract captures from request body + issue cookie.
@@ -501,7 +527,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		if err != nil {
 			log.Errorf("error: %v", err)
 			resp.Body = "404 Not Found!"
-			return resp, err
+			return resp, err, fireTrace
 		}
 
 		llmHoneypot := plugins.BuildHoneypot(nil, tracer.HTTP, llmProvider, servConf)
@@ -519,13 +545,13 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 		if err != nil {
 			resp.Body = "404 Not Found!"
-			return resp, fmt.Errorf("ExecuteModel error: %s, %v", command, err)
+			return resp, fmt.Errorf("ExecuteModel error: %s, %v", command, err), fireTrace
 		}
 
 		resp.Body = completions
 	}
 
-	return resp, nil
+	return resp, nil, fireTrace
 }
 
 // nilIfEmpty returns nil if the map is empty, preserving omitempty behaviour
