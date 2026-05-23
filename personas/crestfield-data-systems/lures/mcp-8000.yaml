@@ -550,8 +550,13 @@ commands:
     statusCode: 200
     handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"{{ persona.coherence.world.product.platform_version | replace("v", "", 1) }}","protocol":"MCP","endpoint":"/mcp"}}'
 
-  # /v1/chat/completions — OpenAI chat endpoint
-  - regex: "^/v1/chat/completions$"
+  # /v1/chat/completions and /chat/completions — OpenAI chat endpoint
+  # Both path shapes return the same persona-coherent redirect: this MCP
+  # service is intentionally not an LLM gateway. Routing the bare path
+  # variant to a 404 with the cross-port hint keeps the lure consistent
+  # for operators who probe both shapes (observed: 205.214.48.229,
+  # 2026-05-23 — hit /v1/chat/completions then /chat/completions on :8000).
+  - regex: "^(/v1)?/chat/completions$"
     name: "openai-chat-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"

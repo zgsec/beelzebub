@@ -500,8 +500,10 @@ commands:
     statusCode: 200
     handler: '{"error":"wrong_service","message":"Not Ollama. This is {{ persona.lure_content.platform_display_name | default(persona.display_name) }} (MCP). Ollama runs on port 11434.","this_service":{"name":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }}","version":"3.12.1-rc1","protocol":"MCP","endpoint":"/mcp"}}'
 
-  # /v1/chat/completions — OpenAI chat endpoint
-  - regex: "^/v1/chat/completions$"
+  # /v1/chat/completions and /chat/completions — OpenAI chat endpoint
+  # Both path shapes return the same persona-coherent redirect (parity
+  # with the crestfield-data-systems persona).
+  - regex: "^(/v1)?/chat/completions$"
     name: "openai-chat-compat"
     headers:
       - "Content-Type: application/json; charset=utf-8"
