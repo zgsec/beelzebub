@@ -558,7 +558,12 @@ commands:
   # token; the prior message body explicitly described the cluster's port map
   # ("Ollama on port 11434 or OpenAI-compatible API on port 8001"), which is
   # never something a real service would tell an unauth'd caller.
-  - regex: "^/v1/chat/completions$"
+  #
+  # Updated 2026-05-23: regex extended to (/v1)? so the bare /chat/completions
+  # path variant also lands here. Observed 205.214.48.229 hit both shapes during
+  # a hand-paced LiteLLM exploitation playbook; without the bare variant the
+  # request fell through to the generic default-404 with a different body shape.
+  - regex: "^(/v1)?/chat/completions$"
     name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"

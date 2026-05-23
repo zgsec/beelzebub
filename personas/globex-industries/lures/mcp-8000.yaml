@@ -503,7 +503,9 @@ commands:
     statusCode: 404
     handler: '{"detail":"Not Found"}'
 
-  - regex: "^/v1/chat/completions$"
+  # /v1/chat/completions — OpenAI chat endpoint. Regex covers the bare
+  # /chat/completions variant too (parity with crestfield-data-systems).
+  - regex: "^(/v1)?/chat/completions$"
     name: "fastapi-404"
     headers:
       - "Content-Type: application/json; charset=utf-8"

@@ -447,6 +447,13 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 			return nil, fmt.Errorf("in file %s: %v", filePath, err)
 		}
 
+		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
+		// Without the env var, beelzebub's runtime substitution leaves the
+		// literal placeholder in served responses — a deception break that's
+		// trivial to fingerprint. See lessons from sensor-fra 2026-05-23 where
+		// ${HTTP_CANARY_WEB_BUG} was being served literally for days.
+		warnMissingEnvVars(filePath, buf)
+
 		if beelzebubServiceConfiguration.Plugin.RateLimitEnabled {
 			if beelzebubServiceConfiguration.Plugin.RateLimitRequests <= 0 ||
 				beelzebubServiceConfiguration.Plugin.RateLimitWindowSeconds <= 0 {
@@ -497,4 +504,33 @@ func gelAllFilesNameByDirName(dirName string) ([]string, error) {
 
 func readFileBytesByFilePath(filePath string) ([]byte, error) {
 	return os.ReadFile(filePath)
+}
+
+// envVarRefRegex matches ${UPPER_CASE_VAR} placeholders that beelzebub
+// substitutes from the process environment at runtime. Deliberately
+// excludes the lowercase request-time pseudo-vars (${request.*},
+// ${session.*}, ${time.*}) which are resolved per-request inside the
+// HTTP/MCP/TCP handlers, not from os.Environ.
+var envVarRefRegex = regexp.MustCompile(`\$\{([A-Z][A-Z0-9_]*)\}`)
+
+// warnMissingEnvVars scans raw yaml bytes for ${ENV_VAR} placeholders and
+// emits a WARN line for each unique reference whose env var is unset.
+// Each missing var = one literal placeholder leaking into served responses,
+// which fingerprints the honeypot on the first scanner that fetches the
+// affected path.
+func warnMissingEnvVars(filePath string, buf []byte) {
+	seen := map[string]bool{}
+	for _, m := range envVarRefRegex.FindAllSubmatch(buf, -1) {
+		name := string(m[1])
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if os.Getenv(name) == "" {
+			log.WithFields(log.Fields{
+				"file":    filePath,
+				"env_var": name,
+			}).Warn("yaml references unset env var — literal placeholder will be served to attackers (lure burn risk)")
+		}
+	}
 }
