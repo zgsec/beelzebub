@@ -36,6 +36,14 @@
 //	                               fresh timestamp on every call, preventing the
 //	                               frozen-ISO-timestamp class of honeypot
 //	                               fingerprint (5/19 audit, Task 4.1).
+//	${time.now.unix}             — current unix epoch seconds as an unquoted
+//	                               integer. OpenAI-compat APIs use this shape
+//	                               in the `created` field of /v1/chat/completions
+//	                               responses; without this, LLM-generated bodies
+//	                               leak the static prompt-template placeholder
+//	                               (observed 2026-05-23 on sensor-fra/ewr:
+//	                               `"created":1710000000` static across all
+//	                               responses, an obvious honeypot fingerprint).
 //	${time.ago.<N><unit>}        — current UTC time minus N units in RFC3339.
 //	                               Supported units: s (seconds), m (minutes),
 //	                               h (hours), d (days). Integer count only.
@@ -192,6 +200,12 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 // placeholder substrings, keeping the zero-allocation fast path for templates
 // that don't use time substitutions.
 func applyTime(s string) string {
+	// ${time.now.unix} BEFORE ${time.now} — the longer pattern must be
+	// resolved first, otherwise the bare ${time.now} prefix would match
+	// and leave a literal ".unix}" trailing the substituted RFC3339 stamp.
+	if strings.Contains(s, "${time.now.unix}") {
+		s = strings.ReplaceAll(s, "${time.now.unix}", strconv.FormatInt(time.Now().Unix(), 10))
+	}
 	if strings.Contains(s, "${time.now}") {
 		s = strings.ReplaceAll(s, "${time.now}", time.Now().UTC().Format(time.RFC3339))
 	}

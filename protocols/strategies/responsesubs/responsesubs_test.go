@@ -240,6 +240,40 @@ func TestApply_TimeNow(t *testing.T) {
 	}
 }
 
+// ${time.now.unix} resolves to current unix epoch seconds as an unquoted
+// integer — the shape OpenAI/vLLM /v1/chat/completions responses use for
+// the `created` field. Closes the frozen-epoch class of honeypot fingerprint
+// (5/23: gpt-4.1-mini was lazying the in-prompt substitution and emitting
+// "created":1710000000 verbatim on every response).
+func TestApply_TimeNowUnix(t *testing.T) {
+	got, _ := Apply(`{"created":${time.now.unix}}`, nil, nil, nil)
+	if strings.Contains(got, "${time.now.unix}") {
+		t.Fatalf("unrendered: %s", got)
+	}
+	var parsed struct{ Created int64 }
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("not valid JSON: %s — %v", got, err)
+	}
+	now := time.Now().Unix()
+	if parsed.Created < now-5 || parsed.Created > now+5 {
+		t.Fatalf("time.now.unix off: got %d, want within 5s of %d (rendered: %s)",
+			parsed.Created, now, got)
+	}
+}
+
+// Ensure the longer ${time.now.unix} pattern is resolved BEFORE the shorter
+// ${time.now} prefix — otherwise time.now would substitute first and leave
+// a stray ".unix}" trailing the RFC3339 stamp.
+func TestApply_TimeNowUnix_DoesNotCollideWithTimeNow(t *testing.T) {
+	got, _ := Apply(`{"a":"${time.now}","b":${time.now.unix}}`, nil, nil, nil)
+	if strings.Contains(got, "${time.now") {
+		t.Fatalf("unrendered: %s", got)
+	}
+	if strings.Contains(got, ".unix}") {
+		t.Fatalf("partial substitution leak: %s", got)
+	}
+}
+
 func TestApply_TimeAgo_Hours(t *testing.T) {
 	got, _ := Apply(`{"started":"${time.ago.3h}"}`, nil, nil, nil)
 	var parsed struct{ Started time.Time }

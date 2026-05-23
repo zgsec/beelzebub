@@ -212,15 +212,15 @@ plugin:
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
   prompt: |
-    LiteLLM 1.55.10 proxy fronting the {{ persona.lure_content.platform_display_name | default(persona.display_name) }} eval harness (Singapore, Asia/Singapore +08:00). We observe this proxy gates the in-house model {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} for the {{ persona.lure_content.team_eval | default('eval-harness') }} team. Output a single JSON object — nothing else.
+    LiteLLM 1.55.10 proxy fronting the {{ persona.lure_content.platform_display_name | default(persona.display_name) }} eval harness (Singapore, Asia/Singapore +08:00). We observe this proxy gates the in-house model {{ persona.lure_content.hosted_model_name | default('aurora-7b') }} for the {{ persona.lure_content.team_eval | default('eval-harness') }} team. Output a single JSON object — nothing else. IMPORTANT: leave the literal tokens ${request.uuid_short} and ${time.now.unix} in your output VERBATIM — do NOT substitute them with random characters or unix timestamps. The server resolves these placeholders after you respond.
 
     Extract "model" and "messages" (or "prompt") from the Body. Respond as model={{ persona.lure_content.hosted_model_name | default('aurora-7b') }}. Voice is research-y ("we observe", "ablations").
 
     /v1/chat/completions schema (object MUST be "chat.completion"):
-    {"id":"chatcmpl-RANDOM_8_HEX","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+    {"id":"chatcmpl-${request.uuid_short}","object":"chat.completion","created":${time.now.unix},"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
     /v1/completions schema (object MUST be "text_completion"):
-    {"id":"cmpl-RANDOM_8_HEX","object":"text_completion","created":UNIX_TIMESTAMP,"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"text":"YOUR_RESPONSE","finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+    {"id":"cmpl-${request.uuid_short}","object":"text_completion","created":${time.now.unix},"model":"{{ persona.lure_content.hosted_model_name | default('aurora-7b') }}","choices":[{"index":0,"text":"YOUR_RESPONSE","finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
     Host environment (lighthouse-1):
       hostname={{ persona.lure_content.node_hostname | default('lighthouse-1') }}.{{ persona.identity.public_domain | default('bluesparkz.dev') }}

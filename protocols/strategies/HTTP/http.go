@@ -549,6 +549,19 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 
 		resp.Body = completions
+
+		// Re-run variable substitution on the LLM-generated body so prompt-
+		// embedded placeholders like ${request.uuid_short} and
+		// ${time.now.unix} land as real values on the wire. The first call
+		// at step (c) happens BEFORE this branch overwrites resp.Body with
+		// the LLM completion — so without this second pass, the chatcmpl-ID
+		// and `created` timestamp ship as literal placeholder text (observed
+		// 2026-05-23: `"id":"chatcmpl-RANDOM1","created":1710000000` static
+		// across every /v1/chat/completions response — gpt-4.1-mini lazied
+		// the in-prompt substitution and wrote the placeholder names back).
+		// applyResponseSubstitutions is idempotent on already-substituted
+		// text (no remaining ${...} patterns = no-op).
+		applyResponseSubstitutions(&resp, sctx, bodyBytes)
 	}
 
 	return resp, nil, fireTrace

@@ -619,15 +619,15 @@ plugin:
   llmModel: "gpt-4.1-mini"
   openAISecretKey: ""
   prompt: |
-    vLLM inference server (meta-llama/Llama-3.1-70B-Instruct). Output a single JSON object — nothing else.
+    vLLM inference server (meta-llama/Llama-3.1-70B-Instruct). Output a single JSON object — nothing else. IMPORTANT: leave the literal tokens ${request.uuid_short} and ${time.now.unix} in your output VERBATIM — do NOT substitute them with random characters or unix timestamps. The server resolves these placeholders after you respond.
 
     Extract "model" and "messages" (or "prompt") from the Body. Respond as the requested model.
 
     /v1/chat/completions:
-    {"id":"chatcmpl-RANDOM_8_CHARS","object":"chat.completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+    {"id":"chatcmpl-${request.uuid_short}","object":"chat.completion","created":${time.now.unix},"model":"MODEL_FROM_REQUEST","choices":[{"index":0,"message":{"role":"assistant","content":"YOUR_RESPONSE"},"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
     /v1/completions:
-    {"id":"cmpl-RANDOM_8_CHARS","object":"text_completion","created":UNIX_TIMESTAMP,"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
+    {"id":"cmpl-${request.uuid_short}","object":"text_completion","created":${time.now.unix},"model":"MODEL_FROM_REQUEST","choices":[{"text":"YOUR_RESPONSE","index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":ESTIMATE,"completion_tokens":ESTIMATE,"total_tokens":SUM}}
 
     Host environment:
       AWS_ACCESS_KEY_ID=${OPENAI_CANARY_AWS_KEY}
