@@ -259,7 +259,7 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"status":"logged","artifact_uri":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","_proxy_response_cached":{"Code":"Success","LastUpdated":"2026-05-25T18:00:00Z","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"2026-05-26T06:00:00Z"}}'
+    handler: '{"status":"logged","artifact_uri":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
 
   # 17. CVE-2023-1177 — LFI via file:// in artifact_uri
   # Distinct sub-path /log-artifact-file avoids regex collision with #16 (CVE-2023-6975).
