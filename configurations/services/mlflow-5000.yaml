@@ -156,7 +156,6 @@ commands:
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: "OK"
 
@@ -169,7 +168,6 @@ commands:
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: "2.18.0"
 
@@ -186,7 +184,6 @@ commands:
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
       - "Cache-Control: no-cache"
       - "Content-Disposition: inline; filename=index.html"
       - "Accept-Ranges: bytes"
@@ -212,7 +209,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
 
@@ -224,7 +220,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
 
@@ -239,7 +234,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"experiment":{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_GET}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000}}'
 
@@ -257,7 +251,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"runs":[{"info":{"run_uuid":"a852a23d52c285f77542e105583eda04","experiment_id":"1","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_id":"a852a23d52c285f77542e105583eda04"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.source.type","value":"LOCAL"},{"key":"mlflow.runName","value":"frosty-hawk-712"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},"inputs":{}}]}'
 
@@ -276,9 +269,8 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"run":{"info":{"run_uuid":"a852a23d52c285f77542e105583eda04","experiment_id":"1","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_id":"a852a23d52c285f77542e105583eda04"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.source.type","value":"LOCAL"},{"key":"mlflow.runName","value":"frosty-hawk-712"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},"inputs":{}}}'
+    handler: '{"run":{"info":{"run_uuid":"a852a23d52c285f77542e105583eda04","experiment_id":"1","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_id":"a852a23d52c285f77542e105583eda04"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.source.type","value":"LOCAL"},{"key":"mlflow.runName","value":"frosty-hawk-712"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},"inputs":{}}}'
 
   # 8. GET /api/2.0/mlflow/registered-models/search
   # Real method is GET-only (POST returns 405 Method Not Allowed in 2.18.0).
@@ -291,7 +283,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4xA100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }} artifact_bucket=s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_SEARCH}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/d58f1abac6d8bfc2612748fdc20974f6/artifacts/model","run_id":"d58f1abac6d8bfc2612748fdc20974f6","status":"READY"}]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/4074631d9ee4d741bab4334f63975208/artifacts/model","run_id":"4074631d9ee4d741bab4334f63975208","status":"READY"}]}]}'
 
@@ -306,7 +297,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}]}}'
 
@@ -320,7 +310,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a852a23d52c285f77542e105583eda04"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/21dd356055f170e850c2b3dbc7f53569/artifacts/model","run_id":"21dd356055f170e850c2b3dbc7f53569","status":"READY"}]}'
 
@@ -331,7 +320,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}}'
 
@@ -356,7 +344,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD}-${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD}/1/a852a23d52c285f77542e105583eda04/artifacts/model"}'
 
@@ -369,7 +356,6 @@ commands:
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: |
       # /etc/passwd (resolved via artifact path — this is bug MLFLOW-7124)
@@ -402,7 +388,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"model_version":{"name":"${request.json.name}","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"${request.json.source}?aws_access_key_id=${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}&aws_secret_access_key=${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}&cdf_release={{ persona.watermark_passwords.mlflow }}","status":"PENDING_REGISTRATION","run_id":"a852a23d52c285f77542e105583eda04"}}'
 
@@ -418,7 +403,6 @@ commands:
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: "[default]\naws_access_key_id = ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}\naws_secret_access_key = ${MLFLOW_CANARY_AWS_SECRET_CVE_1177_LFI}\nregion = us-east-2\n# Crestfield Data Systems — MLflow artifact store credentials\n# cdf_release={{ persona.watermark_passwords.mlflow }}\n"
 
@@ -441,7 +425,6 @@ commands:
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"user":{"experiment_permissions":[],"id":2,"is_admin":true,"registered_model_permissions":[],"username":"mlflow-svc-${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}-${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}"}}'
 
@@ -456,7 +439,6 @@ commands:
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
     statusCode: 404
     handler: |
       <!doctype html>
