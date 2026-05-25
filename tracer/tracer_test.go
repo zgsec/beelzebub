@@ -185,3 +185,53 @@ func TestEvent_CapturedFieldSerializes(t *testing.T) {
 		t.Fatalf("Captured not serialized: %s", b)
 	}
 }
+
+// TestEvent_RequestResponseBodyJSONContract locks in the cross-repo JSON tag
+// contract for the WS-4 Slice B follow-on body-bytes fields. The
+// honeypot.observer exporter's RawEvent struct (exporter/models/models.go,
+// PR-2b 2026-05-25) parses these JSON keys verbatim:
+//
+//	RequestBody  string `json:"RequestBody,omitempty"`
+//	ResponseBody string `json:"ResponseBody,omitempty"`
+//
+// If the JSON tag on the producer side drifts (Pascal → snake, or rename),
+// the exporter silently drops the body bytes — exactly the failure mode that
+// produced the dangling-resp_body_sha256 references PR-2b set out to fix.
+// This test catches that drift at producer-side build time.
+func TestEvent_RequestResponseBodyJSONContract(t *testing.T) {
+	e := Event{
+		Protocol:     "HTTP",
+		RequestBody:  `{"model":"x","prompt":"y"}`,
+		ResponseBody: `{"choices":[{"message":{"content":"z"}}]}`,
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(b)
+	if !strings.Contains(js, `"RequestBody":"{\"model\":\"x\",\"prompt\":\"y\"}"`) {
+		t.Fatalf("RequestBody JSON tag drift — exporter PR-2b expects key 'RequestBody' verbatim. Got: %s", js)
+	}
+	if !strings.Contains(js, `"ResponseBody":"{\"choices\":[{\"message\":{\"content\":\"z\"}}]}"`) {
+		t.Fatalf("ResponseBody JSON tag drift — exporter PR-2b expects key 'ResponseBody' verbatim. Got: %s", js)
+	}
+}
+
+// TestEvent_RequestResponseBodyOmitWhenEmpty — the omitempty contract must
+// hold so empty bodies don't bloat every event JSON line in the docker logs.
+// A 200-byte event x 100k sessions/day = 20 MB/day of "" overhead at the
+// sensor → exporter boundary.
+func TestEvent_RequestResponseBodyOmitWhenEmpty(t *testing.T) {
+	e := Event{Protocol: "HTTP"}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(b)
+	if strings.Contains(js, `"RequestBody"`) {
+		t.Fatalf("empty RequestBody must be omitted (omitempty): %s", js)
+	}
+	if strings.Contains(js, `"ResponseBody"`) {
+		t.Fatalf("empty ResponseBody must be omitted (omitempty): %s", js)
+	}
+}
