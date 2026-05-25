@@ -1,3 +1,22 @@
+# Cross-lure credential chain (added 2026-05-25):
+#   - The Open WebUI lure on :8888 (sibling persona lure http-8888.yaml,
+#     chat `chat-x9y8z7`) leaks a credential of the form
+#     `jpark@prod-web-01.int.crestfielddata.io / cdf_prod_2026Q3-7e1d3f4a`
+#     inside a natural ChatGPT-style devops conversation.
+#   - This lure's passwordRegex is extended below to accept the unified
+#     Crestfield watermark class `[a-z]{3,4}_prod_20\d\dQ[1-4]-[0-9a-f]{8}`,
+#     which matches `cdf_prod_2026Q3-7e1d3f4a` and any future persona-
+#     swap variant (`alt_prod_*`, etc.). Operators who parse the webui
+#     chat content and pivot to SSH with the harvested credential auth
+#     successfully -- this is the highest-value intel signal in the
+#     fleet (parse + cross-protocol pivot + successful auth = operator).
+#   - The dictionary baseline (root, qwerty, Smoker666, ...) is preserved
+#     so we still catch commodity botnets too.
+#   - NOTE: persona-rendered serving path is
+#     `personas/crestfield-data-systems/lures/ssh-2222.yaml` (mounted into
+#     the container as `/configurations/services/`). This file is the
+#     dev-VM standalone fallback used by `main.go -confServices ./configurations/services/`.
+#   See: [[feedback_capture_first_lure_authoring]]
 apiVersion: "v1"
 protocol: "ssh"
 address: ":2222"
@@ -7,7 +26,7 @@ commands:
     plugin: "LLMHoneypot"
 serverVersion: "OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"
 serverName: "web-prod-03"
-passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456|1234)$"
+passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456|1234|[a-z]{3,4}_prod_20\\d\\dQ[1-4]-[0-9a-f]{8})$"
 deadlineTimeoutSeconds: 6000
 
 shellEmulator:

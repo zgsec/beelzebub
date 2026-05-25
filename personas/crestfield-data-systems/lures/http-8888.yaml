@@ -14,6 +14,35 @@
 # DESIGN: 100% static handlers. Captures credential stuffing, account creation,
 #   chat history exfiltration, and model enumeration via Open WebUI API.
 #
+# CROSS-LURE CREDENTIAL CHAIN (added 2026-05-25):
+#   Chat `chat-x9y8z7` ("SSH deploy script for prod-web-01") embeds the
+#   credential `jpark@prod-web-01.int.crestfielddata.io / cdf_prod_2026Q3-7e1d3f4a`
+#   in natural devops prose (user asks ChatGPT for help writing a deploy
+#   one-liner, pastes creds inline; assistant responds with the one-liner
+#   plus a gentle pushback on hardcoding passwords — matches real LLM-
+#   assistant behavior).
+#
+#   The sibling lure `personas/crestfield-data-systems/lures/ssh-2222.yaml`
+#   accepts this password via the watermark regex class
+#   `[a-z]{3,4}_prod_20\d\dQ[1-4]-[0-9a-f]{8}` already installed on its
+#   `passwordRegex` (no SSH-side YAML change required — the watermark
+#   class was designed exactly for this cross-pollination).
+#
+#   Intel signal we capture: operators who (1) parse webui chat-history
+#   content, (2) pivot cross-protocol to SSH on :2222, (3) successfully
+#   authenticate with the leaked credential. The full chain (parse → pivot
+#   → auth) is operator-class, hands-on, and following the breadcrumb —
+#   the highest-value capture surface in the fleet.
+#
+#   Coherent with persona:
+#     - jpark = persona.coherence.world.people.platform_admin_1 (James Park)
+#     - prod-web-01 = persona.coherence.world.hosts.prod_web.hostname
+#     - cdf_prod_2026Q3-* matches the canonical watermark family
+#       (persona.coherence.world.watermark_passwords)
+#   See: [[feedback_capture_first_lure_authoring]] (chain-credential pattern
+#   enabled by capture-first realism).
+#
+# Updated: 2026-05-25 — added webui→ssh credential-chain chat (chat-x9y8z7)
 # Updated: 2026-03-06 v1 — Open WebUI persona (replaces WordPress)
 # =============================================================================
 apiVersion: "v1"
@@ -135,7 +164,7 @@ commands:
   #    Note: Beelzebub can't check headers, so this catches /api/v1/chats/list
   - regex: "^/api/v1/chats/list$"
     method: "GET"
-    handler: '{"data":[{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","updated_at":"${time.ago.3h}","created_at":"${time.ago.120d}"},{"id":"chat-d4e5f6","title":"Fix Kubernetes GPU scheduling","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-g7h8i9","title":"Database migration script","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-j0k1l2","title":"vLLM deployment troubleshooting","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-m3n4o5","title":"Ollama model optimization","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"}]}'
+    handler: '{"data":[{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","updated_at":"${time.ago.3h}","created_at":"${time.ago.120d}"},{"id":"chat-x9y8z7","title":"SSH deploy script for prod-web-01","updated_at":"${time.ago.6h}","created_at":"${time.ago.30d}"},{"id":"chat-d4e5f6","title":"Fix Kubernetes GPU scheduling","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-g7h8i9","title":"Database migration script","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-j0k1l2","title":"vLLM deployment troubleshooting","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"},{"id":"chat-m3n4o5","title":"Ollama model optimization","updated_at":"${time.ago.45d}","created_at":"${time.ago.120d}"}]}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -144,6 +173,22 @@ commands:
   # 10. GET /api/v1/chats/{id} — Individual chat with canary data
   - regex: "^/api/v1/chats/chat-a1b2c3$"
     handler: '{"id":"chat-a1b2c3","title":"AWS S3 bucket setup","messages":[{"id":"msg-1","role":"user","content":"How do I configure the S3 bucket for our model cache?","timestamp":"${time.ago.1h}"},{"id":"msg-2","role":"assistant","content":"For the model cache bucket, you can use the existing credentials in your environment:\n\n```bash\nexport AWS_ACCESS_KEY_ID=${HTTP_CANARY_AWS_KEY}\nexport AWS_SECRET_ACCESS_KEY=${HTTP_CANARY_AWS_SECRET}\nexport AWS_DEFAULT_REGION=us-east-2\n\naws s3 mb s3://ml-model-cache.${HTTP_CANARY_DNS}\naws s3 sync /models/ s3://ml-model-cache.${HTTP_CANARY_DNS}/ollama/\n```\n\nThe bucket policy should allow read access from the vLLM container on port 8000 and the Ollama instance on 11434.","timestamp":"${time.ago.1h}"},{"id":"msg-3","role":"user","content":"What about the database connection for the chat history?","timestamp":"${time.ago.1h}"},{"id":"msg-4","role":"assistant","content":"Open WebUI stores chat history in the local SQLite by default, but we moved to PostgreSQL for reliability:\n\n```\nDATABASE_URL=postgresql://webui:Pr0d_chat!2026@db-webui.${HTTP_CANARY_DNS}:5432/open_webui\n```\n\nThe connection is configured in the docker-compose.yml under the open-webui service.","timestamp":"${time.ago.1h}"}],"updated_at":"${time.ago.3h}"}'
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+
+  # 10b. GET /api/v1/chats/chat-x9y8z7 — webui->ssh credential chain (2026-05-25).
+  #      User asks ChatGPT for a one-liner to tail prod syslog, pastes
+  #      ssh creds inline. Assistant gives the one-liner + gentle pushback
+  #      on hardcoded passwords (matches real LLM behavior). The leaked
+  #      credential `jpark@prod-web-01.int.crestfielddata.io /
+  #      cdf_prod_2026Q3-7e1d3f4a` is accepted by the sibling ssh-2222
+  #      lure's watermark regex class. Operators who parse this content,
+  #      pivot to ssh:2222, and authenticate are walking the full chain.
+  #      See file header for the full design note + intel-signal rationale.
+  - regex: "^/api/v1/chats/chat-x9y8z7$"
+    handler: '{"id":"chat-x9y8z7","title":"SSH deploy script for prod-web-01","messages":[{"id":"msg-1","role":"user","content":"Help me write a one-liner to tail syslog on our prod box. I usually do `ssh jpark@prod-web-01.int.crestfielddata.io` and the password is `cdf_prod_2026Q3-7e1d3f4a`, then once I am in I run `tail -f /var/log/syslog`. How do I combine all of that into a single ssh command from my laptop?","timestamp":"${time.ago.6h}"},{"id":"msg-2","role":"assistant","content":"You can pass the remote command as the final argument to ssh and it will run it after authentication, then stream stdout back to your terminal:\n\n```bash\nssh jpark@prod-web-01.int.crestfielddata.io ''tail -f /var/log/syslog''\n```\n\nA few notes:\n\n- Hardcoding passwords in shell history (or pasting them into chats like this) is risky -- anyone with access to your `~/.bash_history` or this transcript can see them. Strongly consider setting up an ssh key pair (`ssh-keygen -t ed25519`) and using `ssh-agent` instead. Your platform team almost certainly already supports key-based auth.\n- If you do want password auth for this one-off, `sshpass -p ''<password>'' ssh ...` is the usual approach, but most security teams disallow it in CI for the same reason.\n- `tail -f` will keep the ssh session open indefinitely; press Ctrl+C when you''re done to close it cleanly.","timestamp":"${time.ago.6h}"},{"id":"msg-3","role":"user","content":"Got it, thanks. I will move to keys when I have a minute. For now I just needed to grep the ldap-sync errors from INC-4401.","timestamp":"${time.ago.6h}"},{"id":"msg-4","role":"assistant","content":"Makes sense -- for a one-shot grep you can avoid the streaming session entirely:\n\n```bash\nssh jpark@prod-web-01.int.crestfielddata.io \"grep -i ''ldap'' /var/log/syslog | tail -50\"\n```\n\nThat returns the last 50 ldap-related lines and exits. Good luck with the incident.","timestamp":"${time.ago.6h}"}],"updated_at":"${time.ago.6h}"}'
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"

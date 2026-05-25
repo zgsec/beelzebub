@@ -47,6 +47,32 @@
 #     watermarked password is provably harvested from one of our
 #     HTTP/MCP lures (zero false-positive baseline confirmed in PG
 #     90d window pre-deploy).
+#
+# Cross-lure credential chain (added 2026-05-25):
+#   - The Open WebUI lure on :8888 (sibling lure http-8888.yaml,
+#     chat `chat-x9y8z7`) leaks the credential
+#     `jpark@prod-web-01.int.crestfielddata.io / cdf_prod_2026Q3-7e1d3f4a`
+#     inside a natural ChatGPT-style devops conversation (user asks for
+#     a syslog-tail one-liner and pastes the cred inline).
+#   - That password matches this lure's watermark regex class above
+#     (`cdf_prod_2026Q3-7e1d3f4a` -> `[a-z]{3,4}_prod_20\d\dQ[1-4]-[0-9a-f]{8}`),
+#     so the password is accepted with NO additional YAML change here.
+#     The regex was designed exactly for this — leaving the chain
+#     credential implicit in the regex (rather than pinned as a literal
+#     OR-arm) keeps SSH side persona-prefix-agnostic: when persona swaps
+#     to e.g. altair-systems and the chain re-mints `alt_prod_2026Q3-*`,
+#     no SSH change is needed.
+#   - The intel signal we want is operators who: (1) parse webui chat
+#     content from http-8888, (2) pivot cross-protocol to ssh on :2222,
+#     (3) successfully authenticate with the leaked credential. This is
+#     the highest-value capture surface in the fleet -- only operator-
+#     class, hands-on actors walking the breadcrumb get here.
+#   - Coherent with persona: jpark = persona.coherence.world.people.platform_admin_1
+#     (James Park, Senior Platform Engineer); prod-web-01 = this host;
+#     cdf_prod_2026Q3-7e1d3f4a is a fresh Q3 slot in the canonical
+#     watermark_passwords family.
+#   See: [[feedback_capture_first_lure_authoring]] (chain-credential
+#   pattern enabled by capture-first realism).
 # =============================================================================
 
 apiVersion: "v1"
