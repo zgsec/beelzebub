@@ -1,0 +1,100 @@
+# =============================================================================
+# MLflow Tracking Server Honeypot — Port 5000 (Fully Static, No LLM Fallback)
+# =============================================================================
+#
+# PERSONA: Crestfield Data Systems' platform team standardized on uvicorn/ASGI
+#   and wraps MLflow's Flask app via a2wsgi behind uvicorn. Real-world this is
+#   a known production pattern. Server header is uvicorn (matches fleet emergent
+#   coherence — every HTTP service on FRA/EWR presents Server: uvicorn).
+#
+# DESIGN: 100% static handlers. No LLMHoneypot fallback — real MLflow is
+#   deterministic, variable response shapes would be a fingerprint. Long-tail
+#   unmatched paths return MLflow's exact 404 error_code JSON shape.
+#
+# CANARY SLOTS (per-leak-path per lure_lint R9):
+#   AWS Keys — one distinct slot per leak path:
+#     ${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}  — /api/2.0/mlflow/experiments/list
+#     ${MLFLOW_CANARY_AWS_KEY_EXP_GET}        — /api/2.0/mlflow/experiments/get
+#     ${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}     — /api/2.0/mlflow/runs/search
+#     ${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}     — /api/2.0/mlflow/registered-models/list
+#     ${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD} — CVE-2024-2928 RCE bait
+#     ${MLFLOW_CANARY_AWS_KEY_CVE_37058_LFI}     — CVE-2024-37058 path-traversal
+#     ${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}     — CVE-2023-6975 SSRF→IMDS
+#     ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}      — CVE-2023-1177 file://
+#     ${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}   — CVE-2023-6014 auth-bypass
+#   (Each KEY has a matching ${MLFLOW_CANARY_AWS_SECRET_<SUFFIX>}.)
+#   DNS: ${MLFLOW_CANARY_DNS} (fires on resolution)
+#
+# Spec: docs/superpowers/specs/2026-05-25-mlflow-lure-and-fleet-hardening-design.md §3
+# =============================================================================
+
+apiVersion: "v1"
+protocol: "http"
+address: ":5000"
+description: "MLflow tracking server — Crestfield Data Systems ML platform"
+
+# v8 Phase 0: capture both request and response bodies (Defect 1 §6)
+captureRequestBody: true
+captureResponseBody: true
+requestBodyMaxBytes: 65536
+responseBodyMaxBytes: 65536
+
+# Persona-shaped fallback when an LLM-backed handler returns no usable content.
+# We don't actually use LLMHoneypot here, but set this for consistency in case
+# fault-injection ever emits a 500.
+llmOfflineResponse:
+  status: 500
+  body: '{"error_code":"INTERNAL_ERROR","message":"Tracking store unavailable; check MLFLOW_BACKEND_STORE_URI"}'
+
+# Fault injection — match openai-8001 pattern (WS-11 Phase D Slice 4)
+# Real MLflow under load has variable response times and occasional 503s.
+faultInjection:
+  enabled: true
+  errorRate: 0.005      # 1 in 200 → 503
+  delayMs: 50           # base latency
+  delayJitterMs: 450    # 0-450ms jitter
+  errorResponses:
+    - '{"error_code":"INTERNAL_ERROR","message":"Tracking server temporarily unavailable. Retry after backoff."}'
+    - '{"error_code":"RESOURCE_LIMIT_EXCEEDED","message":"Backend store query queue full; please reduce request rate."}'
+
+commands:
+  # =========================================================================
+  # Discovery / health (3 handlers)
+  # =========================================================================
+
+  # 1. GET /health — real MLflow returns 200 with body "OK" (plain text)
+  - regex: "^/health$"
+    method: "GET"
+    headers:
+      - "Content-Type: text/plain"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: "OK"
+
+  # 2. GET /version — real MLflow returns JSON {"version":"X.Y.Z"}
+  - regex: "^/version$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"version":"2.18.0"}'
+
+  # 3. GET / — root tracking-UI HTML stub
+  - regex: "^/$"
+    method: "GET"
+    headers:
+      - "Content-Type: text/html; charset=utf-8"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: |
+      <!DOCTYPE html><html lang="en"><head>
+      <meta charset="utf-8"><title>MLflow</title>
+      <link rel="icon" href="/static-files/favicon.ico"/>
+      </head><body>
+      <div id="root"></div>
+      <script src="/static-files/index.html"></script>
+      </body></html>
