@@ -109,6 +109,7 @@ commands:
   # 1. GET /health — real MLflow returns 200 with body "OK" (plain text)
   - regex: "^/health$"
     method: "GET"
+    name: "mlflow/health"
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"
@@ -116,19 +117,23 @@ commands:
     statusCode: 200
     handler: "OK"
 
-  # 2. GET /version — real MLflow returns JSON {"version":"X.Y.Z"}
+  # 2. GET /version — real MLflow's version() handler returns the VERSION constant
+  # directly (plain string), not JSON. Flask serves it as text/html by default.
+  # Source: mlflow/server/__init__.py — @app.route("/version") def version(): return VERSION, 200
   - regex: "^/version$"
     method: "GET"
+    name: "mlflow/version"
     headers:
-      - "Content-Type: application/json"
+      - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"version":"2.18.0"}'
+    handler: "2.18.0"
 
   # 3. GET / — root tracking-UI HTML stub
   - regex: "^/$"
     method: "GET"
+    name: "mlflow/root-ui"
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
@@ -150,6 +155,7 @@ commands:
   # 4. GET /api/2.0/mlflow/experiments/list
   - regex: "^/api/2\\.0/mlflow/experiments/list$"
     method: "GET"
+    name: "mlflow/experiments-list"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -160,16 +166,18 @@ commands:
   # 5. POST /api/2.0/mlflow/experiments/search
   - regex: "^/api/2\\.0/mlflow/experiments/search$"
     method: "POST"
+    name: "mlflow/experiments-search"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
 
   # 6. GET /api/2.0/mlflow/experiments/get?experiment_id={id}
   - regex: "^/api/2\\.0/mlflow/experiments/get(\\?.*)?$"
     method: "GET"
+    name: "mlflow/experiments-get"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -180,69 +188,86 @@ commands:
   # 7. POST /api/2.0/mlflow/runs/search
   - regex: "^/api/2\\.0/mlflow/runs/search$"
     method: "POST"
+    name: "mlflow/runs-search"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"runs":[{"info":{"run_id":"a3f2b1c8d9e4567f1234567890abcdef","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}],"next_page_token":""}'
+    handler: '{"runs":[{"info":{"run_id":"a852a23d52c285f77542e105583eda04","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}],"next_page_token":""}'
 
   # 8. GET /api/2.0/mlflow/runs/get?run_id={id}
+  # run_id varies per request via ${request.uuid_short} — prevents a re-prober
+  # who probes /runs/get?run_id=different from seeing the same canonical run_id
+  # echoed back (which would be a 1-request lure fingerprint).
   - regex: "^/api/2\\.0/mlflow/runs/get(\\?.*)?$"
     method: "GET"
+    name: "mlflow/runs-get"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"run":{"info":{"run_id":"a3f2b1c8d9e4567f1234567890abcdef","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}}'
+    handler: '{"run":{"info":{"run_id":"${request.uuid_short}","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/${request.uuid_short}/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}}'
 
   # 9. GET /api/2.0/mlflow/registered-models/list
+  # Each model carries a distinct 32-char hex run_id (the canonical "production
+  # run that produced this model") — different per experiment, not the same
+  # literal reused across all 3 models.
   - regex: "^/api/2\\.0/mlflow/registered-models/list$"
     method: "GET"
+    name: "mlflow/registered-models-list"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4×A100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/b1c2d3e4f5/artifacts/model","run_id":"b1c2d3e4f5","status":"READY"}],"tags":[]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/c2d3e4f5g6/artifacts/model","run_id":"c2d3e4f5g6","status":"READY"}],"tags":[]}]}'
+    handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4×A100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/d58f1abac6d8bfc2612748fdc20974f6/artifacts/model","run_id":"d58f1abac6d8bfc2612748fdc20974f6","status":"READY"}],"tags":[]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/4074631d9ee4d741bab4334f63975208/artifacts/model","run_id":"4074631d9ee4d741bab4334f63975208","status":"READY"}],"tags":[]}],"next_page_token":""}'
 
   # 10. GET /api/2.0/mlflow/registered-models/get?name={name}
   - regex: "^/api/2\\.0/mlflow/registered-models/get(\\?.*)?$"
     method: "GET"
+    name: "mlflow/registered-models-get"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]}}'
+    handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]}}'
 
   # 11. GET /api/2.0/mlflow/model-versions/list
+  # version=3 keeps canonical exp-1 run_id (a852...). version=2 uses a distinct
+  # 32-char hex for the archived predecessor run (was the bare "older-run"
+  # string before — not a valid MLflow run_id shape).
   - regex: "^/api/2\\.0/mlflow/model-versions/list$"
     method: "GET"
+    name: "mlflow/model-versions-list"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a3f2b1c8d9e4567f1234567890abcdef"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/older-run/artifacts/model","run_id":"older-run","status":"READY"}]}'
+    handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a852a23d52c285f77542e105583eda04"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/21dd356055f170e850c2b3dbc7f53569/artifacts/model","run_id":"21dd356055f170e850c2b3dbc7f53569","status":"READY"}],"next_page_token":""}'
 
   # 12. GET /api/2.0/mlflow/model-versions/get?name={name}&version={v}
   - regex: "^/api/2\\.0/mlflow/model-versions/get(\\?.*)?$"
     method: "GET"
+    name: "mlflow/model-versions-get"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}}'
+    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}}'
 
   # 13. GET /metrics — Prometheus metrics
   - regex: "^/metrics$"
     method: "GET"
+    name: "mlflow/metrics"
     headers:
       - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
       - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: |
       # HELP mlflow_http_requests_total Total HTTP requests
@@ -283,6 +308,7 @@ commands:
   # 15. CVE-2024-37058 — path traversal via /get-artifact?path=
   - regex: "^/get-artifact(\\?.*)?$"
     method: "GET"
+    name: "mlflow/cve-2024-37058-lfi-passwd"
     headers:
       - "Content-Type: text/plain"
       - "Server: uvicorn"
@@ -313,7 +339,7 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","status":"PENDING_REGISTRATION","run_id":"a3f2b1c8d9e4567f1234567890abcdef"},"_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
+    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","status":"PENDING_REGISTRATION","run_id":"a852a23d52c285f77542e105583eda04"},"_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
 
   # 17. CVE-2023-1177 — LFI via path-traversal on model-version artifact fetch
   # Real route per mlflow/server/__init__.py:
@@ -352,6 +378,7 @@ commands:
   # Catch-all — must be last. Real MLflow 404 shape.
   # =========================================================================
   - regex: "^.*$"
+    name: "mlflow/404-catchall"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
