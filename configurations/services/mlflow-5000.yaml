@@ -14,6 +14,7 @@
 # CANARY SLOTS (per-leak-path per lure_lint R9):
 #   AWS Keys — one distinct slot per leak path:
 #     ${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}  — /api/2.0/mlflow/experiments/list
+#     ${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}     — /api/2.0/mlflow/experiments/search
 #     ${MLFLOW_CANARY_AWS_KEY_EXP_GET}        — /api/2.0/mlflow/experiments/get
 #     ${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}     — /api/2.0/mlflow/runs/search
 #     ${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}     — /api/2.0/mlflow/registered-models/list
@@ -24,6 +25,49 @@
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}   — CVE-2023-6014 auth-bypass
 #   (Each KEY has a matching ${MLFLOW_CANARY_AWS_SECRET_<SUFFIX>}.)
 #   DNS: ${MLFLOW_CANARY_DNS} (fires on resolution)
+#
+# CVE ENTRY-POINT REVISIONS (post-review 2026-05-25):
+#   Reviewer flagged that CVE handlers used fake/wrong paths and methods that
+#   real scanners wouldn't hit — they'd fall through to the 404 catch-all and
+#   the AKIA would never leak. Researched against MLflow proto definitions
+#   (mlflow/protos/{service,model_registry,mlflow_artifacts}.proto on master).
+#
+#     CVE-2024-2928 (RCE via get-download-uri)
+#       Original: POST /api/2.0/mlflow/registered-models/get-download-uri
+#       Revised : GET  /api/2.0/mlflow/model-versions/get-download-uri
+#       Source  : model_registry.proto — getModelVersionDownloadUri rpc:
+#                 method="GET", path="/mlflow/model-versions/get-download-uri"
+#                 (NB: the "registered-models" prefix in original was wrong;
+#                  the bug lives in the model-versions endpoint family.)
+#
+#     CVE-2023-6975 (SSRF / path-traversal in artifact repo)
+#       Original: POST /api/2.0/mlflow/runs/log-artifact (handler never existed)
+#       Revised : POST /api/2.0/mlflow/model-versions/create
+#       Source  : Patch b9ab9ed7 targets FTPArtifactRepository.list_artifacts,
+#                 but the attacker-controlled entry is the `source` field of
+#                 CreateModelVersion (POST /mlflow/model-versions/create) —
+#                 the source URI is what gets resolved against the artifact
+#                 repo. Kept IMDS-shaped response body to match the SSRF lure.
+#
+#     CVE-2023-1177 (LFI via artifact retrieval)
+#       Original: POST /api/2.0/mlflow/runs/log-artifact-file (fake path)
+#       Revised : GET  /model-versions/get-artifact?path=...
+#       Source  : mlflow/server/__init__.py — @app.route("/model-versions/get-artifact")
+#                 serve_model_version_artifact() -> get_model_version_artifact_handler().
+#                 Picked this sibling route (not /get-artifact, to avoid regex
+#                 collision with handler #15 which already covers CVE-2024-37058
+#                 at /get-artifact). Both are real Flask routes in MLflow and
+#                 both have historical LFI CVEs. Returns the credentials-file
+#                 LFI payload via text/plain rather than JSON (matches what
+#                 a real artifact-fetch returns: raw file bytes).
+#
+#     CVE-2023-6014 (auth-bypass account creation)
+#       Original: POST /api/2.0/mlflow/users/create
+#       Revised : POST /api/2.0/mlflow/users/create (unchanged — path is right;
+#                 tightened response shape to match real basic-auth plugin:
+#                 {"user": {...}} without inline experiment_permissions arrays
+#                 (those come from separate /experiments/permissions endpoints).
+#       Source  : mlflow/server/auth/routes.py — CREATE_USER -> POST.
 #
 # Spec: docs/superpowers/specs/2026-05-25-mlflow-lure-and-fleet-hardening-design.md §3
 # =============================================================================
@@ -221,9 +265,14 @@ commands:
   # (3) one AKIA leak slot per CVE per lure_lint R9
   # =========================================================================
 
-  # 14. CVE-2024-2928 — RCE via crafted artifact path in registered-models/get-download-uri
-  - regex: "^/api/2\\.0/mlflow/registered-models/get-download-uri$"
-    method: "POST"
+  # 14. CVE-2024-2928 — RCE via crafted artifact path in model-versions/get-download-uri
+  # Real route per model_registry.proto: GET /mlflow/model-versions/get-download-uri
+  # Real response shape: {"artifact_uri": "<resolved-uri>"}. We extend with a
+  # _debug_resolved_content field (mimicking a verbose dev-mode build leaking
+  # the env it traversed into) to carry the AWS_*_KEY canary pair.
+  - regex: "^/api/2\\.0/mlflow/model-versions/get-download-uri(\\?.*)?$"
+    method: "GET"
+    name: "mlflow/cve-2024-2928-download-uri"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -250,37 +299,54 @@ commands:
       # AWS_ACCESS_KEY_ID=${MLFLOW_CANARY_AWS_KEY_CVE_37058_LFI}
       # AWS_SECRET_ACCESS_KEY=${MLFLOW_CANARY_AWS_SECRET_CVE_37058_LFI}
 
-  # 16. CVE-2023-6975 — SSRF via artifact_uri pointing at IMDS
-  # Handler returns a fake IMDS-shaped response. NEVER proxies the SSRF outbound.
-  - regex: "^/api/2\\.0/mlflow/runs/log-artifact$"
+  # 16. CVE-2023-6975 — SSRF via `source` field in model-versions/create
+  # Real route per model_registry.proto: POST /mlflow/model-versions/create.
+  # The CVE patch hardened FTPArtifactRepository.list_artifacts, but the
+  # attacker-controlled entry is the `source` URI passed at version creation
+  # (which then gets resolved against the artifact repo). Handler returns a
+  # fake IMDS-shaped response. NEVER proxies the SSRF outbound.
+  - regex: "^/api/2\\.0/mlflow/model-versions/create$"
     method: "POST"
+    name: "mlflow/cve-2023-6975-ssrf-imds"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"status":"logged","artifact_uri":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
+    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","status":"PENDING_REGISTRATION","run_id":"a3f2b1c8d9e4567f1234567890abcdef"},"_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
 
-  # 17. CVE-2023-1177 — LFI via file:// in artifact_uri
-  # Distinct sub-path /log-artifact-file avoids regex collision with #16 (CVE-2023-6975).
-  - regex: "^/api/2\\.0/mlflow/runs/log-artifact-file$"
-    method: "POST"
+  # 17. CVE-2023-1177 — LFI via path-traversal on model-version artifact fetch
+  # Real route per mlflow/server/__init__.py:
+  #   @app.route("/model-versions/get-artifact")
+  #   def serve_model_version_artifact(): return get_model_version_artifact_handler()
+  # Returns raw file bytes (text/plain) — handler shape matches: AWS-credentials
+  # file as if attacker walked `?path=../../../opt/cdf/secrets/.aws/credentials`.
+  - regex: "^/model-versions/get-artifact(\\?.*)?$"
+    method: "GET"
+    name: "mlflow/cve-2023-1177-lfi-credentials"
     headers:
-      - "Content-Type: application/json"
+      - "Content-Type: text/plain"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"status":"logged","artifact_uri":"file:///opt/cdf/secrets/.aws/credentials","_file_contents":"[default]\naws_access_key_id = ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}\naws_secret_access_key = ${MLFLOW_CANARY_AWS_SECRET_CVE_1177_LFI}\nregion = us-east-2\n# Crestfield Data Systems — MLflow artifact store credentials\n# cdf_release={{ persona.watermark_passwords.mlflow }}\n"}'
+    handler: "[default]\naws_access_key_id = ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}\naws_secret_access_key = ${MLFLOW_CANARY_AWS_SECRET_CVE_1177_LFI}\nregion = us-east-2\n# Crestfield Data Systems — MLflow artifact store credentials\n# cdf_release={{ persona.watermark_passwords.mlflow }}\n"
 
-  # 18. CVE-2023-6014 — auth-bypass via path-segment manipulation
+  # 18. CVE-2023-6014 — auth-bypass account creation
+  # Real route per mlflow/server/auth/routes.py: POST /api/2.0/mlflow/users/create
+  # Real response shape (basic-auth plugin) is {"user": {"id", "username", "is_admin"}}
+  # WITHOUT inline experiment_permissions / registered_model_permissions (those
+  # live on separate /experiments/permissions/create etc. endpoints). Carries
+  # the canary pair via _internal_token/_internal_secret as a verbose dev-mode
+  # leak — fictional but plausible debug bloat.
   - regex: "^/api/2\\.0/mlflow/users/create$"
     method: "POST"
+    name: "mlflow/cve-2023-6014-auth-bypass"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"user":{"id":"u_a3f9c12b","username":"admin","is_admin":true,"experiment_permissions":[{"experiment_id":"*","permission":"MANAGE"}],"registered_model_permissions":[{"name":"*","permission":"MANAGE"}],"_internal_token":"${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}","_internal_secret":"${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}","_cdf_release":"{{ persona.watermark_passwords.mlflow }}"}}'
+    handler: '{"user":{"id":"u_a3f9c12b","username":"admin","is_admin":true},"_internal_token":"${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}","_internal_secret":"${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}","_cdf_release":"{{ persona.watermark_passwords.mlflow }}"}'
 
   # =========================================================================
   # Catch-all — must be last. Real MLflow 404 shape.
