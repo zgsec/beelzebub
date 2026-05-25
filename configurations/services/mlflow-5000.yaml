@@ -281,3 +281,14 @@ commands:
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: '{"user":{"id":"u_a3f9c12b","username":"admin","is_admin":true,"experiment_permissions":[{"experiment_id":"*","permission":"MANAGE"}],"registered_model_permissions":[{"name":"*","permission":"MANAGE"}],"_internal_token":"${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}","_internal_secret":"${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}","_cdf_release":"{{ persona.watermark_passwords.mlflow }}"}}'
+
+  # =========================================================================
+  # Catch-all — must be last. Real MLflow 404 shape.
+  # =========================================================================
+  - regex: "^.*$"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 404
+    handler: '{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"Resource not found"}'
