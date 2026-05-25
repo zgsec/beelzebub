@@ -2,7 +2,12 @@
 # MySQL 8.0 (binary wire protocol) — Port 3306
 # =============================================================================
 #
-# PERSONA: Ubuntu 22.04 MySQL 8.0.32 server, platform persona.
+# PERSONA: Ubuntu 22.04 MySQL 8.0.39-0ubuntu0.22.04.2 server, platform persona.
+#   Version aligned 2026-05-25 with personas/crestfield-data-systems/persona
+#   .yaml `db_mysql_app.version` and `service_inventory.mysql.service` (was
+#   8.0.32-0ubuntu0.22.04.2 — stale relative to persona by 7 Oracle minor
+#   versions, would have made standalone dev-VM behavior visibly diverge
+#   from the persona-rendered sensor lure).
 #   `serviceProtocol: mysql-handshake-v10` routes accepted connections to
 #   the binary handshake handler in protocols/strategies/TCP/mysql_handshake.go.
 #
@@ -32,10 +37,10 @@
 apiVersion: "v1"
 protocol: "tcp"
 address: ":3306"
-description: "MySQL 8.0.32"
+description: "MySQL 8.0.39"
 banner: ""
 serverName: ""
-serverVersion: "8.0.32-0ubuntu0.22.04.2"
+serverVersion: "8.0.39-0ubuntu0.22.04.2"
 deadlineTimeoutSeconds: 30
 
 serviceProtocol: "mysql-handshake-v10"

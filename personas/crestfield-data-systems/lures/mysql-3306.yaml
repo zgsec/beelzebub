@@ -2,11 +2,38 @@
 # MySQL 8.0 Honeypot — Port 3306 (binary wire protocol)
 # =============================================================================
 #
-# PERSONA: {{ persona.coherence.world.company.display_name }} primary
-#   data-platform database — Ubuntu 22.04 MySQL 8.0.32. Realistic for a
-#   data-platform startup running the OLTP store on a managed Ubuntu LTS box.
-#   Per persona narrative: db-primary host on the internal subnet at
-#   db-primary.{{ persona.coherence.world.company.internal_domain }}.
+# PERSONA: {{ persona.coherence.world.company.display_name }} platform-team
+#   application MySQL — Ubuntu 22.04 MySQL 8.0.39-0ubuntu0.22.04.2.
+#
+#   This is db-app-mysql-01, the "platform team's misc app DB" per
+#   persona.coherence.world.hosts.db_mysql_app (10.0.3.51:3306), NOT the
+#   primary OLTP store — db_primary is PostgreSQL 15 on 10.0.3.50 (a Mongo-
+#   sized data-platform startup wouldn't run its main OLTP on MySQL when the
+#   persona already has Postgres + Redis + Influx in the stack). The mysql
+#   instance is the legacy adminer/Metabase/wordpress-style "misc team app"
+#   DB that platform engineers haven't gotten around to retiring.
+#
+#   Version pinned to 8.0.39-0ubuntu0.22.04.2 to match persona.coherence
+#   .world.hosts.db_mysql_app.version exactly. Current jammy-updates is
+#   8.0.45-0ubuntu0.22.04.1 (as of 2026-05-25, captured via apt-cache
+#   madison in oracle container ubuntu:22.04) — the persona-pinned .39 is
+#   the historical Q1 jammy security release (validates against archive.
+#   ubuntu.com/jammy-security/main pool).
+#
+#   Per persona narrative: db-app-mysql-01 host on the internal subnet at
+#   db-app-mysql-01.{{ persona.coherence.world.company.internal_domain }}.
+#
+# Capture-first ground truth (oracle-diff/mysql-8.0.39/):
+#   - Real upstream mysql:8.0.39 server_version string is bare "8.0.39"
+#     (no -0ubuntu0 suffix — that's Oracle's upstream tarball not the
+#     Canonical-packaged build).
+#   - Capability flags 0xdfffffff (everything-on incl. SSL+COMPRESS) on
+#     upstream; our handler intentionally OMITS CLIENT_SSL and CLIENT_COMPRESS
+#     (advertising them then failing the upgrade is itself a tell) — see
+#     comment in protocols/strategies/TCP/mysql_handshake.go:52-55.
+#   - charset 0xff (utf8mb4_0900_ai_ci), auth_plugin_data_len 21,
+#     status_flags 0x0002 (autocommit), auth_plugin caching_sha2_password —
+#     all match our handler defaults.
 #
 # CAPTURE DEPTH:
 #   `serviceProtocol: mysql-handshake-v10` engages the binary-protocol handler
@@ -44,10 +71,10 @@
 apiVersion: "v1"
 protocol: "tcp"
 address: ":3306"
-description: "{{ persona.coherence.world.company.display_name }} — MySQL 8.0.32 primary OLTP (db-primary.{{ persona.coherence.world.company.internal_domain }})"
+description: "{{ persona.coherence.world.company.display_name }} — MySQL 8.0.39 platform app DB (db-app-mysql-01.{{ persona.coherence.world.company.internal_domain }})"
 banner: ""
 serverName: ""
-serverVersion: "8.0.32-0ubuntu0.22.04.2"
+serverVersion: "8.0.39-0ubuntu0.22.04.2"
 deadlineTimeoutSeconds: 30
 
 serviceProtocol: "mysql-handshake-v10"

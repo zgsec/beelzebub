@@ -1,17 +1,54 @@
+# =============================================================================
+# SSH :22 — silent dev-VM standalone fallback variant (§5.7).
+#
+# This file is the dev-VM standalone fallback loaded by
+# `main.go -confServices ./configurations/services/`. In a deployed sensor,
+# `personas/crestfield-data-systems/lures/ssh-2222.yaml` is what gets served
+# (rendered into a sensor-specific image under `out/<persona>/<node>/`).
+#
+# Why :22 stays SILENT (no LLM, no plugin):
+#   - Sensor edges get hammered by commodity SSH brute-force botnets
+#     (warnight / 345gs5662d34 wordlist clusters, 1-2/day -> 137/day spikes
+#     per `reference_f555226_hassh_botnet_activation`). Routing those into
+#     gpt-4o-mini would burn tokens for zero intel — these actors never
+#     get past auth and never type a real command.
+#   - Hands-on operators are routed past :22 to :2222 by the sensor's
+#     iptables (where the rich LLM lure lives). This listener only needs
+#     to: (a) advertise a coherent OpenSSH banner that matches what an
+#     edge-facing Ubuntu 22.04.5 jammy box looks like to Shodan / nmap,
+#     (b) accept the commodity-dictionary passwords so the commodity
+#     botnet completes the auth handshake and shellEmulator gives them
+#     a banal prompt that closes when they try to do anything real.
+#   - The shellEmulator (Go-side, see protocols/strategies/SSH/) handles
+#     a tiny set of one-line stock responses (uptime, whoami, exit).
+#     Anything else returns an empty newline. This is BY DESIGN — looks
+#     like a stripped/locked-down maintenance shell to a botnet, costs
+#     us $0/session, and never gets confused into emitting fake creds.
+#
+# Capture-first ground truth (oracle-diff/ubuntu-22.04-openssh/):
+#   - Banner pinned to OpenSSH_8.9p1 Ubuntu-3ubuntu0.15 (current
+#     jammy-updates revision as of 2026-05-25; was -3ubuntu0.10, 5
+#     security-update revisions stale).
+#   - serverName + hostname unified to prod-web-01 to remove the
+#     two-listener inconsistency (:22 said web-prod-03, :2222 said
+#     prod-web-01 — actor flipping between ports would see two
+#     different hosts on the same IP).
+#   - kernel matches jammy-current 5.15.0-91-generic.
+# =============================================================================
 apiVersion: "v1"
 protocol: "ssh"
 address: ":22"
-description: "SSH LLM Honeypot"
+description: "SSH commodity-dictionary capture (silent dev-VM standalone)"
 commands:
   - regex: "^(.+)$"
     handler: ""
-serverVersion: "OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"
-serverName: "web-prod-03"
+serverVersion: "OpenSSH_8.9p1 Ubuntu-3ubuntu0.15"
+serverName: "prod-web-01"
 passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$"
 deadlineTimeoutSeconds: 300
 
 shellEmulator:
   enabled: true
-  hostname: "web-prod-03"
+  hostname: "prod-web-01"
   kernel: "5.15.0-91-generic"
   ip: "10.0.1.100"
