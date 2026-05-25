@@ -98,3 +98,118 @@ commands:
       <div id="root"></div>
       <script src="/static-files/index.html"></script>
       </body></html>
+
+  # =========================================================================
+  # Top-walked REST API handlers — match real MLflow 2.18.0 response shapes
+  # =========================================================================
+
+  # 4. GET /api/2.0/mlflow/experiments/list
+  - regex: "^/api/2\\.0/mlflow/experiments/list$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"experiments":[{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts.${MLFLOW_CANARY_DNS}/0","lifecycle_stage":"active","creation_time":1735000000000,"last_update_time":1738000000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"},{"key":"owner","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}@{{ persona.identity.internal_domain }}"}]},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","creation_time":1736000000000,"last_update_time":1738900000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","creation_time":1736500000000,"last_update_time":1739100000000,"tags":[]},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","creation_time":1737000000000,"last_update_time":1739200000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
+
+  # 5. POST /api/2.0/mlflow/experiments/search
+  - regex: "^/api/2\\.0/mlflow/experiments/search$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
+
+  # 6. GET /api/2.0/mlflow/experiments/get?experiment_id={id}
+  - regex: "^/api/2\\.0/mlflow/experiments/get(\\?.*)?$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"experiment":{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_GET}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"},{"key":"backend_store","value":"postgresql://mlflow_app:${MLFLOW_CANARY_AWS_SECRET_EXP_GET}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.identity.internal_domain }}:5432/mlflow_prod"}]}}'
+
+  # 7. POST /api/2.0/mlflow/runs/search
+  - regex: "^/api/2\\.0/mlflow/runs/search$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"runs":[{"info":{"run_id":"a3f2b1c8d9e4567f1234567890abcdef","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}],"next_page_token":""}'
+
+  # 8. GET /api/2.0/mlflow/runs/get?run_id={id}
+  - regex: "^/api/2\\.0/mlflow/runs/get(\\?.*)?$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"run":{"info":{"run_id":"a3f2b1c8d9e4567f1234567890abcdef","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}}'
+
+  # 9. GET /api/2.0/mlflow/registered-models/list
+  - regex: "^/api/2\\.0/mlflow/registered-models/list$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4×A100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/b1c2d3e4f5/artifacts/model","run_id":"b1c2d3e4f5","status":"READY"}],"tags":[]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/c2d3e4f5g6/artifacts/model","run_id":"c2d3e4f5g6","status":"READY"}],"tags":[]}]}'
+
+  # 10. GET /api/2.0/mlflow/registered-models/get?name={name}
+  - regex: "^/api/2\\.0/mlflow/registered-models/get(\\?.*)?$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]}}'
+
+  # 11. GET /api/2.0/mlflow/model-versions/list
+  - regex: "^/api/2\\.0/mlflow/model-versions/list$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a3f2b1c8d9e4567f1234567890abcdef"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/older-run/artifacts/model","run_id":"older-run","status":"READY"}]}'
+
+  # 12. GET /api/2.0/mlflow/model-versions/get?name={name}&version={v}
+  - regex: "^/api/2\\.0/mlflow/model-versions/get(\\?.*)?$"
+    method: "GET"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a3f2b1c8d9e4567f1234567890abcdef/artifacts/model","run_id":"a3f2b1c8d9e4567f1234567890abcdef","status":"READY"}}'
+
+  # 13. GET /metrics — Prometheus metrics
+  - regex: "^/metrics$"
+    method: "GET"
+    headers:
+      - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: |
+      # HELP mlflow_http_requests_total Total HTTP requests
+      # TYPE mlflow_http_requests_total counter
+      mlflow_http_requests_total{method="GET",endpoint="/api/2.0/mlflow/experiments/list",status="200"} 4827
+      mlflow_http_requests_total{method="POST",endpoint="/api/2.0/mlflow/runs/log-batch",status="200"} 12483
+      # HELP mlflow_active_experiments Number of active experiments
+      # TYPE mlflow_active_experiments gauge
+      mlflow_active_experiments 4
+      # HELP mlflow_runs_total Total runs by status
+      # TYPE mlflow_runs_total counter
+      mlflow_runs_total{status="FINISHED"} 2841
+      mlflow_runs_total{status="FAILED"} 47
+      mlflow_runs_total{status="RUNNING"} 3
