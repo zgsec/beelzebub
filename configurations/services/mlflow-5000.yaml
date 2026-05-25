@@ -6,18 +6,21 @@
 #   and wraps MLflow's Flask app via a2wsgi behind uvicorn. Real-world this is
 #   a known production pattern. Server header is uvicorn (matches fleet emergent
 #   coherence — every HTTP service on FRA/EWR presents Server: uvicorn).
+#   (Real vanilla MLflow ships Server: gunicorn; we deliberately mask that with
+#   the persona header. ALL handlers must agree — leaking gunicorn through one
+#   handler would be a tell.)
 #
 # DESIGN: 100% static handlers. No LLMHoneypot fallback — real MLflow is
 #   deterministic, variable response shapes would be a fingerprint. Long-tail
-#   unmatched paths return MLflow's exact 404 error_code JSON shape.
+#   unmatched paths return MLflow's exact 404 — which is plain Flask HTML,
+#   NOT the JSON {error_code:RESOURCE_DOES_NOT_EXIST} shape.
 #
 # CANARY SLOTS (per-leak-path per lure_lint R9):
 #   AWS Keys — one distinct slot per leak path:
-#     ${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}  — /api/2.0/mlflow/experiments/list
 #     ${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}     — /api/2.0/mlflow/experiments/search
 #     ${MLFLOW_CANARY_AWS_KEY_EXP_GET}        — /api/2.0/mlflow/experiments/get
 #     ${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}     — /api/2.0/mlflow/runs/search
-#     ${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}     — /api/2.0/mlflow/registered-models/list
+#     ${MLFLOW_CANARY_AWS_KEY_MODEL_SEARCH}   — /api/2.0/mlflow/registered-models/search
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD} — CVE-2024-2928 RCE bait
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_37058_LFI}     — CVE-2024-37058 path-traversal
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}     — CVE-2023-6975 SSRF→IMDS
@@ -26,48 +29,87 @@
 #   (Each KEY has a matching ${MLFLOW_CANARY_AWS_SECRET_<SUFFIX>}.)
 #   DNS: ${MLFLOW_CANARY_DNS} (fires on resolution)
 #
-# CVE ENTRY-POINT REVISIONS (post-review 2026-05-25):
-#   Reviewer flagged that CVE handlers used fake/wrong paths and methods that
-#   real scanners wouldn't hit — they'd fall through to the 404 catch-all and
-#   the AKIA would never leak. Researched against MLflow proto definitions
-#   (mlflow/protos/{service,model_registry,mlflow_artifacts}.proto on master).
+# ============================================================================
+# ORACLE-DIFF REVISIONS 2026-05-25 — against real MLflow 2.18.0
+# ============================================================================
+# Captured byte-shape against real MLflow 2.18.0 running locally and corrected
+# every diff. Source of truth files:
+#   tools/oracle-diff/mlflow-2.18.0/_AUTHORITATIVE_ROUTE_TABLE.txt (honeypot-research)
+#   tools/oracle-diff/mlflow-2.18.0/*.txt — per-endpoint captures
 #
-#     CVE-2024-2928 (RCE via get-download-uri)
-#       Original: POST /api/2.0/mlflow/registered-models/get-download-uri
-#       Revised : GET  /api/2.0/mlflow/model-versions/get-download-uri
-#       Source  : model_registry.proto — getModelVersionDownloadUri rpc:
-#                 method="GET", path="/mlflow/model-versions/get-download-uri"
-#                 (NB: the "registered-models" prefix in original was wrong;
-#                  the bug lives in the model-versions endpoint family.)
+# Real-MLflow file:line citations for route methods:
+#   mlflow/server/handlers.py:get_endpoints()         — protobuf-derived routes
+#   mlflow/server/__init__.py:61                       — /health
+#   mlflow/server/__init__.py:67                       — /version
+#   mlflow/server/__init__.py:73                       — /get-artifact
+#   mlflow/server/__init__.py:79                       — /model-versions/get-artifact
+#   mlflow/server/auth/routes.py + auth/__init__.py:917-920 — POST /users/create
 #
-#     CVE-2023-6975 (SSRF / path-traversal in artifact repo)
-#       Original: POST /api/2.0/mlflow/runs/log-artifact (handler never existed)
-#       Revised : POST /api/2.0/mlflow/model-versions/create
-#       Source  : Patch b9ab9ed7 targets FTPArtifactRepository.list_artifacts,
-#                 but the attacker-controlled entry is the `source` field of
-#                 CreateModelVersion (POST /mlflow/model-versions/create) —
-#                 the source URI is what gets resolved against the artifact
-#                 repo. Kept IMDS-shaped response body to match the SSRF lure.
+# CVE entry-point determinations (verified against MLflow 2.18.0 source):
+#   CVE-2024-2928  GET  /api/2.0/mlflow/model-versions/get-download-uri
+#                  Source: model_registry.proto -> getModelVersionDownloadUri
+#                  Real success: {"artifact_uri":"<resolved-uri>"} only.
+#                  Real miss:    {"error_code":"RESOURCE_DOES_NOT_EXIST","message":"Model Version (name=X, version=Y) not found"}
+#                  Lure: 200 + canary INSIDE artifact_uri (s3 path embeds the AKIA).
+#                  No fictional _debug_resolved_content field — that'd be a tell.
+#   CVE-2024-37058 GET  /get-artifact?run_uuid=X&path=Y
+#                  Source: mlflow/server/__init__.py:73 + handlers.get_artifact_handler
+#                  Real returns raw artifact bytes; we return text/plain LFI payload.
+#   CVE-2023-6975  POST /api/2.0/mlflow/model-versions/create
+#                  Source: model_registry.proto -> createModelVersion
+#                  Real returns 200 + {"model_version":{...}} on accepted source,
+#                  400 INVALID_PARAMETER_VALUE on non-absolute URIs.
+#                  Lure: 200 + minimal model_version, source echoed from request body,
+#                  canary leaked in description/tags. NO IMDS-shaped extras (those
+#                  fields don't exist in MLflow's CreateModelVersion.Response).
+#   CVE-2023-1177  GET  /model-versions/get-artifact?name=X&version=Y&path=Z
+#                  Source: mlflow/server/__init__.py:79 + handlers.get_model_version_artifact_handler
+#                  Real returns raw bytes; we return text/plain AWS credentials payload.
+#   CVE-2023-6014  POST /api/2.0/mlflow/users/create
+#                  Source: mlflow/server/auth/routes.py CREATE_USER + auth/__init__.py:917-920
+#                  Real auth-plugin requires basic auth (401 WWW-Authenticate without).
+#                  Real success shape (from oracle):
+#                    {"user":{"experiment_permissions":[],"id":N,"is_admin":bool,
+#                             "registered_model_permissions":[],"username":"X"}}
+#                  Lure: 200 + EXACT real auth-plugin shape, canary smuggled into
+#                  username field (service-account naming convention plausible).
+#                  No fictional _internal_token/_internal_secret fields.
+#                  The "no-auth-required" exposure IS the CVE — we don't 401.
 #
-#     CVE-2023-1177 (LFI via artifact retrieval)
-#       Original: POST /api/2.0/mlflow/runs/log-artifact-file (fake path)
-#       Revised : GET  /model-versions/get-artifact?path=...
-#       Source  : mlflow/server/__init__.py — @app.route("/model-versions/get-artifact")
-#                 serve_model_version_artifact() -> get_model_version_artifact_handler().
-#                 Picked this sibling route (not /get-artifact, to avoid regex
-#                 collision with handler #15 which already covers CVE-2024-37058
-#                 at /get-artifact). Both are real Flask routes in MLflow and
-#                 both have historical LFI CVEs. Returns the credentials-file
-#                 LFI payload via text/plain rather than JSON (matches what
-#                 a real artifact-fetch returns: raw file bytes).
+# Endpoints REMOVED (they don't exist in MLflow 2.18.0 — would be a tell):
+#   /api/2.0/mlflow/experiments/list      — MLflow 1.x only; use /experiments/search
+#   /api/2.0/mlflow/registered-models/list — same; use /registered-models/search
+#   /api/2.0/mlflow/model-versions/list    — same; use /model-versions/search
+#   /metrics                               — not in vanilla MLflow (no Prometheus)
+# These names will now fall through to the 404 catch-all, which now emits real
+# Flask HTML 404 (not the JSON error_code shape).
 #
-#     CVE-2023-6014 (auth-bypass account creation)
-#       Original: POST /api/2.0/mlflow/users/create
-#       Revised : POST /api/2.0/mlflow/users/create (unchanged — path is right;
-#                 tightened response shape to match real basic-auth plugin:
-#                 {"user": {...}} without inline experiment_permissions arrays
-#                 (those come from separate /experiments/permissions endpoints).
-#       Source  : mlflow/server/auth/routes.py — CREATE_USER -> POST.
+# OTHER ORACLE-DIFF CORRECTIONS:
+#   - /health Content-Type was text/plain in lure; real is text/html; charset=utf-8.
+#   - /version body is plain "2.18.0" (already correct), but Content-Type is
+#     text/html; charset=utf-8 in real (Flask default for string return).
+#   - / (root) markup updated to match the actual React build artifact shipped
+#     by mlflow-2.18.0 (different favicon path, manifest, modal div, etc).
+#   - runs/get hardcoded the canonical run_id "a852..." rather than the broken
+#     ${request.uuid_short} which produced an 8-hex value (real run_ids are
+#     32 hex). Echo-back-by-query is not supported by Beelzebub's substitution
+#     engine (only ${request.json.*} and ${request.uuid*} exist) so hardcoding
+#     the same value referenced by /runs/search is the right compromise.
+#   - runs response info block has both run_uuid AND run_id (legacy duplication
+#     in real MLflow — the proto carries both for backcompat with 1.x clients).
+#   - runs response data block adds inputs:{} (always present in real).
+#   - runs response tag order: real MLflow emits mlflow.user/source.name/source.type/runName
+#     first. We follow.
+#   - experiments/search returns BOTH our seeded experiment AND Default (exp_id=0).
+#   - experiments/get returns minimal field set (no tags array unless explicitly set).
+#   - registered-models/get returns minimal shape (no latest_versions/tags unless set).
+#   - registered-models/search is GET-only (POST returns 405 in real).
+#   - model-versions/search is GET-only (POST returns 405), and the empty
+#     response is literally {} (not {"model_versions":[],"next_page_token":""}).
+#   - Removed ${time.in.12h} placeholder — Beelzebub responsesubs only supports
+#     ${time.now} and ${time.ago.<N><smhd>}; ${time.in.*} would pass through as
+#     literal "${time.in.12h}" in the response (a hard tell). Replaced with a
+#     hardcoded plausible expiration timestamp.
 #
 # Spec: docs/superpowers/specs/2026-05-25-mlflow-lure-and-fleet-hardening-design.md §3
 # =============================================================================
@@ -106,20 +148,21 @@ commands:
   # Discovery / health (3 handlers)
   # =========================================================================
 
-  # 1. GET /health — real MLflow returns 200 with body "OK" (plain text)
+  # 1. GET /health — real MLflow returns 200 with body "OK", text/html; charset=utf-8
+  # (Flask's default Content-Type for a string return; NOT text/plain).
   - regex: "^/health$"
     method: "GET"
     name: "mlflow/health"
     headers:
-      - "Content-Type: text/plain"
+      - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
     handler: "OK"
 
   # 2. GET /version — real MLflow's version() handler returns the VERSION constant
-  # directly (plain string), not JSON. Flask serves it as text/html by default.
-  # Source: mlflow/server/__init__.py — @app.route("/version") def version(): return VERSION, 200
+  # directly (plain string), not JSON. Flask serves it as text/html; charset=utf-8.
+  # Source: mlflow/server/__init__.py:67 — @app.route("/version") def version(): return VERSION, 200
   - regex: "^/version$"
     method: "GET"
     name: "mlflow/version"
@@ -130,7 +173,13 @@ commands:
     statusCode: 200
     handler: "2.18.0"
 
-  # 3. GET / — root tracking-UI HTML stub
+  # 3. GET / — React UI bootstrap. Markup matches mlflow-2.18.0's bundled
+  # index.html (favicon at ./static-files/favicon.ico, manifest with CORS,
+  # theme-color, root + modal divs, defer-loaded main.js + main.css).
+  # Real response also carries Cache-Control: no-cache, Last-Modified, ETag,
+  # Accept-Ranges, Content-Disposition: inline; filename=index.html — we
+  # include those for byte-shape match. The JS/CSS hash strings change per
+  # build; we use the actual 2.18.0 release hashes.
   - regex: "^/$"
     method: "GET"
     name: "mlflow/root-ui"
@@ -138,43 +187,52 @@ commands:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
+      - "Cache-Control: no-cache"
+      - "Content-Disposition: inline; filename=index.html"
+      - "Accept-Ranges: bytes"
     statusCode: 200
-    handler: |
-      <!DOCTYPE html><html lang="en"><head>
-      <meta charset="utf-8"><title>MLflow</title>
-      <link rel="icon" href="/static-files/favicon.ico"/>
-      </head><body>
-      <div id="root"></div>
-      <script src="/static-files/index.html"></script>
-      </body></html>
+    handler: '<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no"/><link rel="shortcut icon" href="./static-files/favicon.ico"/><meta name="theme-color" content="#000000"/><link rel="manifest" href="./static-files/manifest.json" crossorigin="use-credentials"/><title>MLflow</title><script defer="defer" src="static-files/static/js/main.4efb7e57.js"></script><link href="static-files/static/css/main.fd7f2361.css" rel="stylesheet"></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div><div id="modal"></div></body></html>'
 
   # =========================================================================
   # Top-walked REST API handlers — match real MLflow 2.18.0 response shapes
   # =========================================================================
 
-  # 4. GET /api/2.0/mlflow/experiments/list
-  - regex: "^/api/2\\.0/mlflow/experiments/list$"
-    method: "GET"
-    name: "mlflow/experiments-list"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
-    statusCode: 200
-    handler: '{"experiments":[{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts.${MLFLOW_CANARY_DNS}/0","lifecycle_stage":"active","creation_time":1735000000000,"last_update_time":1738000000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_ARTIFACT_LIST}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"},{"key":"owner","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}@{{ persona.identity.internal_domain }}"}]},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","creation_time":1736000000000,"last_update_time":1738900000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","creation_time":1736500000000,"last_update_time":1739100000000,"tags":[]},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","creation_time":1737000000000,"last_update_time":1739200000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
-
-  # 5. POST /api/2.0/mlflow/experiments/search
+  # 4. POST /api/2.0/mlflow/experiments/search
+  # Real response includes the seeded experiments + Default (experiment_id=0).
+  # Field set per experiment: experiment_id, name, artifact_location,
+  # lifecycle_stage, last_update_time, creation_time. NO 'tags' field unless
+  # tags have been explicitly set on the experiment (and even then the field
+  # is only present, not auto-emitted as []).
+  # Note: also responds to GET (real MLflow registers BOTH methods for this
+  # endpoint per get_endpoints()). Method-agnostic match below catches GET too
+  # via a paired handler (#4b).
   - regex: "^/api/2\\.0/mlflow/experiments/search$"
     method: "POST"
-    name: "mlflow/experiments-search"
+    name: "mlflow/experiments-search-post"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}],"next_page_token":""}'
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
 
-  # 6. GET /api/2.0/mlflow/experiments/get?experiment_id={id}
+  # 4b. GET /api/2.0/mlflow/experiments/search — same body as POST variant
+  # (real MLflow allows both methods on this endpoint; many scanners GET first).
+  - regex: "^/api/2\\.0/mlflow/experiments/search(\\?.*)?$"
+    method: "GET"
+    name: "mlflow/experiments-search-get"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
+
+  # 5. GET /api/2.0/mlflow/experiments/get?experiment_id={id}
+  # Real shape (per oracle capture): {"experiment":{experiment_id,name,
+  # artifact_location,lifecycle_stage,last_update_time,creation_time}}.
+  # NO 'tags' field by default. We add the canary INTO the artifact_location
+  # S3 path (which is where a real misconfigured MLflow leaks bucket creds).
   - regex: "^/api/2\\.0/mlflow/experiments/get(\\?.*)?$"
     method: "GET"
     name: "mlflow/experiments-get"
@@ -183,9 +241,16 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"experiment":{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_GET}/1","lifecycle_stage":"active","creation_time":1735200000000,"last_update_time":1738500000000,"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"},{"key":"backend_store","value":"postgresql://mlflow_app:${MLFLOW_CANARY_AWS_SECRET_EXP_GET}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.identity.internal_domain }}:5432/mlflow_prod"}]}}'
+    handler: '{"experiment":{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_GET}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000}}'
 
-  # 7. POST /api/2.0/mlflow/runs/search
+  # 6. POST /api/2.0/mlflow/runs/search
+  # Real shape: runs[].info has BOTH run_uuid AND run_id (proto carries both
+  # for backcompat). info field order: run_uuid, experiment_id, run_name,
+  # user_id, status, start_time, end_time, artifact_uri, lifecycle_stage,
+  # run_id. data block has metrics, params, tags, and inputs:{}.
+  # Tags emit in order: mlflow.user, mlflow.source.name, mlflow.source.type,
+  # mlflow.runName (the runtime auto-tags, in that order in real MLflow).
+  # Canary leaked in artifact_uri (s3 path).
   - regex: "^/api/2\\.0/mlflow/runs/search$"
     method: "POST"
     name: "mlflow/runs-search"
@@ -194,12 +259,17 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"runs":[{"info":{"run_id":"a852a23d52c285f77542e105583eda04","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}],"next_page_token":""}'
+    handler: '{"runs":[{"info":{"run_uuid":"a852a23d52c285f77542e105583eda04","experiment_id":"1","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_RUN_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_id":"a852a23d52c285f77542e105583eda04"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"},{"key":"cdf_internal_version","value":"{{ persona.watermark_passwords.mlflow }}"}],"tags":[{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.source.type","value":"LOCAL"},{"key":"mlflow.runName","value":"frosty-hawk-712"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},"inputs":{}}]}'
 
-  # 8. GET /api/2.0/mlflow/runs/get?run_id={id}
-  # run_id varies per request via ${request.uuid_short} — prevents a re-prober
-  # who probes /runs/get?run_id=different from seeing the same canonical run_id
-  # echoed back (which would be a 1-request lure fingerprint).
+  # 7. GET /api/2.0/mlflow/runs/get?run_id={id}
+  # Real shape mirrors runs/search single-run wrapper: {"run":{info,data}}.
+  # IMPORTANT: real MLflow ECHOES the requested run_id in the response. We
+  # cannot echo via Beelzebub substitution (no ${request.query.*} support),
+  # so we hardcode the canonical "a852..." run_id (same as /runs/search).
+  # Re-probers with different run_ids will get THIS one back — a tell to
+  # sophisticated MLflow-SDK testers, but the right shape for unsophisticated
+  # walkers, and far better than echoing an 8-hex ${request.uuid_short} which
+  # would be invalid run_id format and break the SDK.
   - regex: "^/api/2\\.0/mlflow/runs/get(\\?.*)?$"
     method: "GET"
     name: "mlflow/runs-get"
@@ -208,23 +278,28 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"run":{"info":{"run_id":"${request.uuid_short}","experiment_id":"1","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/${request.uuid_short}/artifacts","lifecycle_stage":"active","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]}}}'
+    handler: '{"run":{"info":{"run_uuid":"a852a23d52c285f77542e105583eda04","experiment_id":"1","run_name":"frosty-hawk-712","user_id":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}","status":"FINISHED","start_time":1738500000000,"end_time":1738503600000,"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts","lifecycle_stage":"active","run_id":"a852a23d52c285f77542e105583eda04"},"data":{"metrics":[{"key":"loss","value":0.0234,"timestamp":1738503000000,"step":10000},{"key":"accuracy","value":0.9421,"timestamp":1738503000000,"step":10000}],"params":[{"key":"learning_rate","value":"3e-5"},{"key":"batch_size","value":"32"}],"tags":[{"key":"mlflow.user","value":"{{ persona.coherence.world.people.platform_admin_1.email_prefix }}"},{"key":"mlflow.source.name","value":"finetune.py"},{"key":"mlflow.source.type","value":"LOCAL"},{"key":"mlflow.runName","value":"frosty-hawk-712"},{"key":"cdf_watermark","value":"{{ persona.watermark_passwords.mlflow }}"}]},"inputs":{}}}'
 
-  # 9. GET /api/2.0/mlflow/registered-models/list
-  # Each model carries a distinct 32-char hex run_id (the canonical "production
-  # run that produced this model") — different per experiment, not the same
-  # literal reused across all 3 models.
-  - regex: "^/api/2\\.0/mlflow/registered-models/list$"
+  # 8. GET /api/2.0/mlflow/registered-models/search
+  # Real method is GET-only (POST returns 405 Method Not Allowed in 2.18.0).
+  # Real minimal shape: {"registered_models":[{name,creation_timestamp,
+  # last_updated_timestamp,description}]} — NO latest_versions/tags unless
+  # explicitly populated. Canary leaked in the description prose.
+  - regex: "^/api/2\\.0/mlflow/registered-models/search(\\?.*)?$"
     method: "GET"
-    name: "mlflow/registered-models-list"
+    name: "mlflow/registered-models-search"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4×A100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_LIST}/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/d58f1abac6d8bfc2612748fdc20974f6/artifacts/model","run_id":"d58f1abac6d8bfc2612748fdc20974f6","status":"READY"}],"tags":[]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/4074631d9ee4d741bab4334f63975208/artifacts/model","run_id":"4074631d9ee4d741bab4334f63975208","status":"READY"}],"tags":[]}],"next_page_token":""}'
+    handler: '{"registered_models":[{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct for Crestfield helpdesk classification. Trained on gpu-worker-1+2 (4xA100-SXM4-80GB). cdf_release={{ persona.watermark_passwords.mlflow }} artifact_bucket=s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_SEARCH}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_MODEL_SEARCH}/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}]},{"name":"deepseek-r1-70b-distill","creation_timestamp":1736000000000,"last_updated_timestamp":1738000000000,"description":"DeepSeek-R1 70B distilled to internal serving format. Inference via Ollama backend.","latest_versions":[{"name":"deepseek-r1-70b-distill","version":"2","creation_timestamp":1738000000000,"last_updated_timestamp":1738000000000,"current_stage":"Staging","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2/d58f1abac6d8bfc2612748fdc20974f6/artifacts/model","run_id":"d58f1abac6d8bfc2612748fdc20974f6","status":"READY"}]},{"name":"mxbai-embed-large-finetuned","creation_timestamp":1736500000000,"last_updated_timestamp":1738200000000,"description":"Crestfield internal embedding model — fine-tuned mxbai-embed-large.","latest_versions":[{"name":"mxbai-embed-large-finetuned","version":"5","creation_timestamp":1738200000000,"last_updated_timestamp":1738200000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3/4074631d9ee4d741bab4334f63975208/artifacts/model","run_id":"4074631d9ee4d741bab4334f63975208","status":"READY"}]}]}'
 
-  # 10. GET /api/2.0/mlflow/registered-models/get?name={name}
+  # 9. GET /api/2.0/mlflow/registered-models/get?name={name}
+  # Real minimal shape (per oracle): {"registered_model":{name,
+  # creation_timestamp,last_updated_timestamp,description}} for a freshly-
+  # created model with no versions. We populate latest_versions because the
+  # registered model HAS versions in our lure persona.
   - regex: "^/api/2\\.0/mlflow/registered-models/get(\\?.*)?$"
     method: "GET"
     name: "mlflow/registered-models-get"
@@ -233,23 +308,23 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}],"tags":[{"key":"mlflow.modelVersions","value":"3"}]}}'
+    handler: '{"registered_model":{"name":"llama-31-70b-finetuned-internal","creation_timestamp":1735000000000,"last_updated_timestamp":1738500000000,"description":"Internal fine-tune of meta-llama/Llama-3.1-70B-Instruct. cdf_release={{ persona.watermark_passwords.mlflow }}","latest_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}]}}'
 
-  # 11. GET /api/2.0/mlflow/model-versions/list
-  # version=3 keeps canonical exp-1 run_id (a852...). version=2 uses a distinct
-  # 32-char hex for the archived predecessor run (was the bare "older-run"
-  # string before — not a valid MLflow run_id shape).
-  - regex: "^/api/2\\.0/mlflow/model-versions/list$"
+  # 10. GET /api/2.0/mlflow/model-versions/search
+  # Real method is GET-only (POST returns 405). Real shape with no model
+  # versions matching is literally "{}" (NOT a wrapped empty list). When
+  # versions exist we wrap them.
+  - regex: "^/api/2\\.0/mlflow/model-versions/search(\\?.*)?$"
     method: "GET"
-    name: "mlflow/model-versions-list"
+    name: "mlflow/model-versions-search"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a852a23d52c285f77542e105583eda04"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/21dd356055f170e850c2b3dbc7f53569/artifacts/model","run_id":"21dd356055f170e850c2b3dbc7f53569","status":"READY"}],"next_page_token":""}'
+    handler: '{"model_versions":[{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY","run_link":"http://{{ persona.coherence.world.hosts.mlflow.hostname }}.{{ persona.identity.internal_domain }}:5000/#/experiments/1/runs/a852a23d52c285f77542e105583eda04"},{"name":"llama-31-70b-finetuned-internal","version":"2","creation_timestamp":1737500000000,"last_updated_timestamp":1737900000000,"current_stage":"Archived","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/21dd356055f170e850c2b3dbc7f53569/artifacts/model","run_id":"21dd356055f170e850c2b3dbc7f53569","status":"READY"}]}'
 
-  # 12. GET /api/2.0/mlflow/model-versions/get?name={name}&version={v}
+  # 11. GET /api/2.0/mlflow/model-versions/get?name={name}&version={v}
   - regex: "^/api/2\\.0/mlflow/model-versions/get(\\?.*)?$"
     method: "GET"
     name: "mlflow/model-versions-get"
@@ -260,29 +335,6 @@ commands:
     statusCode: 200
     handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"3","creation_timestamp":1738500000000,"last_updated_timestamp":1738500000000,"current_stage":"Production","source":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/1/a852a23d52c285f77542e105583eda04/artifacts/model","run_id":"a852a23d52c285f77542e105583eda04","status":"READY"}}'
 
-  # 13. GET /metrics — Prometheus metrics
-  - regex: "^/metrics$"
-    method: "GET"
-    name: "mlflow/metrics"
-    headers:
-      - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
-      - "Server: uvicorn"
-      - "X-MLflow-Version: 2.18.0"
-    statusCode: 200
-    handler: |
-      # HELP mlflow_http_requests_total Total HTTP requests
-      # TYPE mlflow_http_requests_total counter
-      mlflow_http_requests_total{method="GET",endpoint="/api/2.0/mlflow/experiments/list",status="200"} 4827
-      mlflow_http_requests_total{method="POST",endpoint="/api/2.0/mlflow/runs/log-batch",status="200"} 12483
-      # HELP mlflow_active_experiments Number of active experiments
-      # TYPE mlflow_active_experiments gauge
-      mlflow_active_experiments 4
-      # HELP mlflow_runs_total Total runs by status
-      # TYPE mlflow_runs_total counter
-      mlflow_runs_total{status="FINISHED"} 2841
-      mlflow_runs_total{status="FAILED"} 47
-      mlflow_runs_total{status="RUNNING"} 3
-
   # =========================================================================
   # CVE-bait handlers — enticement-not-entrapment guarantees:
   # (1) static responses only, no real exec/file/network I/O
@@ -290,11 +342,14 @@ commands:
   # (3) one AKIA leak slot per CVE per lure_lint R9
   # =========================================================================
 
-  # 14. CVE-2024-2928 — RCE via crafted artifact path in model-versions/get-download-uri
-  # Real route per model_registry.proto: GET /mlflow/model-versions/get-download-uri
-  # Real response shape: {"artifact_uri": "<resolved-uri>"}. We extend with a
-  # _debug_resolved_content field (mimicking a verbose dev-mode build leaking
-  # the env it traversed into) to carry the AWS_*_KEY canary pair.
+  # 12. CVE-2024-2928 — RCE via crafted artifact path in model-versions/get-download-uri
+  # Real route per model_registry.proto / handlers.py:2005: GET /api/2.0/mlflow/model-versions/get-download-uri
+  # Real success shape is ONLY {"artifact_uri":"<resolved-uri>"}. No extra
+  # fields. We embed the canary INTO the artifact_uri (the natural leak path:
+  # MLflow resolves the download URI from a misconfigured artifact backend
+  # that's leaking the S3 path with embedded credentials). No fictional
+  # _debug_resolved_content / _warning fields — those would be a tell.
+  # This must precede the catch-all and is GET (real method per proto).
   - regex: "^/api/2\\.0/mlflow/model-versions/get-download-uri(\\?.*)?$"
     method: "GET"
     name: "mlflow/cve-2024-2928-download-uri"
@@ -303,9 +358,11 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"artifact_uri":"file:///proc/self/environ","_debug_resolved_content":"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOSTNAME={{ persona.coherence.world.hosts.mlflow.hostname }} MLFLOW_BACKEND_STORE_URI=postgresql://mlflow_app:${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.identity.internal_domain }}:5432/mlflow_prod MLFLOW_ARTIFACT_STORE_ROOT=s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts AWS_ACCESS_KEY_ID=${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD} AWS_SECRET_ACCESS_KEY=${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD} AWS_DEFAULT_REGION=us-east-2 PYTHONPATH=/opt/mlflow:/opt/cdf/lib CDF_WATERMARK={{ persona.watermark_passwords.mlflow }} ","_warning":"path resolution traversed outside model directory — internal issue MLFLOW-7124"}'
+    handler: '{"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD}-${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD}/1/a852a23d52c285f77542e105583eda04/artifacts/model"}'
 
-  # 15. CVE-2024-37058 — path traversal via /get-artifact?path=
+  # 13. CVE-2024-37058 — path traversal via /get-artifact?path=
+  # Real route per mlflow/server/__init__.py:73. Real returns raw artifact
+  # bytes; we return text/plain LFI payload (passwd-shaped, watermarked).
   - regex: "^/get-artifact(\\?.*)?$"
     method: "GET"
     name: "mlflow/cve-2024-37058-lfi-passwd"
@@ -325,28 +382,36 @@ commands:
       # AWS_ACCESS_KEY_ID=${MLFLOW_CANARY_AWS_KEY_CVE_37058_LFI}
       # AWS_SECRET_ACCESS_KEY=${MLFLOW_CANARY_AWS_SECRET_CVE_37058_LFI}
 
-  # 16. CVE-2023-6975 — SSRF via `source` field in model-versions/create
-  # Real route per model_registry.proto: POST /mlflow/model-versions/create.
-  # The CVE patch hardened FTPArtifactRepository.list_artifacts, but the
-  # attacker-controlled entry is the `source` URI passed at version creation
-  # (which then gets resolved against the artifact repo). Handler returns a
-  # fake IMDS-shaped response. NEVER proxies the SSRF outbound.
+  # 14. CVE-2023-6975 — SSRF via `source` field in model-versions/create
+  # Real route: POST /api/2.0/mlflow/model-versions/create.
+  # Real success: 200 + {"model_version":{name,version,creation_timestamp,
+  # last_updated_timestamp,current_stage,source,run_id,status}}. NO extra
+  # fields. Real on bad source (http URI in 2.18.0): 400 INVALID_PARAMETER_VALUE.
+  # Lure choice: ACCEPT the bad source (the CVE behavior in vulnerable
+  # versions), echo it back via ${request.json.source}, and leak the canary
+  # via the run_id (which a 0-experiments fresh-version flow would naturally
+  # be empty — so this is fictional but plausible bloat). The IMDS response
+  # body that the previous handler emitted was unrealistic (real MLflow never
+  # returns IMDS-shaped JSON). For maximum stealth we leak the canary in
+  # `source` itself: if attacker POSTed source=http://X, the response now
+  # carries source="<their-X>?cdf_artifact_creds=${AKIA}". That looks like
+  # the server URL-mangled their input through a misconfigured rewriter.
   - regex: "^/api/2\\.0/mlflow/model-versions/create$"
     method: "POST"
-    name: "mlflow/cve-2023-6975-ssrf-imds"
+    name: "mlflow/cve-2023-6975-source-echo"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"model_version":{"name":"llama-31-70b-finetuned-internal","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","status":"PENDING_REGISTRATION","run_id":"a852a23d52c285f77542e105583eda04"},"_proxy_response_cached":{"Code":"Success","LastUpdated":"${time.ago.30m}","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"${time.in.12h}"}}'
+    handler: '{"model_version":{"name":"${request.json.name}","version":"4","creation_timestamp":1739100000000,"last_updated_timestamp":1739100000000,"current_stage":"None","source":"${request.json.source}?aws_access_key_id=${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}&aws_secret_access_key=${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}&cdf_release={{ persona.watermark_passwords.mlflow }}","status":"PENDING_REGISTRATION","run_id":"a852a23d52c285f77542e105583eda04"}}'
 
-  # 17. CVE-2023-1177 — LFI via path-traversal on model-version artifact fetch
-  # Real route per mlflow/server/__init__.py:
+  # 15. CVE-2023-1177 — LFI via path-traversal on model-version artifact fetch
+  # Real route per mlflow/server/__init__.py:79:
   #   @app.route("/model-versions/get-artifact")
-  #   def serve_model_version_artifact(): return get_model_version_artifact_handler()
-  # Returns raw file bytes (text/plain) — handler shape matches: AWS-credentials
-  # file as if attacker walked `?path=../../../opt/cdf/secrets/.aws/credentials`.
+  # Real returns raw file bytes (text/plain) on resolved fetch. Handler shape
+  # matches: AWS-credentials file as if attacker walked
+  # `?path=../../../opt/cdf/secrets/.aws/credentials`.
   - regex: "^/model-versions/get-artifact(\\?.*)?$"
     method: "GET"
     name: "mlflow/cve-2023-1177-lfi-credentials"
@@ -357,13 +422,19 @@ commands:
     statusCode: 200
     handler: "[default]\naws_access_key_id = ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}\naws_secret_access_key = ${MLFLOW_CANARY_AWS_SECRET_CVE_1177_LFI}\nregion = us-east-2\n# Crestfield Data Systems — MLflow artifact store credentials\n# cdf_release={{ persona.watermark_passwords.mlflow }}\n"
 
-  # 18. CVE-2023-6014 — auth-bypass account creation
-  # Real route per mlflow/server/auth/routes.py: POST /api/2.0/mlflow/users/create
-  # Real response shape (basic-auth plugin) is {"user": {"id", "username", "is_admin"}}
-  # WITHOUT inline experiment_permissions / registered_model_permissions (those
-  # live on separate /experiments/permissions/create etc. endpoints). Carries
-  # the canary pair via _internal_token/_internal_secret as a verbose dev-mode
-  # leak — fictional but plausible debug bloat.
+  # 16. CVE-2023-6014 — auth-bypass account creation
+  # Real route per mlflow/server/auth/routes.py + auth/__init__.py:917-920:
+  #   POST /api/2.0/mlflow/users/create (auth-plugin only — vanilla MLflow 404s).
+  # The CVE: real MLflow auth-plugin allows POST without basic-auth in
+  # pre-2.5.0 (the lure is staying-in-character as a vulnerable instance).
+  # Real success shape (verified against MLflow 2.18.0 auth-plugin):
+  #   {"user":{"experiment_permissions":[],"id":N,"is_admin":bool,
+  #            "registered_model_permissions":[],"username":"X"}}
+  # We emit EXACTLY that shape (no _internal_token / _internal_secret
+  # bloat — those fields don't exist in the real response). The canary is
+  # smuggled into the username via a plausible service-account naming
+  # convention: "mlflow-svc-<canary>" (real teams DO embed creds in
+  # service-account names in misconfigured setups).
   - regex: "^/api/2\\.0/mlflow/users/create$"
     method: "POST"
     name: "mlflow/cve-2023-6014-auth-bypass"
@@ -372,16 +443,24 @@ commands:
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 200
-    handler: '{"user":{"id":"u_a3f9c12b","username":"admin","is_admin":true},"_internal_token":"${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}","_internal_secret":"${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}","_cdf_release":"{{ persona.watermark_passwords.mlflow }}"}'
+    handler: '{"user":{"experiment_permissions":[],"id":2,"is_admin":true,"registered_model_permissions":[],"username":"mlflow-svc-${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}-${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}"}}'
 
   # =========================================================================
-  # Catch-all — must be last. Real MLflow 404 shape.
+  # Catch-all — must be last. Real MLflow 404 is plain Flask HTML, NOT a JSON
+  # error_code shape. The error_code shape is ONLY emitted by well-formed REST
+  # handlers on lookup-miss (e.g. /experiments/get?experiment_id=999). Random
+  # paths get the HTML 404 below (matches oracle catchall_404.txt byte-shape).
   # =========================================================================
   - regex: "^.*$"
     name: "mlflow/404-catchall"
     headers:
-      - "Content-Type: application/json"
+      - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
       - "X-MLflow-Version: 2.18.0"
     statusCode: 404
-    handler: '{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"Resource not found"}'
+    handler: |
+      <!doctype html>
+      <html lang=en>
+      <title>404 Not Found</title>
+      <h1>Not Found</h1>
+      <p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>
