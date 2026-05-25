@@ -26,8 +26,14 @@
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}     — CVE-2023-6975 SSRF→IMDS
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}      — CVE-2023-1177 file://
 #     ${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}   — CVE-2023-6014 auth-bypass
-#   (Each KEY has a matching ${MLFLOW_CANARY_AWS_SECRET_<SUFFIX>}.)
-#   DNS: ${MLFLOW_CANARY_DNS} (fires on resolution)
+#   (Each CVE KEY has a matching ${MLFLOW_CANARY_AWS_SECRET_<SUFFIX>}.
+#    REST handlers — EXP_SEARCH, EXP_GET, RUN_SEARCH, MODEL_SEARCH — leak
+#    only the KEY via natural S3-URI / source-field channels. Intentional
+#    asymmetry: the REST contexts don't have a place to plausibly emit a
+#    paired secret without breaking real MLflow's response shape.)
+#   DNS: ${MLFLOW_CANARY_DNS} (fires on resolution; wired into the
+#        experiment_id=2 artifact_location host suffix below — attempts to
+#        actually fetch listed artifacts trigger DNS lookup → canary fire)
 #
 # ============================================================================
 # ORACLE-DIFF REVISIONS 2026-05-25 — against real MLflow 2.18.0
@@ -56,7 +62,7 @@
 #                  Source: mlflow/server/__init__.py:73 + handlers.get_artifact_handler
 #                  Real returns raw artifact bytes; we return text/plain LFI payload.
 #   CVE-2023-6975  POST /api/2.0/mlflow/model-versions/create
-#                  Source: model_registry.proto -> createModelVersion
+#                  Source: model_registry.proto:105 -> createModelVersion (v2.18.0)
 #                  Real returns 200 + {"model_version":{...}} on accepted source,
 #                  400 INVALID_PARAMETER_VALUE on non-absolute URIs.
 #                  Lure: 200 + minimal model_version, source echoed from request body,
@@ -203,6 +209,13 @@ commands:
   # Note: also responds to GET (real MLflow registers BOTH methods for this
   # endpoint per get_endpoints()). Method-agnostic match below catches GET too
   # via a paired handler (#4b).
+  # DUPLICATE BODY — KEEP IN SYNC WITH GET variant (#4b) below.
+  # If the canonical experiment list shifts (names, ids, canary slots, timestamps),
+  # update BOTH this POST handler AND the #4b GET handler in lockstep. The
+  # ~900-byte response body is intentionally byte-identical across methods because
+  # real MLflow registers both methods on this route and clients fingerprint
+  # cross-method drift. YAML-anchor refactor (&exp_search_body / *exp_search_body)
+  # deferred pending Beelzebub-loader anchor-support confirmation.
   - regex: "^/api/2\\.0/mlflow/experiments/search$"
     method: "POST"
     name: "mlflow/experiments-search-post"
@@ -210,10 +223,13 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts.${MLFLOW_CANARY_DNS}/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
 
   # 4b. GET /api/2.0/mlflow/experiments/search — same body as POST variant
   # (real MLflow allows both methods on this endpoint; many scanners GET first).
+  # DUPLICATE BODY — KEEP IN SYNC WITH POST variant (#4 above).
+  # See the sync note above the POST handler for the rationale; any edit to
+  # the experiments list MUST land in both handler bodies in the same commit.
   - regex: "^/api/2\\.0/mlflow/experiments/search(\\?.*)?$"
     method: "GET"
     name: "mlflow/experiments-search-get"
@@ -221,7 +237,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
+    handler: '{"experiments":[{"experiment_id":"1","name":"{{ persona.coherence.world.product.mlflow_experiment_names[0] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_EXP_SEARCH}/1","lifecycle_stage":"active","last_update_time":1738500000000,"creation_time":1735200000000},{"experiment_id":"2","name":"{{ persona.coherence.world.product.mlflow_experiment_names[1] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts.${MLFLOW_CANARY_DNS}/2","lifecycle_stage":"active","last_update_time":1738900000000,"creation_time":1736000000000},{"experiment_id":"3","name":"{{ persona.coherence.world.product.mlflow_experiment_names[2] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/3","lifecycle_stage":"active","last_update_time":1739100000000,"creation_time":1736500000000},{"experiment_id":"4","name":"{{ persona.coherence.world.product.mlflow_experiment_names[3] }}","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/4","lifecycle_stage":"active","last_update_time":1739200000000,"creation_time":1737000000000},{"experiment_id":"0","name":"Default","artifact_location":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts/0","lifecycle_stage":"active","last_update_time":1735000000000,"creation_time":1735000000000}]}'
 
   # 5. GET /api/2.0/mlflow/experiments/get?experiment_id={id}
   # Real shape (per oracle capture): {"experiment":{experiment_id,name,
