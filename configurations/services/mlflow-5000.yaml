@@ -213,3 +213,71 @@ commands:
       mlflow_runs_total{status="FINISHED"} 2841
       mlflow_runs_total{status="FAILED"} 47
       mlflow_runs_total{status="RUNNING"} 3
+
+  # =========================================================================
+  # CVE-bait handlers — enticement-not-entrapment guarantees:
+  # (1) static responses only, no real exec/file/network I/O
+  # (2) bytes are fictional + watermarked + canary-bearing
+  # (3) one AKIA leak slot per CVE per lure_lint R9
+  # =========================================================================
+
+  # 14. CVE-2024-2928 — RCE via crafted artifact path in registered-models/get-download-uri
+  - regex: "^/api/2\\.0/mlflow/registered-models/get-download-uri$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"artifact_uri":"file:///proc/self/environ","_debug_resolved_content":"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOSTNAME={{ persona.coherence.world.hosts.mlflow.hostname }} MLFLOW_BACKEND_STORE_URI=postgresql://mlflow_app:${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD}@{{ persona.coherence.world.hosts.db_primary.hostname }}.{{ persona.identity.internal_domain }}:5432/mlflow_prod MLFLOW_ARTIFACT_STORE_ROOT=s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts AWS_ACCESS_KEY_ID=${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD} AWS_SECRET_ACCESS_KEY=${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD} AWS_DEFAULT_REGION=us-east-2 PYTHONPATH=/opt/mlflow:/opt/cdf/lib CDF_WATERMARK={{ persona.watermark_passwords.mlflow }} ","_warning":"path resolution traversed outside model directory — internal issue MLFLOW-7124"}'
+
+  # 15. CVE-2024-37058 — path traversal via /get-artifact?path=
+  - regex: "^/get-artifact(\\?.*)?$"
+    method: "GET"
+    headers:
+      - "Content-Type: text/plain"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: |
+      # /etc/passwd (resolved via artifact path — this is bug MLFLOW-7124)
+      root:x:0:0:root:/root:/usr/sbin/nologin
+      daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+      bin:x:2:2:bin:/bin:/usr/sbin/nologin
+      mlflow:x:1001:1001:MLflow Service,,,:/var/lib/mlflow:/bin/bash
+      app:x:1002:1002:Application,,,:/opt/cdf/app:/bin/bash
+      # CDF_WATERMARK={{ persona.watermark_passwords.mlflow }}
+      # AWS_ACCESS_KEY_ID=${MLFLOW_CANARY_AWS_KEY_CVE_37058_LFI}
+      # AWS_SECRET_ACCESS_KEY=${MLFLOW_CANARY_AWS_SECRET_CVE_37058_LFI}
+
+  # 16. CVE-2023-6975 — SSRF via artifact_uri pointing at IMDS
+  # Handler returns a fake IMDS-shaped response. NEVER proxies the SSRF outbound.
+  - regex: "^/api/2\\.0/mlflow/runs/log-artifact$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"status":"logged","artifact_uri":"http://169.254.169.254/latest/meta-data/iam/security-credentials/mlflow-artifact-role","_proxy_response_cached":{"Code":"Success","LastUpdated":"2026-05-25T18:00:00Z","Type":"AWS-HMAC","AccessKeyId":"${MLFLOW_CANARY_AWS_KEY_CVE_6975_IMDS}","SecretAccessKey":"${MLFLOW_CANARY_AWS_SECRET_CVE_6975_IMDS}","Token":"FwoGZXIvYXdzEMD//////////wEaDFakeTokenForCDFCanary{{ persona.watermark_passwords.mlflow }}","Expiration":"2026-05-26T06:00:00Z"}}'
+
+  # 17. CVE-2023-1177 — LFI via file:// in artifact_uri
+  # Distinct sub-path /log-artifact-file avoids regex collision with #16 (CVE-2023-6975).
+  - regex: "^/api/2\\.0/mlflow/runs/log-artifact-file$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"status":"logged","artifact_uri":"file:///opt/cdf/secrets/.aws/credentials","_file_contents":"[default]\naws_access_key_id = ${MLFLOW_CANARY_AWS_KEY_CVE_1177_LFI}\naws_secret_access_key = ${MLFLOW_CANARY_AWS_SECRET_CVE_1177_LFI}\nregion = us-east-2\n# Crestfield Data Systems — MLflow artifact store credentials\n# cdf_release={{ persona.watermark_passwords.mlflow }}\n"}'
+
+  # 18. CVE-2023-6014 — auth-bypass via path-segment manipulation
+  - regex: "^/api/2\\.0/mlflow/users/create$"
+    method: "POST"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-MLflow-Version: 2.18.0"
+    statusCode: 200
+    handler: '{"user":{"id":"u_a3f9c12b","username":"admin","is_admin":true,"experiment_permissions":[{"experiment_id":"*","permission":"MANAGE"}],"registered_model_permissions":[{"name":"*","permission":"MANAGE"}],"_internal_token":"${MLFLOW_CANARY_AWS_KEY_CVE_6014_BYPASS}","_internal_secret":"${MLFLOW_CANARY_AWS_SECRET_CVE_6014_BYPASS}","_cdf_release":"{{ persona.watermark_passwords.mlflow }}"}}'
