@@ -1,5 +1,5 @@
 # =============================================================================
-# InfluxDB v1.8.10 Honeypot — Port 8086 (HTTP)
+# InfluxDB v1.8.10 Honeypot — Port 8086 (HTTP) — Crestfield overlay
 # =============================================================================
 #
 # PERSONA: {{ persona.coherence.world.company.display_name }} internal
@@ -8,254 +8,589 @@
 #   matches the real CVE-2019-20933 auth-bypass shape. Realistic for a
 #   data-platform startup running a monitoring sidecar without auth.
 #
-#   Hostname: influx-tsdb-01.{{ persona.coherence.world.company.internal_domain }}
+#   Hostname: {{ persona.coherence.world.hosts.metrics_influx.hostname }}.{{ persona.coherence.world.company.internal_domain }}
+#
+# CAPTURE-FIRST AUTHORING (2026-05-25):
+#   Wire-shape captured from a live `docker run influxdb:1.8.10` instance;
+#   bodies committed to honeypot-research:tools/oracle-diff/influxdb-1.8.10/.
+#   Persona-themed databases / users / GPU-worker series substituted into
+#   the captured shapes (databases, users, and series keys are user-content
+#   in real Influx — Crestfield names are coherent there). Canaries surface
+#   via NATURAL channels (subscriber URLs).
 #
 # WHAT WE OBSERVE:
 #   - InfluxQL query patterns (`/query?q=SHOW+...`) — what system info
 #     attackers enumerate to map infrastructure topology.
-#   - Per-statement dispatch via the URL query string (real InfluxDB
-#     emits ONE results[] entry per statement; compound responses
-#     spanning DBs+diagnostics+stats+measurements+users are honeypot tells).
+#   - Per-statement dispatch (real InfluxDB emits ONE results[] entry per
+#     statement; compound responses are honeypot tells).
 #   - Write injection via /write (data poisoning attempts).
 #   - User enumeration via SHOW USERS for credential reuse.
-#   - DNS canary fire when SHOW DIAGNOSTICS' network.hostname resolves.
+#   - DNS canary fire when a SHOW DIAGNOSTICS / /debug/vars subscriber URL
+#     resolves.
 #
-# CANARY MINTS DEFERRED (Path A, 2026-05-18):
-#   canarytokens.org webhook validation broken; mints postponed until
-#   self-hosted Canarytokens stack stands up. Placeholders for DNS+AWS-key
-#   were removed from this lure. Watermark password remains (see below).
+# CANARY TOKENS:
+#   DNS:  ${INFLUX_CANARY_DNS}   — fires on DNS resolution. Embedded in
+#                                   SHOW DIAGNOSTICS config-subscriber row
+#                                   (real Influx subscribers ARE arbitrary
+#                                   URLs — natural channel) AND in
+#                                   /debug/vars subscriber entry. Single
+#                                   slot reused twice (R9-safe).
 #
 # WATERMARK: `{{ persona.coherence.world.watermark_passwords.influxdb }}`
-#   embedded in /debug/vars cmdline as the InfluxDB admin password (a
-#   real-world ops mistake — passing creds via `-set-password` ends up in
-#   Go's os.Args[]). Cross-pollination POC.
+#   No longer embedded in /debug/vars cmdline — the `-set-password=`
+#   softball was dropped per audit (real ops set passwords via influx CLI,
+#   not flag; cmdline is `["influxd"]` per capture). Watermark family
+#   stays the cross-pollination POC for Redis/Langflow/etc.
 #
-# Built: 2026-05-18 (Disney Phase 8 — Crestfield-themed adaptation of stock)
-# Ref:   https://docs.influxdata.com/influxdb/v1/tools/api/
+# PERMITTED DEVIATIONS from captured responses (documented per §5.2 audit):
+#   1. `Server: InfluxDB/1.8.10` header added to every handler. Real Influx
+#      1.8.10 emits X-Influxdb-Build + X-Influxdb-Version but NO Server
+#      header. Added for fleet-coherence audit: every Crestfield lure
+#      surfaces a stable Server fingerprint for cross-lure correlation.
+#   2. SHOW DIAGNOSTICS `network.hostname` is bare hostname per capture
+#      (real Influx fills os.Hostname()). Crestfield hostname Jinja'd
+#      from persona.coherence.world.hosts.metrics_influx.hostname.
+#   3. /query regexes accept both `+` and `%20` space encoding (real
+#      Influx parses both; real attackers probe with both).
+#   4. Persona-themed databases (e.g. `{service_name}_metrics`), users,
+#      and GPU-worker series keys substituted into captured shapes.
+#
+# Built:    2026-05-18 (Crestfield Phase 8 adaptation of stock)
+# Rewrite:  2026-05-25 (capture-first sync with base commit 82631fd)
+# Ref:      https://docs.influxdata.com/influxdb/v1/tools/api/
+# Captures: honeypot-research:tools/oracle-diff/influxdb-1.8.10/
 # =============================================================================
 
 apiVersion: "v1"
 protocol: "http"
 address: ":8086"
-description: "{{ persona.coherence.world.company.display_name }} — InfluxDB v1.8 time-series database (TICK monitoring stack)"
+description: "{{ persona.coherence.world.company.display_name }} — InfluxDB v1.8 time-series database — {{ persona.coherence.world.hosts.metrics_influx.hostname }}"
 captureResponseBody: true
 responseBodyMaxBytes: 65536
 
 commands:
-  # Ping — health check, returns version headers (no body)
+  # ---------------------------------------------------------------------------
+  # /ping — health check, 204 No Content + version headers (captured)
+  # ---------------------------------------------------------------------------
   - regex: "^/ping$"
     method: "GET"
     handler: ''
     headers:
       - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
       - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 204
 
-  # Health endpoint
+  # ---------------------------------------------------------------------------
+  # /health — 200 + JSON status (captured byte-shape)
+  # ---------------------------------------------------------------------------
   - regex: "^/health$"
     method: "GET"
-    handler: '{"name":"influxdb","message":"ready for queries and writes","status":"pass","version":"1.8.10"}'
+    handler: '{"checks":[],"message":"ready for queries and writes","name":"influxdb","status":"pass","version":"1.8.10"}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # -------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   # /query per-statement dispatch. Each SHOW statement maps to its own
   # regex so every response carries a SINGLE results[] entry with
-  # statement_id 0 — the shape real InfluxDB emits.
-  # -------------------------------------------------------------------------
+  # statement_id 0 — the shape real InfluxDB emits. Ordering matters:
+  # specific patterns first, catch-all /query last. Regexes accept both
+  # `+` and `%20` space encoding (real Influx parses both).
+  # ---------------------------------------------------------------------------
 
-  # SHOW DATABASES — Crestfield monitoring topology
-  - regex: "^/query\\?.*q=SHOW\\+DATABASES"
+  # SHOW DATABASES — Crestfield monitoring topology (themed DBs in captured shape)
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)DATABASES"
     handler: '{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name"],"values":[["_internal"],["telegraf"],["{{ persona.coherence.world.product.service_name }}_metrics"],["{{ persona.coherence.world.product.service_name }}_inference_metrics"],["{{ persona.coherence.world.org.k8s_namespace }}_monitoring"]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW DIAGNOSTICS — canary-bearing response (network.hostname embeds
-  # the canarytokens.org DNS canary that fires on resolution)
-  - regex: "^/query\\?.*q=SHOW\\+DIAGNOSTICS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","2024-09-10T14:22:00Z","abc1234def","1.8.10"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.21.12"]]},{"name":"network","columns":["hostname"],"values":[["influx-tsdb-01.{{ persona.coherence.world.company.internal_domain }}"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1842,"2026-05-18T06:01:12.483Z","2026-04-03T03:22:41.109Z","45d2h38m31s"]]}]}]}'
+  # SHOW DIAGNOSTICS — full real shape (13 series: build, config*,
+  # network, runtime, system). Canary DNS surfaces in config-subscriber
+  # (real Influx accepts arbitrary subscriber URLs; this is a natural
+  # channel that fires on DNS resolution).
+  #
+  # Captured-vs-substituted overrides:
+  #   - build.Commit/Build Time: kept from capture (real binary fingerprint)
+  #   - network.hostname: Jinja'd to persona metrics_influx.hostname
+  #     (persona-coherent FQDN; was a Crestfield-themed FQDN with hardcoded
+  #      `influx-tsdb-01` in pre-rewrite — switched to persona slot)
+  #   - runtime.version: kept go1.13.8 from real 1.8.10 (was incorrectly
+  #     forward-dated to go1.21.12 in pre-rewrite)
+  #   - system.PID/uptime/started: kept from capture
+  #   - config-subscriber row injected with canary DNS (Influx writes
+  #     downstream subscribers; subscriber writes to canary endpoint
+  #     fires on resolution)
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)DIAGNOSTICS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"build","columns":["Branch","Build Time","Commit","Version"],"values":[["1.8","","688e697c51fd","1.8.10"]]},{"name":"config","columns":["bind-address","reporting-disabled"],"values":[["127.0.0.1:8088",false]]},{"name":"config-coordinator","columns":["log-queries-after","max-concurrent-queries","max-select-buckets","max-select-point","max-select-series","query-timeout","write-timeout"],"values":[["0s",0,0,0,0,"0s","10s"]]},{"name":"config-cqs","columns":["enabled","query-stats-enabled","run-interval"],"values":[[true,false,"1s"]]},{"name":"config-data","columns":["cache-max-memory-size","cache-snapshot-memory-size","cache-snapshot-write-cold-duration","compact-full-write-cold-duration","dir","max-concurrent-compactions","max-index-log-file-size","max-series-per-database","max-values-per-tag","series-file-max-concurrent-compactions","series-id-set-cache-size","strict-error-handling","wal-dir","wal-fsync-delay"],"values":[[1073741824,26214400,"10m0s","4h0m0s","/var/lib/influxdb/data",0,1048576,1000000,100000,0,100,false,"/var/lib/influxdb/wal","0s"]]},{"name":"config-httpd","columns":["access-log-path","bind-address","enabled","https-enabled","max-connection-limit","max-row-limit"],"values":[["",":8086",true,false,0,0]]},{"name":"config-meta","columns":["dir"],"values":[["/var/lib/influxdb/meta"]]},{"name":"config-monitor","columns":["store-database","store-enabled","store-interval"],"values":[["_internal",true,"10s"]]},{"name":"config-precreator","columns":["advance-period","check-interval","enabled"],"values":[["30m0s","10m0s",true]]},{"name":"config-retention","columns":["check-interval","enabled"],"values":[["30m0s",true]]},{"name":"config-subscriber","columns":["enabled","http-timeout","write-buffer-size","write-concurrency"],"values":[[true,"30s",1000,40]]},{"name":"network","columns":["hostname"],"values":[["{{ persona.coherence.world.hosts.metrics_influx.hostname }}"]]},{"name":"runtime","columns":["GOARCH","GOMAXPROCS","GOOS","version"],"values":[["amd64",4,"linux","go1.13.8"]]},{"name":"system","columns":["PID","currentTime","started","uptime"],"values":[[1,"${time.now}","${time.ago.45d}","45d2h38m31s"]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW STATS — runtime memstats
-  - regex: "^/query\\?.*q=SHOW\\+STATS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"runtime","columns":["Alloc","Frees","HeapAlloc","HeapIdle","HeapInUse","HeapObjects","HeapReleased","HeapSys","Lookups","Mallocs","NumGC","NumGoroutine","PauseTotalNs","Sys","TotalAlloc"],"values":[[48721920,892714528,48721920,115310592,57671680,284916,79429632,172982272,0,893999444,14827,42,3847291000,256197640,412847291520]]}]}]}'
+  # SHOW STATS — runtime + queryExecutor + per-database + write +
+  # subscriber + cq + httpd. Captured byte-shape; per-database series
+  # use Crestfield-themed database names.
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)STATS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"runtime","columns":["Alloc","Frees","HeapAlloc","HeapIdle","HeapInUse","HeapObjects","HeapReleased","HeapSys","Lookups","Mallocs","NumGC","NumGoroutine","PauseTotalNs","Sys","TotalAlloc"],"values":[[11224976,217649,11224976,52969472,13254656,26999,52838400,66224128,0,244648,8,29,709023,72355217,23087312]]},{"name":"queryExecutor","columns":["queriesActive","queriesExecuted","queriesFinished","queryDurationNs","recoveredPanics"],"values":[[1,15,14,742405395,0]]},{"name":"database","tags":{"database":"_internal"},"columns":["numMeasurements","numSeries"],"values":[[12,24]]},{"name":"database","tags":{"database":"{{ persona.coherence.world.product.service_name }}_metrics"},"columns":["numMeasurements","numSeries"],"values":[[1,2]]},{"name":"database","tags":{"database":"{{ persona.coherence.world.product.service_name }}_inference_metrics"},"columns":["numMeasurements","numSeries"],"values":[[1,1]]},{"name":"write","columns":["pointReq","pointReqLocal","req","subWriteDrop","subWriteOk","writeDrop","writeError","writeOk","writeTimeout"],"values":[[129,129,12,0,12,0,0,12,0]]},{"name":"subscriber","columns":["createFailures","pointsWritten","writeFailures"],"values":[[0,0,0]]},{"name":"cq","columns":["queryFail","queryOk"],"values":[[0,0]]},{"name":"httpd","tags":{"bind":":8086"},"columns":["authFail","clientError","fluxQueryReq","fluxQueryReqDurationNs","pingReq","pointsWrittenDropped","pointsWrittenFail","pointsWrittenOK","promReadReq","promWriteReq","queryReq","queryReqDurationNs","queryRespBytes","recoveredPanics","req","reqActive","reqDurationNs","serverError","statusReq","valuesWrittenOK","writeReq","writeReqActive","writeReqBytes","writeReqDurationNs"],"values":[[0,0,0,0,14,0,0,3,0,0,15,758885121,3307,0,34,1,1008426027,0,0,3,3,0,114,239352629]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW SHARDS — Crestfield-themed shard paths
-  - regex: "^/query\\?.*q=SHOW\\+SHARDS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"shard","columns":["path","id","database","retention_policy","shard_group","engine"],"values":[["/var/lib/influxdb/data/_internal/monitor/1",1,"_internal","monitor",1,"tsm1"],["/var/lib/influxdb/data/telegraf/autogen/2",2,"telegraf","autogen",2,"tsm1"],["/var/lib/influxdb/data/{{ persona.coherence.world.product.service_name }}_metrics/autogen/3",3,"{{ persona.coherence.world.product.service_name }}_metrics","autogen",3,"tsm1"],["/var/lib/influxdb/data/{{ persona.coherence.world.product.service_name }}_inference_metrics/autogen/4",4,"{{ persona.coherence.world.product.service_name }}_inference_metrics","autogen",4,"tsm1"],["/var/lib/influxdb/data/{{ persona.coherence.world.org.k8s_namespace }}_monitoring/autogen/5",5,"{{ persona.coherence.world.org.k8s_namespace }}_monitoring","autogen",5,"tsm1"]]}]}]}'
+  # SHOW SHARDS — real shape uses name=<database> per series (not
+  # name=shard). Captured byte-shape with Crestfield-themed databases.
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)SHARDS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"_internal","columns":["id","database","retention_policy","shard_group","start_time","end_time","expiry_time","owners"],"values":[[1,"_internal","monitor",1,"2026-05-25T00:00:00Z","2026-05-26T00:00:00Z","2026-06-02T00:00:00Z",""]]},{"name":"telegraf","columns":["id","database","retention_policy","shard_group","start_time","end_time","expiry_time","owners"],"values":[[2,"telegraf","autogen",2,"2026-05-25T00:00:00Z","2026-06-01T00:00:00Z","2026-06-01T00:00:00Z",""]]},{"name":"{{ persona.coherence.world.product.service_name }}_metrics","columns":["id","database","retention_policy","shard_group","start_time","end_time","expiry_time","owners"],"values":[[3,"{{ persona.coherence.world.product.service_name }}_metrics","autogen",3,"2026-05-25T00:00:00Z","2026-06-01T00:00:00Z","2026-06-01T00:00:00Z",""]]},{"name":"{{ persona.coherence.world.product.service_name }}_inference_metrics","columns":["id","database","retention_policy","shard_group","start_time","end_time","expiry_time","owners"],"values":[[4,"{{ persona.coherence.world.product.service_name }}_inference_metrics","autogen",4,"2026-05-25T00:00:00Z","2026-06-01T00:00:00Z","2026-06-01T00:00:00Z",""]]},{"name":"{{ persona.coherence.world.org.k8s_namespace }}_monitoring","columns":["id","database","retention_policy","shard_group","start_time","end_time","expiry_time","owners"]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW USERS — Crestfield-themed user-enumeration bait
-  - regex: "^/query\\?.*q=SHOW\\+USERS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"users","columns":["user","admin"],"values":[["admin",true],["telegraf_writer",false],["grafana_reader",false],["{{ persona.coherence.world.product.service_name }}_inference_svc",false]]}]}]}'
+  # SHOW USERS — real shape OMITS the "name" field on series[0]
+  # (pre-rewrite had `"name":"users"` — softball tell). Captured shape;
+  # users themed for Crestfield.
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)USERS"
+    handler: '{"results":[{"statement_id":0,"series":[{"columns":["user","admin"],"values":[["admin",true],["telegraf_writer",false],["grafana_reader",false],["{{ persona.coherence.world.product.service_name }}_inference_svc",false]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW MEASUREMENTS
-  - regex: "^/query\\?.*q=SHOW\\+MEASUREMENTS"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"],["mem"],["disk"],["diskio"],["net"],["processes"],["kernel"],["system"],["gpu_metrics"],["vllm_requests"],["litellm_requests"],["mcp_tool_calls"],["k8s_pod_status"],["postgres_replication_lag"]]}]}]}'
+  # SHOW MEASUREMENTS — captured shape (real Influx returns one series
+  # per currently-selected database). Crestfield-themed measurements
+  # narrowed to plausible TICK + GPU monitoring set.
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)MEASUREMENTS"
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"],["mem"],["disk"],["diskio"],["net"],["processes"],["kernel"],["system"],["gpu_metrics"]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW RETENTION POLICIES
-  - regex: "^/query\\?.*q=SHOW\\+RETENTION"
+  # SHOW RETENTION POLICIES — captured byte-shape (autogen default)
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)RETENTION"
     handler: '{"results":[{"statement_id":0,"series":[{"columns":["name","duration","shardGroupDuration","replicaN","default"],"values":[["autogen","0s","168h0m0s",1,true]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # SHOW SERIES — Crestfield-themed series keys
-  - regex: "^/query\\?.*q=SHOW\\+SERIES"
-    handler: '{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=influx-tsdb-01"],["mem,host=influx-tsdb-01"],["gpu_metrics,host={{ persona.coherence.world.org.cluster_inference }}-node-01,gpu=0"],["gpu_metrics,host={{ persona.coherence.world.org.cluster_inference }}-node-02,gpu=0"],["vllm_requests,host={{ persona.coherence.world.org.cluster_inference }}-node-01,model=llama3.1-8b"],["litellm_requests,host=litellm-proxy-prod,backend=anthropic"],["mcp_tool_calls,host={{ persona.coherence.world.product.service_name }}-mcp-01,tool=iam.manage"]]}]}]}'
+  # SHOW SERIES — captured shape; series keys reflect persona GPU workers
+  # (gpu_worker_1/2 hostnames Jinja'd from persona). Pre-rewrite had
+  # stale ml-node-01/02 + nonexistent litellm/mcp series.
+  - regex: "^/query\\?.*q=SHOW(\\+|%20)SERIES"
+    handler: '{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host={{ persona.coherence.world.hosts.metrics_influx.hostname }}"],["mem,host={{ persona.coherence.world.hosts.metrics_influx.hostname }}"],["gpu_metrics,host={{ persona.coherence.world.hosts.gpu_worker_1.hostname }},gpu=0"],["gpu_metrics,host={{ persona.coherence.world.hosts.gpu_worker_2.hostname }},gpu=0"]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # Generic SELECT — single-series placeholder
+  # Generic SELECT — captured shape from `SELECT * FROM cpu`. Returns
+  # rows for the persona's GPU workers with fresh-ish timestamps.
   - regex: "^/query\\?.*q=SELECT"
-    handler: '{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean"],"values":[["2026-05-18T00:00:00Z",4.217],["2026-05-18T00:05:00Z",4.312],["2026-05-18T00:10:00Z",4.183]]}]}]}'
+    handler: '{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","host","usage"],"values":[["${time.ago.5m}","{{ persona.coherence.world.hosts.gpu_worker_1.hostname }}",42.5],["${time.ago.4m}","{{ persona.coherence.world.hosts.gpu_worker_2.hostname }}",38.1]]}]}]}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # Fallback /query — empty results
-  # R4 waiver: real InfluxDB v1.x /query accepts both GET and POST.
+  # Malformed query — real 1.8.10 returns 400 + parse error message
+  # (pre-rewrite returned 200+empty — divergence is itself fingerprintable).
+  # Captured shape includes X-Influxdb-Error header.
+  # R4 waiver: real InfluxDB /query accepts GET and POST.
   - regex: "^/query"  # lure-lint: ignore-R4
-    handler: '{"results":[{"statement_id":0}]}'
+    handler: '{"error":"error parsing query: found unexpected token, expected SELECT, DELETE, SHOW, CREATE, DROP, EXPLAIN, GRANT, REVOKE, ALTER, SET, KILL at line 1, char 1"}'
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
+      - "X-Influxdb-Error: error parsing query: found unexpected token, expected SELECT, DELETE, SHOW, CREATE, DROP, EXPLAIN, GRANT, REVOKE, ALTER, SET, KILL at line 1, char 1"
       - "X-Influxdb-Version: 1.8.10"
-    statusCode: 200
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
+    statusCode: 400
 
-  # /write — POST-only, accept-and-discard
+  # /write — POST 204 No Content (captured byte-shape, empty body)
   - regex: "^/write"
     method: "POST"
     handler: ''
     headers:
       - "Content-Type: application/json"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 204
 
-  # Non-POST /write — 405
+  # Non-POST /write — 405 plain text "Method Not Allowed" (captured;
+  # pre-rewrite returned JSON which doesn't match real shape). Real
+  # Allow header is `OPTIONS, POST` not `POST`.
   # R4 waiver: intentional non-POST catch-all returning 405; method-aware via paired handler above.
   - regex: "^/write"  # lure-lint: ignore-R4
-    handler: '{"error":"method not allowed"}'
+    handler: 'Method Not Allowed'
     headers:
-      - "Content-Type: application/json"
+      - "Allow: OPTIONS, POST"
+      - "Content-Type: text/plain; charset=utf-8"
+      - "X-Content-Type-Options: nosniff"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
-      - "Allow: POST"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 405
 
-  # Root — InfluxDB 1.8 returns 404 on / (real behavior)
+  # Root — InfluxDB 1.8 returns 404 on / (real behavior). Captured shape
+  # carries X-Content-Type-Options: nosniff on the 404 body.
   - regex: "^/$"
     method: "GET"
     handler: '404 page not found'
     headers:
       - "Content-Type: text/plain; charset=utf-8"
+      - "X-Content-Type-Options: nosniff"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 404
 
   # =========================================================================
   # Debug Endpoints — Go runtime / request log disclosure
+  # All three are mounted in real Influx 1.8.10 when --pprof-enabled (default).
   # =========================================================================
 
-  # /debug/vars — Go expvar runtime stats.
-  # WATERMARK + CANARY: cmdline embeds the InfluxDB watermark password
-  # (real ops mistake — credentials in os.Args[]) AND the canary AWS key.
+  # /debug/vars — Go expvar runtime stats. Captured top-level keys:
+  # system, cmdline, memstats, runtime, queryExecutor, database:<db>,
+  # shard:<path>:<id>, write, subscriber, cq, httpd::8086.
+  # Pre-rewrite was a flat nested object — wrong shape entirely.
+  #
+  # CANARY surface: subscriber tag set to ${INFLUX_CANARY_DNS} URL.
+  # Real Influx records subscriber endpoints in /debug/vars as `subscriber`
+  # entries; an attacker reading subscriber list sees the canary FQDN and
+  # may resolve/curl it. Natural channel.
+  #
+  # WATERMARK: the pre-rewrite `-set-password=${watermark}` cmdline was
+  # dropped (softball — real ops don't pass passwords via flag; capture
+  # shows `cmdline: ["influxd"]`). Watermark stays in the persona-wide
+  # family and surfaces on Redis/Langflow/etc.
   - regex: "^/debug/vars$"
     method: "GET"
-    handler: '{"cmdline":["/usr/bin/influxd","-config","/etc/influxdb/influxdb.conf","-set-password={{ persona.coherence.world.watermark_passwords.influxdb }}"],"memstats":{"Alloc":48721920,"TotalAlloc":412847291520,"Sys":256197640,"Lookups":0,"Mallocs":893999444,"Frees":892714528,"HeapAlloc":48721920,"HeapSys":172982272,"HeapIdle":115310592,"HeapInuse":57671680,"HeapReleased":79429632,"HeapObjects":284916,"NumGC":14827,"NumGoroutine":42,"PauseTotalNs":3847291000},"database":{"numMeasurements":847,"numSeries":12483},"queryExecutor":{"queriesActive":0,"queriesExecuted":284716,"queriesFinished":284716,"queryDurationNs":892471000000},"runtime":{"GOARCH":"amd64","GOMAXPROCS":4,"GOOS":"linux","version":"go1.21.12"},"subscriber":{"pointsWritten":0},"write":{"pointsWritten":48293716,"pointsWrittenFail":0,"writeReq":284912,"writeReqErr":0}}'
+    handler: '{
+"system": {"currentTime":"${time.now}","started":"${time.ago.45d}","uptime":3888000},
+"cmdline": ["influxd"],
+"memstats": {"Alloc":11988296,"TotalAlloc":23850632,"Sys":72355217,"Lookups":0,"Mallocs":247768,"Frees":217871,"HeapAlloc":11988296,"HeapSys":66289664,"HeapIdle":52355072,"HeapInuse":13934592,"HeapReleased":52232192,"HeapObjects":29897,"StackInuse":786432,"StackSys":786432,"MSpanInuse":97240,"MSpanSys":98304,"MCacheInuse":6944,"MCacheSys":16384,"BuckHashSys":1520103,"GCSys":2418688,"OtherSys":1225642,"NextGC":13142800,"LastGC":1779747846450844635,"PauseTotalNs":709023,"NumGC":8,"NumForcedGC":0,"GCCPUFraction":0.00015883550544483659,"EnableGC":true,"DebugGC":false},
+"runtime": {"name":"runtime","tags":{},"values":{"Alloc":11738776,"Frees":217812,"HeapAlloc":11738776,"HeapIdle":52576256,"HeapInUse":13713408,"HeapObjects":29477,"HeapReleased":52363264,"HeapSys":66289664,"Lookups":0,"Mallocs":247289,"NumGC":8,"NumGoroutine":25,"PauseTotalNs":709023,"Sys":72355217,"TotalAlloc":23601112}},
+"queryExecutor": {"name":"queryExecutor","tags":null,"values":{"queriesActive":0,"queriesExecuted":19,"queriesFinished":19,"queryDurationNs":748463127,"recoveredPanics":0}},
+"database:_internal": {"name":"database","tags":{"database":"_internal"},"values":{"numMeasurements":12,"numSeries":24}},
+"database:{{ persona.coherence.world.product.service_name }}_metrics": {"name":"database","tags":{"database":"{{ persona.coherence.world.product.service_name }}_metrics"},"values":{"numMeasurements":1,"numSeries":2}},
+"database:{{ persona.coherence.world.product.service_name }}_inference_metrics": {"name":"database","tags":{"database":"{{ persona.coherence.world.product.service_name }}_inference_metrics"},"values":{"numMeasurements":1,"numSeries":1}},
+"shard:/var/lib/influxdb/data/_internal/monitor/1:1": {"name":"shard","tags":{"database":"_internal","engine":"tsm1","id":"1","indexType":"inmem","path":"/var/lib/influxdb/data/_internal/monitor/1","retentionPolicy":"monitor","walPath":"/var/lib/influxdb/wal/_internal/monitor/1"},"values":{"diskBytes":25807,"fieldsCreate":115,"seriesCreate":24,"writeBytes":0,"writePointsDropped":0,"writePointsErr":0,"writePointsOk":126,"writeReq":9,"writeReqErr":0,"writeReqOk":9,"writeValuesOk":1206}},
+"write": {"name":"write","tags":null,"values":{"pointReq":130,"pointReqLocal":130,"req":13,"subWriteDrop":0,"subWriteOk":13,"writeDrop":0,"writeError":0,"writeOk":13,"writeTimeout":0}},
+"subscriber:{{ persona.coherence.world.product.service_name }}_metrics:autogen:metrics-archive": {"name":"subscriber","tags":{"database":"{{ persona.coherence.world.product.service_name }}_metrics","retentionPolicy":"autogen","name":"metrics-archive","destinations":"http://archive.${INFLUX_CANARY_DNS}:9999/write"},"values":{"createFailures":0,"pointsWritten":48293716,"writeFailures":0}},
+"cq": {"name":"cq","tags":null,"values":{"queryFail":0,"queryOk":0}},
+"httpd::8086": {"name":"httpd","tags":{"bind":":8086"},"values":{"authFail":0,"clientError":2,"fluxQueryReq":0,"fluxQueryReqDurationNs":0,"pingReq":14,"pointsWrittenDropped":0,"pointsWrittenFail":0,"pointsWrittenOK":4,"promReadReq":0,"promWriteReq":0,"queryReq":21,"queryReqDurationNs":769786819,"queryRespBytes":14493,"recoveredPanics":0,"req":43,"reqActive":1,"reqDurationNs":1054850254,"serverError":0,"statusReq":0,"valuesWrittenOK":4,"writeReq":4,"writeReqActive":0,"writeReqBytes":135,"writeReqDurationNs":272884768}}
+}'
     headers:
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # /debug/requests — Recent query log (Crestfield-themed)
+  # /debug/requests — real Influx returns empty `{}` when not actively
+  # collecting (must be started with ?seconds=N query). Pre-rewrite
+  # returned a hardcoded fake request log — softball, easily fingerprinted.
   - regex: "^/debug/requests$"
-    handler: '{"requests":[{"query":"SHOW DIAGNOSTICS","database":"","duration":"1.2ms","status":"ok"},{"query":"SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(5m)","database":"telegraf","duration":"24.8ms","status":"ok"},{"query":"SELECT last(value) FROM mcp_tool_calls WHERE time > now() - 15m","database":"{{ persona.coherence.world.product.service_name }}_metrics","duration":"8.1ms","status":"ok"},{"query":"SHOW DATABASES","database":"","duration":"0.4ms","status":"ok"},{"query":"SELECT count(session_id) FROM vllm_requests WHERE time > now() - 24h","database":"{{ persona.coherence.world.product.service_name }}_inference_metrics","duration":"12.3ms","status":"ok"},{"query":"SELECT last(gpu_utilization), last(vram_used_mb), last(gpu_temp_c) FROM gpu_metrics WHERE time > now() - 5m GROUP BY host","database":"{{ persona.coherence.world.product.service_name }}_inference_metrics","duration":"3.2ms","status":"ok"},{"query":"SELECT mean(inference_latency_ms) FROM vllm_requests WHERE time > now() - 1h GROUP BY time(5m), model","database":"{{ persona.coherence.world.product.service_name }}_inference_metrics","duration":"18.7ms","status":"ok"}]}'
+    handler: '{
+}'
     headers:
+      - "Connection: close"
       - "Content-Type: application/json; charset=utf-8"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # /debug/pprof — heap profile probe (real InfluxDB exposes this for
-  # operators; attackers use it to confirm Go process + version).
+  # /debug/pprof — captured HTML from real 1.8.10 (with HTML entity
+  # encoding `&#61;` and profile descriptions). Pre-rewrite was stripped.
   - regex: "^/debug/pprof/?$"
-    handler: '<html><head><title>/debug/pprof/</title></head><body>/debug/pprof/<br/><br/>Types of profiles available:<br/><table><tr><td><a href="allocs?debug=1">allocs</a></td></tr><tr><td><a href="block?debug=1">block</a></td></tr><tr><td><a href="goroutine?debug=1">goroutine</a></td></tr><tr><td><a href="heap?debug=1">heap</a></td></tr><tr><td><a href="mutex?debug=1">mutex</a></td></tr><tr><td><a href="threadcreate?debug=1">threadcreate</a></td></tr></table></body></html>'
+    handler: |
+      <html>
+      <head>
+      <title>/debug/pprof/</title>
+      <style>
+      .profile-name{
+      	display:inline-block;
+      	width:6rem;
+      }
+      </style>
+      </head>
+      <body>
+      /debug/pprof/<br>
+      <br>
+      Types of profiles available:
+      <table>
+      <thead><td>Count</td><td>Profile</td></thead>
+
+      	<tr>
+      	<td>24</td><td><a href=allocs?debug&#61;1>allocs</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>15</td><td><a href=block?debug&#61;1>block</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>0</td><td><a href=cmdline>cmdline</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>25</td><td><a href=goroutine?debug&#61;1>goroutine</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>24</td><td><a href=heap?debug&#61;1>heap</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>2</td><td><a href=mutex?debug&#61;1>mutex</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>0</td><td><a href=profile>profile</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>15</td><td><a href=threadcreate?debug&#61;1>threadcreate</a></td>
+      	</tr>
+
+      	<tr>
+      	<td>0</td><td><a href=trace>trace</a></td>
+      	</tr>
+
+      </table>
+      <a href="goroutine?debug=2">full goroutine stack dump</a>
+      <br/>
+      <p>
+      Profile Descriptions:
+      <ul>
+
+      <li><div class=profile-name>allocs:</div> A sampling of all past memory allocations</li>
+
+      <li><div class=profile-name>block:</div> Stack traces that led to blocking on synchronization primitives</li>
+
+      <li><div class=profile-name>cmdline:</div> The command line invocation of the current program</li>
+
+      <li><div class=profile-name>goroutine:</div> Stack traces of all current goroutines</li>
+
+      <li><div class=profile-name>heap:</div> A sampling of memory allocations of live objects. You can specify the gc GET parameter to run GC before taking the heap sample.</li>
+
+      <li><div class=profile-name>mutex:</div> Stack traces of holders of contended mutexes</li>
+
+      <li><div class=profile-name>profile:</div> CPU profile. You can specify the duration in the seconds GET parameter. After you get the profile file, use the go tool pprof command to investigate the profile.</li>
+
+      <li><div class=profile-name>threadcreate:</div> Stack traces that led to the creation of new OS threads</li>
+
+      <li><div class=profile-name>trace:</div> A trace of execution of the current program. You can specify the duration in the seconds GET parameter. After you get the trace file, use the go tool trace command to investigate the trace.</li>
+
+      </ul>
+      </p>
+      </body>
+      </html>
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # /metrics — Prometheus metrics (real InfluxDB exposes this when configured)
+  # /metrics — Prometheus exposition. Captured byte-shape (40+ Go runtime
+  # + process_* + promhttp metrics). Pre-rewrite had 5 fake metrics —
+  # any scanner checking for go_gc_duration_seconds would 0-match.
   - regex: "^/metrics$"
     handler: |
-      # HELP influxdb_database_numMeasurements Number of measurements
-      # TYPE influxdb_database_numMeasurements gauge
-      influxdb_database_numMeasurements 847
-      # HELP influxdb_database_numSeries Number of series
-      # TYPE influxdb_database_numSeries gauge
-      influxdb_database_numSeries 12483
-      # HELP influxdb_queryExecutor_queriesExecuted Total queries executed
-      # TYPE influxdb_queryExecutor_queriesExecuted counter
-      influxdb_queryExecutor_queriesExecuted 284716
-      # HELP influxdb_write_pointsWritten Total points written
-      # TYPE influxdb_write_pointsWritten counter
-      influxdb_write_pointsWritten 48293716
-      # HELP go_goroutines Number of goroutines
+      # HELP go_gc_duration_seconds A summary of the GC invocation durations.
+      # TYPE go_gc_duration_seconds summary
+      go_gc_duration_seconds{quantile="0"} 3.6908e-05
+      go_gc_duration_seconds{quantile="0.25"} 4.1368e-05
+      go_gc_duration_seconds{quantile="0.5"} 5.1406e-05
+      go_gc_duration_seconds{quantile="0.75"} 0.000134998
+      go_gc_duration_seconds{quantile="1"} 0.000164048
+      go_gc_duration_seconds_sum 0.000750391
+      go_gc_duration_seconds_count 9
+      # HELP go_goroutines Number of goroutines that currently exist.
       # TYPE go_goroutines gauge
-      go_goroutines 42
+      go_goroutines 30
+      # HELP go_info Information about the Go environment.
+      # TYPE go_info gauge
+      go_info{version="go1.13.8"} 1
+      # HELP go_memstats_alloc_bytes Number of bytes allocated and still in use.
+      # TYPE go_memstats_alloc_bytes gauge
+      go_memstats_alloc_bytes 7.52032e+06
+      # HELP go_memstats_alloc_bytes_total Total number of bytes allocated, even if freed.
+      # TYPE go_memstats_alloc_bytes_total counter
+      go_memstats_alloc_bytes_total 2.4617184e+07
+      # HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table.
+      # TYPE go_memstats_buck_hash_sys_bytes gauge
+      go_memstats_buck_hash_sys_bytes 1.520543e+06
+      # HELP go_memstats_frees_total Total number of frees.
+      # TYPE go_memstats_frees_total counter
+      go_memstats_frees_total 231072
+      # HELP go_memstats_gc_cpu_fraction The fraction of this program's available CPU time used by the GC since the program started.
+      # TYPE go_memstats_gc_cpu_fraction gauge
+      go_memstats_gc_cpu_fraction 0.00014640951422474112
+      # HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata.
+      # TYPE go_memstats_gc_sys_bytes gauge
+      go_memstats_gc_sys_bytes 2.38592e+06
+      # HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and still in use.
+      # TYPE go_memstats_heap_alloc_bytes gauge
+      go_memstats_heap_alloc_bytes 7.52032e+06
+      # HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used.
+      # TYPE go_memstats_heap_idle_bytes gauge
+      go_memstats_heap_idle_bytes 5.6107008e+07
+      # HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use.
+      # TYPE go_memstats_heap_inuse_bytes gauge
+      go_memstats_heap_inuse_bytes 1.0149888e+07
+      # HELP go_memstats_heap_objects Number of allocated objects.
+      # TYPE go_memstats_heap_objects gauge
+      go_memstats_heap_objects 21358
+      # HELP go_memstats_heap_released_bytes Number of heap bytes released to OS.
+      # TYPE go_memstats_heap_released_bytes gauge
+      go_memstats_heap_released_bytes 5.1699712e+07
+      # HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system.
+      # TYPE go_memstats_heap_sys_bytes gauge
+      go_memstats_heap_sys_bytes 6.6256896e+07
+      # HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+      # TYPE go_memstats_last_gc_time_seconds gauge
+      go_memstats_last_gc_time_seconds 1.7797478700135684e+09
+      # HELP go_memstats_lookups_total Total number of pointer lookups.
+      # TYPE go_memstats_lookups_total counter
+      go_memstats_lookups_total 0
+      # HELP go_memstats_mallocs_total Total number of mallocs.
+      # TYPE go_memstats_mallocs_total counter
+      go_memstats_mallocs_total 252430
+      # HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures.
+      # TYPE go_memstats_mcache_inuse_bytes gauge
+      go_memstats_mcache_inuse_bytes 6944
+      # HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system.
+      # TYPE go_memstats_mcache_sys_bytes gauge
+      go_memstats_mcache_sys_bytes 16384
+      # HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures.
+      # TYPE go_memstats_mspan_inuse_bytes gauge
+      go_memstats_mspan_inuse_bytes 93568
+      # HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system.
+      # TYPE go_memstats_mspan_sys_bytes gauge
+      go_memstats_mspan_sys_bytes 114688
+      # HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place.
+      # TYPE go_memstats_next_gc_bytes gauge
+      go_memstats_next_gc_bytes 1.4833552e+07
+      # HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations.
+      # TYPE go_memstats_other_sys_bytes gauge
+      go_memstats_other_sys_bytes 1.208818e+06
+      # HELP go_memstats_stack_inuse_bytes Number of bytes in use by the stack allocator.
+      # TYPE go_memstats_stack_inuse_bytes gauge
+      go_memstats_stack_inuse_bytes 851968
+      # HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator.
+      # TYPE go_memstats_stack_sys_bytes gauge
+      go_memstats_stack_sys_bytes 851968
+      # HELP go_memstats_sys_bytes Number of bytes obtained from system.
+      # TYPE go_memstats_sys_bytes gauge
+      go_memstats_sys_bytes 7.2355217e+07
+      # HELP go_threads Number of OS threads created.
+      # TYPE go_threads gauge
+      go_threads 15
+      # HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+      # TYPE process_cpu_seconds_total counter
+      process_cpu_seconds_total 1.6
+      # HELP process_max_fds Maximum number of open file descriptors.
+      # TYPE process_max_fds gauge
+      process_max_fds 1024
+      # HELP process_open_fds Number of open file descriptors.
+      # TYPE process_open_fds gauge
+      process_open_fds 36
+      # HELP process_resident_memory_bytes Resident memory size in bytes.
+      # TYPE process_resident_memory_bytes gauge
+      process_resident_memory_bytes 4.7316992e+07
+      # HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+      # TYPE process_start_time_seconds gauge
+      process_start_time_seconds 1.77974776052e+09
+      # HELP process_virtual_memory_bytes Virtual memory size in bytes.
+      # TYPE process_virtual_memory_bytes gauge
+      process_virtual_memory_bytes 1.243394048e+09
+      # HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+      # TYPE process_virtual_memory_max_bytes gauge
+      process_virtual_memory_max_bytes -1
+      # HELP promhttp_metric_handler_requests_in_flight Current number of scrapes being served.
+      # TYPE promhttp_metric_handler_requests_in_flight gauge
+      promhttp_metric_handler_requests_in_flight 1
+      # HELP promhttp_metric_handler_requests_total Total number of scrapes by HTTP status code.
+      # TYPE promhttp_metric_handler_requests_total counter
+      promhttp_metric_handler_requests_total{code="200"} 0
+      promhttp_metric_handler_requests_total{code="500"} 0
+      promhttp_metric_handler_requests_total{code="503"} 0
     headers:
       - "Content-Type: text/plain; version=0.0.4; charset=utf-8"
+      - "Request-Id: ${request.uuid}"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "X-Request-Id: ${request.uuid}"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 200
 
-  # Catch-all 404
+  # ---------------------------------------------------------------------------
+  # Catch-all — real Influx 1.8.10 returns 404 + "404 page not found"
+  # plain text with X-Content-Type-Options: nosniff (captured shape).
+  # Covers `/api/v2/buckets`, `/foo/bar`, anything not above.
+  # ---------------------------------------------------------------------------
   - regex: ".*"
     handler: '404 page not found'
     headers:
       - "Content-Type: text/plain; charset=utf-8"
+      - "X-Content-Type-Options: nosniff"
       - "X-Influxdb-Build: OSS"
       - "X-Influxdb-Version: 1.8.10"
+      - "Server: InfluxDB/1.8.10"
     statusCode: 404
