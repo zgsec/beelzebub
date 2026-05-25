@@ -59,6 +59,11 @@ coherence:
       build_sha: a8f3e2d1                                # appears in /health
       region: us-east-1
       jwt_signing_key: "cdf-hmac-2026Q2-prod-b7e4f1c3"  # JWT secret in /.env lures
+      mlflow_experiment_names:
+        - llm-finetune-internal
+        - embed-model-train
+        - anomaly-detection-q2-2026
+        - claude-distill-internal
 
     # ── External org references ──
     org:
@@ -137,17 +142,11 @@ coherence:
       db_primary:
         hostname: db-primary
         ip: "10.0.3.50"
-        engine: postgresql
-        version: "15"
+        engine: mysql
+        version: "8.0.39-0ubuntu0.22.04.2"
       db_replica:
         hostname: db-replica-01
         ip: "10.0.3.52"
-      db_billing_legacy:
-        hostname: db-billing-legacy
-        ip: "10.0.3.55"
-        engine: mysql
-        version: "5.7.42"
-        notes: "Legacy billing system — MySQL lure on port 3306"
       redis_sentinel:
         hostname: redis-sentinel
         ip: "10.0.3.60"
@@ -188,10 +187,12 @@ coherence:
         ip: "10.0.2.18"
         gpu: "NVIDIA A100-SXM4-80GB"
         gpu_count: 2
-      docker_registry:
-        hostname: registry
-        ip: "10.0.10.10"
+      mlflow:
+        hostname: "mlflow-tracking-01"
+        ip: "10.0.10.60"
         port: 5000
+        version: "2.18.0"
+        description: "MLflow tracking server — experiment tracking, model registry, artifact store proxy"
       langfuse:
         hostname: langfuse
         ip: "10.0.10.30"
@@ -205,10 +206,12 @@ coherence:
         ip: "10.0.10.41"
         port: 7860                                        # LangFlow default (CVE-2025-3248 bait surface)
         notes: "LangFlow lure on port 7860 (Phase 7 — replaces ScreenConnect)"
-      influxdb:
+      metrics_influx:
         hostname: metrics-influx-01
         ip: "10.0.10.50"
         port: 8086
+        version: "1.8.10"
+        description: "InfluxDB OSS 1.8.10 — internal metrics store (legacy)"
 
     # ── Service-port map (single source for all 'what runs where' lure refs) ──
     # Disney rule: every lure that quotes a port number references this block.
@@ -216,18 +219,21 @@ coherence:
     # Added: langflow (7860) — CVE-2025-3248 KEV bait surface.
     ports:
       ssh:              { num: 2222, host: prod_web,            service: "OpenSSH 8.9p1 Ubuntu" }
-      mysql_legacy:     { num: 3306, host: db_billing_legacy,   service: "MySQL 5.7.42" }
+      mysql:            { num: 3306, host: db_primary,          service: "MySQL 8.0.39-0ubuntu0.22.04.2" }
       redis:            { num: 6379, host: redis_node_1,        service: "Redis 7.2.4" }
       mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.65.2 behind nginx 1.25.4)" }
       vllm:             { num: 8001, host: gpu_worker_1,        service: "vLLM 0.6.3 OpenAI-compat" }
-      influxdb:         { num: 8086, host: influxdb,            service: "InfluxDB 2.7.5" }
+      influxdb:
+        num: 8086
+        host: metrics_influx
+        service: "InfluxDB 1.8.10"
       langflow:         { num: 7860, host: langflow,            service: "LangFlow 1.2.0" }
       open_webui:       { num: 8888, host: prod_web,            service: "Open WebUI v0.5.3" }
       ollama:           { num: 11434, host: flagship_worker,    service: "Ollama 0.5.4" }
 
       vault:            { num: 8200, host: vault,               service: "HashiCorp Vault" }
       ldap:             { num: 636,  host: ldap,                service: "OpenLDAP" }
-      docker_registry:  { num: 5000, host: docker_registry,     service: "Docker Registry v2" }
+      mlflow:           { num: 5000, host: mlflow,              service: "MLflow 2.18.0" }
 
     # ── Teams (LiteLLM /team/list responses) ──
     teams:
@@ -275,6 +281,7 @@ coherence:
       redis:    "cdf_prod_2026Q2-8a4d2c9e"   # redis-6379 CONFIG GET requirepass (Phase 8)
       influxdb: "cdf_prod_2026Q2-3b6f7a91"   # influxdb-8086 (Phase 8) — embedded in /debug/vars cmdline
       ssh:      "cdf_prod_2026Q2-1e6f8b27"   # ssh-2222 /opt/app/.env
+      mlflow:   "cdf_prod_2026Q3-f79aabce"   # mlflow-5000 tracking server
 
     # Regex class that ssh-2222 passwordRegex MUST accept.
     # Built to survive persona swaps: any persona-prefix `[a-z]{3,4}_prod_`
