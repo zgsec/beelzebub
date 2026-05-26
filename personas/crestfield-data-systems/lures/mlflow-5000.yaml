@@ -1,6 +1,19 @@
 # =============================================================================
-# MLflow Tracking Server Honeypot — Port 5000 (Fully Static, No LLM Fallback)
+# MLflow Tracking Server Honeypot — Port 5000 — Crestfield overlay
 # =============================================================================
+#
+# OVERLAY NOTE (2026-05-26): This file is the persona-overlay rendition of
+#   configurations/services/mlflow-5000.yaml. The base config was authored
+#   already persona-aware (uses persona-namespace Jinja refs and the
+#   MLFLOW_CANARY env-substitution slots), so this overlay byte-mirrors
+#   the oracle-aligned base — no divergence.
+#   Future drift should be resolved by editing BOTH files in lockstep
+#   (same convention as openai-8001.yaml POST/GET handler-pair sync notes).
+#
+#   The lure ships from this overlay path — bzb persona render reads
+#   personas/<slug>/lures/<file>.yaml exclusively (see bzb/src/bzb/render/
+#   renderer.py::render_lures). Without this file in personas/crestfield-
+#   data-systems/lures/, MLflow does not reach sensors.
 #
 # PERSONA: Crestfield Data Systems' platform team standardized on uvicorn/ASGI
 #   and wraps MLflow's Flask app via a2wsgi behind uvicorn. Real-world this is

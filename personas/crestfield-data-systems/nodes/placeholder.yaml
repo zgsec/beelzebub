@@ -161,5 +161,6 @@ lures:
   - lures/mysql-3306.yaml       # added 2026-05-18 (Disney rebuild Phase 8 — real Handshake v10 + HSR41 capture)
   - lures/redis-6379.yaml       # added 2026-05-18 (Disney rebuild Phase 8 — RESP2 deep emulation + watermark)
   - lures/influxdb-8086.yaml    # added 2026-05-18 (Disney rebuild Phase 8 — InfluxDB 1.8.10 + watermark + canary)
+  - lures/mlflow-5000.yaml      # added 2026-05-26 (MLflow + fleet hardening — supersedes screenconnect-8042 on :5000)
 canary_slots: []
 env_overrides: {}
