@@ -396,7 +396,7 @@ commands:
   # body that the previous handler emitted was unrealistic (real MLflow never
   # returns IMDS-shaped JSON). For maximum stealth we leak the canary in
   # `source` itself: if attacker POSTed source=http://X, the response now
-  # carries source="<their-X>?cdf_artifact_creds=${AKIA}". That looks like
+  # carries source="<their-X>?cdf_artifact_creds=AKIA<rest>". That looks like
   # the server URL-mangled their input through a misconfigured rewriter.
   - regex: "^/api/2\\.0/mlflow/model-versions/create$"
     method: "POST"
