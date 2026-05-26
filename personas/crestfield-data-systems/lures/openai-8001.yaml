@@ -35,8 +35,10 @@ description: "OpenAI-compatible inference API"
 # handlers embed ${OPENAI_CANARY_AWS_KEY_*} canaries. Token values are
 # scrubbed at ingest by api/canary_extractor.redact_known_tokens and at
 # the public API by api/public._scrub_response_text — see plan §1.5-A.
+captureRequestBody: true
 captureResponseBody: true
-responseBodyMaxBytes: 65536
+requestBodyMaxBytes: 131072
+responseBodyMaxBytes: 131072
 
 # === FAULT INJECTION (WS-11 Phase D Slice 4) ===
 faultInjection:

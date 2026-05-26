@@ -65,7 +65,9 @@ apiVersion: "v1"
 protocol: "http"
 address: ":8086"
 description: "{{ persona.coherence.world.company.display_name }} — InfluxDB v1.8 time-series database — {{ persona.coherence.world.hosts.metrics_influx.hostname }}"
+captureRequestBody: true
 captureResponseBody: true
+requestBodyMaxBytes: 65536
 responseBodyMaxBytes: 65536
 
 commands:

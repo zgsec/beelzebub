@@ -9,7 +9,9 @@ description: "{{ persona.lure_content.platform_display_name | default(persona.di
 # response_body without a config change. Token scrubbing applies via
 # api/canary_extractor.redact_known_tokens at ingest regardless of
 # protocol — see plan §1.5-A.
+captureRequestBody: true
 captureResponseBody: true
+requestBodyMaxBytes: 65536
 responseBodyMaxBytes: 65536
 
 # ========================================================================
