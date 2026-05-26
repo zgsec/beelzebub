@@ -105,6 +105,18 @@
 #   See: [[feedback_capture_first_lure_authoring]] (chain-credential pattern
 #   enabled by capture-first realism).
 #
+# INTENTIONAL DEVIATION — CVE-2026-65958 SSRF bait
+# /api/v1/retrieval/process/web POST returns 200 + IMDS-shaped credential leak,
+# matching Open WebUI 0.9.5's unpatched SSRF behavior. Real OW 0.9.5 with the
+# patch returns 401 (matches our /api/v1/retrieval(/.*)?$ catchall). The
+# intentional 200 response captures attackers exploiting CVE-2026-65958 via
+# crafted url=http://169.254.169.254/... payloads. Driving observation: STACKS
+# INC operator 38.181.81.164 IPv6-mapped IMDS bypass attempt 2026-05-16.
+# Canary surfaces: ${HTTP_CANARY_AWS_KEY} + ${HTTP_CANARY_AWS_SECRET} (paired).
+# Placed BEFORE the /api/v1/(prompts|...|retrieval)(/.*)?$ catch-all 401 so
+# the regex first-match-wins answers this handler. Future "match real Open
+# WebUI" passes must not accidentally delete this — restored from 3fd3ba6^.
+#
 # v8 PHASE 0: capture response body in tracer events for canary attribution.
 # Token values are scrubbed at ingest by api/canary_extractor.redact_known_tokens
 # and at the public API by api/public._scrub_response_text — see plan §1.5-A.
@@ -373,11 +385,51 @@ commands:
     statusCode: 401
 
   # ===========================================================================
+  # 11a. CVE-bait: Open-WebUI retrieval-SSRF — INTENTIONAL DEVIATION
+  #
+  # CVE-2026-65958 — Open-WebUI < 0.5.x has unauth SSRF via
+  # /api/v1/retrieval/process/web. The endpoint accepts a JSON body with
+  # a `url` field and fetches it server-side, returning the fetched
+  # content in the response.
+  #
+  # Driving observation (PG 2026-05-16): STACKS INC operator 38.181.81.164
+  # probed this exact path with body:
+  #   {"url": "http://[::ffff:169.254.169.254]/latest/meta-data/iam/
+  #     security-credentials/", "collection_name": ""}
+  # — IPv6-mapped IMDS bypass attempt. Without this handler, the request
+  # falls through to the /api/v1/...retrieval catchall below and returns
+  # 401 "Not authenticated" — we lose the capture.
+  #
+  # Real Open WebUI 0.9.5 (patched) returns 401 at this path; we
+  # intentionally deviate and return 200 with a fabricated `loaded_data`
+  # array shaped like real Open-WebUI 0.5.3 source, embedding the
+  # registered HTTP_CANARY_AWS_KEY/SECRET. Canary fires on any attempted
+  # use of the leaked credentials.
+  #
+  # MUST appear BEFORE the /api/v1/(...|retrieval)(/.*)?$ catch-all below
+  # for the first-match-wins regex order to surface this handler.
+  # Restored from 3fd3ba6^ on 2026-05-26 after capture-first overlay sync
+  # dropped it. See header INTENTIONAL DEVIATIONS block.
+  # ===========================================================================
+  - regex: "^/api/v1/retrieval/process/web$"
+    method: POST
+    name: "openwebui-cve-2026-65958-retrieval-ssrf"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 200
+    handler: |
+      {"status":true,"collection_name":"web_retrieval_${request.uuid_short}","filename":"AWS IAM Instance Profile Credentials","loaded_data":[{"page_content":"{\n  \"Code\" : \"Success\",\n  \"LastUpdated\" : \"${time.ago.45d}\",\n  \"Type\" : \"AWS-HMAC\",\n  \"AccessKeyId\" : \"${HTTP_CANARY_AWS_KEY}\",\n  \"SecretAccessKey\" : \"${HTTP_CANARY_AWS_SECRET}\",\n  \"Token\" : \"FwoGZXIvYXdzECoaDDM3MzlhYjQ4N2YyMjIwIksRyKzN2dnhYy3HQ9rTrFI3a5fqWFGZ2KhO\",\n  \"Expiration\" : \"2027-01-01T00:00:00Z\"\n}","metadata":{"source":"<request body url>","title":"IAM Instance Profile Credentials","content_type":"text/plain","retrieved_at":"${time.ago.1h}"}}],"docs":1}
+
+  # ===========================================================================
   # 11b. /api/v1/{prompts,tools,knowledge,functions,files,models,retrieval}/*
   # all return 401 unauth in real Open WebUI 0.9.5. Captured at:
   #   api_v1_prompts_list.txt, api_v1_tools_list.txt, api_v1_files.txt,
   #   api_v1_knowledge.txt, api_v1_functions.txt, api_v1_models_list.txt
   #   api_v1_retrieval_proc.txt
+  # NOTE: retrieval/process/web POST is intercepted by handler 11a above
+  # (intentional CVE-2026-65958 bait); all other retrieval paths fall here.
   # ===========================================================================
   - regex: "^/api/v1/(prompts|tools|knowledge|functions|files|models|retrieval)(/.*)?$"
     handler: '{"detail":"Not authenticated"}'
