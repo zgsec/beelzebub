@@ -33,7 +33,25 @@
 #   A -READONLY denial turned attackers away on turn 1 (2026-04-15 kworker
 #   RDB-shell incident).
 #
-# Built: 2026-05-18 (Disney Phase 8 — Crestfield-themed adaptation of stock)
+# CAPTURE-FIRST SYNC (2026-05-25, ported from base b7e7901):
+#   Real-Redis wire shapes captured from live `docker run redis:7.2.4` —
+#   committed at honeypot-research:tools/oracle-diff/redis-7.2.4/ (49 captures).
+#   Synced from base configurations/services/tcp-redis-6379.yaml:
+#     - run_id + master_replid: distinct token_hex(20) each (no reuse)
+#     - bind=0.0.0.0 in INFO listener0 + CONFIG GET (matches public reach)
+#     - INFO sub-sections expanded to oracle's full field set
+#     - INFO Server: +gcc_version; INFO Clients: -total_watched_keys
+#     - # Commandstats + # Latencystats sections added (oracle always emits)
+#     - CLIENT LIST/INFO field order: tot-mem after omem, no watch=0
+#     - COMMAND COUNT 240→241 (oracle-verified)
+#     - CLUSTER {INFO,NODES,MYID,SLOTS,SHARDS} → real "cluster support disabled"
+#     - ACL LIST/WHOAMI/GETUSER + SCRIPT EXISTS/EVALSHA added
+#     - SCRIPT LOAD sha corrected to oracle SHA1("return 1") (was typo …831)
+#   PERMITTED DEVIATIONS retained from overlay: CONFIG SET +OK, SAVE/BGSAVE
+#   silent +OK, DEBUG SLEEP +OK, SCRIPT LOAD static-SHA1 (responsesubs.go has
+#   no ${request.body_sha1} hook — refresh when added).
+#
+# Built: 2026-05-18 (Crestfield-themed). Capture-first sync: 2026-05-25.
 # Ref:   https://redis.io/commands/ for per-command wire-format spec
 # =============================================================================
 
@@ -97,16 +115,17 @@ commands:
       redis_version:7.2.4
       redis_git_sha1:00000000
       redis_git_dirty:0
-      redis_build_id:ea1d5a2bb1e6a06b
+      redis_build_id:ec42ce799db4b4f8
       redis_mode:standalone
       os:Linux 5.15.0-91-generic x86_64
       arch_bits:64
       monotonic_clock:POSIX clock_gettime
       multiplexing_api:epoll
       atomicvar_api:c11-builtin
+      gcc_version:11.4.0
       process_id:1082
       process_supervised:systemd
-      run_id:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      run_id:1779a9155024acd7165ef9c07ed28d439851db12
       tcp_port:6379
       server_time_usec:1745193671283472
       uptime_in_seconds:892847
@@ -117,7 +136,7 @@ commands:
       executable:/usr/bin/redis-server
       config_file:/etc/redis/redis.conf
       io_threads_active:0
-      listener0:name=tcp,bind=127.0.0.1,bind=-::1,port=6379
+      listener0:name=tcp,bind=0.0.0.0,port=6379
       # Clients
       connected_clients:3
       cluster_connections:0
@@ -127,7 +146,6 @@ commands:
       blocked_clients:0
       tracking_clients:0
       clients_in_timeout_table:0
-      total_watched_keys:0
       total_blocking_keys:0
       total_blocking_keys_on_nokey:0
       # Memory
@@ -278,11 +296,29 @@ commands:
       acl_access_denied_cmd:0
       acl_access_denied_key:0
       acl_access_denied_channel:0
+      # Commandstats
+      cmdstat_get:calls=14283,usec=42849,usec_per_call=3.00,rejected_calls=0,failed_calls=0
+      cmdstat_set:calls=2841,usec=22728,usec_per_call=8.00,rejected_calls=0,failed_calls=0
+      cmdstat_ping:calls=847,usec=4235,usec_per_call=5.00,rejected_calls=0,failed_calls=0
+      cmdstat_info:calls=412,usec=61800,usec_per_call=150.00,rejected_calls=0,failed_calls=0
+      cmdstat_hset:calls=189,usec=9072,usec_per_call=48.00,rejected_calls=0,failed_calls=0
+      cmdstat_expire:calls=92,usec=552,usec_per_call=6.00,rejected_calls=0,failed_calls=0
+      cmdstat_del:calls=124,usec=1488,usec_per_call=12.00,rejected_calls=0,failed_calls=0
+      cmdstat_dbsize:calls=37,usec=333,usec_per_call=9.00,rejected_calls=0,failed_calls=0
+      # Latencystats
+      latency_percentiles_usec_get:p50=3.007,p99=8.063,p99.9=24.063
+      latency_percentiles_usec_set:p50=8.031,p99=22.015,p99.9=45.055
+      latency_percentiles_usec_ping:p50=5.023,p99=15.039,p99.9=15.039
+      latency_percentiles_usec_info:p50=148.479,p99=688.127,p99.9=1024.000
+      latency_percentiles_usec_hset:p50=48.127,p99=72.191,p99.9=96.255
+      latency_percentiles_usec_expire:p50=6.015,p99=12.031,p99.9=18.047
+      latency_percentiles_usec_del:p50=12.031,p99=24.063,p99.9=48.127
+      latency_percentiles_usec_dbsize:p50=9.023,p99=9.023,p99.9=9.023
       # Replication
       role:master
       connected_slaves:0
       master_failover_state:no-failover
-      master_replid:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      master_replid:de57aff438631b6e3b74e3e5180bcd67fdb79fa0
       master_replid2:0000000000000000000000000000000000000000
       master_repl_offset:0
       second_repl_offset:-1
@@ -313,23 +349,43 @@ commands:
       redis_version:7.2.4
       redis_git_sha1:00000000
       redis_git_dirty:0
+      redis_build_id:ec42ce799db4b4f8
       redis_mode:standalone
       os:Linux 5.15.0-91-generic x86_64
       arch_bits:64
+      monotonic_clock:POSIX clock_gettime
+      multiplexing_api:epoll
+      atomicvar_api:c11-builtin
+      gcc_version:11.4.0
       process_id:1082
-      run_id:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      process_supervised:systemd
+      run_id:1779a9155024acd7165ef9c07ed28d439851db12
       tcp_port:6379
+      server_time_usec:1745193671283472
       uptime_in_seconds:892847
       uptime_in_days:10
+      hz:10
+      configured_hz:10
+      lru_clock:8921347
+      executable:/usr/bin/redis-server
       config_file:/etc/redis/redis.conf
+      io_threads_active:0
+      listener0:name=tcp,bind=0.0.0.0,port=6379
 
   - regex: "^(?i)INFO\\s+clients$"
     replyFormat: "redis-bulk"
     handler: |
       # Clients
       connected_clients:3
+      cluster_connections:0
       maxclients:10000
+      client_recent_max_input_buffer:20480
+      client_recent_max_output_buffer:0
       blocked_clients:0
+      tracking_clients:0
+      clients_in_timeout_table:0
+      total_blocking_keys:0
+      total_blocking_keys_on_nokey:0
 
   - regex: "^(?i)INFO\\s+memory$"
     replyFormat: "redis-bulk"
@@ -337,10 +393,55 @@ commands:
       # Memory
       used_memory:1048576
       used_memory_human:1.00M
+      used_memory_rss:14630912
+      used_memory_rss_human:13.95M
       used_memory_peak:1228800
+      used_memory_peak_human:1.17M
+      used_memory_peak_perc:85.36%
+      used_memory_overhead:896832
+      used_memory_startup:864896
+      used_memory_dataset:151744
+      used_memory_dataset_perc:82.58%
+      allocator_allocated:1312384
+      allocator_active:1589248
+      allocator_resident:4395008
+      total_system_memory:16644079616
+      total_system_memory_human:15.50G
+      used_memory_lua:31744
+      used_memory_vm_eval:31744
+      used_memory_lua_human:31.00K
+      used_memory_scripts_eval:0
+      number_of_cached_scripts:0
+      number_of_functions:0
+      number_of_libraries:0
+      used_memory_vm_functions:32768
+      used_memory_vm_total:64512
+      used_memory_vm_total_human:63.00K
+      used_memory_functions:184
+      used_memory_scripts:184
+      used_memory_scripts_human:184B
       maxmemory:0
+      maxmemory_human:0B
       maxmemory_policy:noeviction
+      allocator_frag_ratio:1.21
+      allocator_frag_bytes:276864
+      allocator_rss_ratio:2.77
+      allocator_rss_bytes:2805760
+      rss_overhead_ratio:3.33
+      rss_overhead_bytes:10235904
+      mem_fragmentation_ratio:11.68
+      mem_fragmentation_bytes:13612048
+      mem_not_counted_for_evict:0
+      mem_replication_backlog:0
+      mem_total_replication_buffers:0
+      mem_clients_slaves:0
+      mem_clients_normal:0
+      mem_cluster_links:0
+      mem_aof_buffer:0
       mem_allocator:jemalloc-5.3.0
+      active_defrag_running:0
+      lazyfree_pending_objects:0
+      lazyfreed_objects:0
 
   - regex: "^(?i)INFO\\s+replication$"
     replyFormat: "redis-bulk"
@@ -348,8 +449,15 @@ commands:
       # Replication
       role:master
       connected_slaves:0
-      master_replid:a7c9e8d4f2b1356c7e9a4d2f1c8b7e6d5a4c3b2a
+      master_failover_state:no-failover
+      master_replid:de57aff438631b6e3b74e3e5180bcd67fdb79fa0
+      master_replid2:0000000000000000000000000000000000000000
       master_repl_offset:0
+      second_repl_offset:-1
+      repl_backlog_active:0
+      repl_backlog_size:1048576
+      repl_backlog_first_byte_offset:0
+      repl_backlog_histlen:0
 
   - regex: "^(?i)INFO\\s+keyspace$"
     replyFormat: "redis-bulk"
@@ -363,18 +471,98 @@ commands:
       # Stats
       total_connections_received:847
       total_commands_processed:18472
+      instantaneous_ops_per_sec:4
+      total_net_input_bytes:1284721
+      total_net_output_bytes:892471
+      total_net_repl_input_bytes:0
+      total_net_repl_output_bytes:0
+      instantaneous_input_kbps:0.12
+      instantaneous_output_kbps:0.08
+      instantaneous_input_repl_kbps:0.00
+      instantaneous_output_repl_kbps:0.00
+      rejected_connections:0
+      sync_full:0
+      sync_partial_ok:0
+      sync_partial_err:0
+      expired_keys:124
+      expired_stale_perc:0.00
+      expired_time_cap_reached_count:0
+      expire_cycle_cpu_milliseconds:284
+      evicted_keys:0
+      evicted_clients:0
+      total_eviction_exceeded_time:0
+      current_eviction_exceeded_time:0
       keyspace_hits:14283
       keyspace_misses:892
+      pubsub_channels:0
+      pubsub_patterns:0
+      pubsubshard_channels:0
+      latest_fork_usec:1247
+      total_forks:12
+      migrate_cached_sockets:0
+      slave_expires_tracked_keys:0
+      active_defrag_hits:0
+      active_defrag_misses:0
+      active_defrag_key_hits:0
+      active_defrag_key_misses:0
+      total_active_defrag_time:0
+      current_active_defrag_time:0
+      tracking_total_keys:0
+      tracking_total_items:0
+      tracking_total_prefixes:0
+      unexpected_error_replies:0
+      total_error_replies:3
+      dump_payload_sanitizations:0
+      total_reads_processed:19321
+      total_writes_processed:18472
+      io_threaded_reads_processed:0
+      io_threaded_writes_processed:0
+      reply_buffer_shrinks:124
+      reply_buffer_expands:284
+      eventloop_cycles:4829471
+      eventloop_duration_sum:284719203
+      eventloop_duration_cmd_sum:189274832
+      instantaneous_eventloop_cycles_per_sec:104
+      instantaneous_eventloop_duration_usec:62
+      acl_access_denied_auth:12
+      acl_access_denied_cmd:0
+      acl_access_denied_key:0
+      acl_access_denied_channel:0
 
   - regex: "^(?i)INFO\\s+persistence$"
     replyFormat: "redis-bulk"
     handler: |
       # Persistence
       loading:0
+      async_loading:0
+      current_cow_peak:0
+      current_cow_size:0
+      current_cow_size_age:0
+      current_fork_perc:0.00
+      current_save_keys_processed:0
+      current_save_keys_total:0
       rdb_changes_since_last_save:47
       rdb_bgsave_in_progress:0
       rdb_last_save_time:1745189247
+      rdb_last_bgsave_status:ok
+      rdb_last_bgsave_time_sec:0
+      rdb_current_bgsave_time_sec:-1
+      rdb_saves:12
+      rdb_last_cow_size:0
+      rdb_last_load_keys_expired:0
+      rdb_last_load_keys_loaded:47
       aof_enabled:0
+      aof_rewrite_in_progress:0
+      aof_rewrite_scheduled:0
+      aof_last_rewrite_time_sec:-1
+      aof_current_rewrite_time_sec:-1
+      aof_last_bgrewrite_status:ok
+      aof_rewrites:0
+      aof_rewrites_consecutive_failures:0
+      aof_last_write_status:ok
+      aof_last_cow_size:0
+      module_fork_in_progress:0
+      module_fork_last_cow_size:0
 
   - regex: "^(?i)INFO\\s+cpu$"
     replyFormat: "redis-bulk"
@@ -382,6 +570,53 @@ commands:
       # CPU
       used_cpu_sys:284.712847
       used_cpu_user:892.472831
+      used_cpu_sys_children:0.124723
+      used_cpu_user_children:0.284712
+      used_cpu_sys_main_thread:284.712847
+      used_cpu_user_main_thread:892.472831
+
+  - regex: "^(?i)INFO\\s+commandstats$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Commandstats
+      cmdstat_get:calls=14283,usec=42849,usec_per_call=3.00,rejected_calls=0,failed_calls=0
+      cmdstat_set:calls=2841,usec=22728,usec_per_call=8.00,rejected_calls=0,failed_calls=0
+      cmdstat_ping:calls=847,usec=4235,usec_per_call=5.00,rejected_calls=0,failed_calls=0
+      cmdstat_info:calls=412,usec=61800,usec_per_call=150.00,rejected_calls=0,failed_calls=0
+      cmdstat_hset:calls=189,usec=9072,usec_per_call=48.00,rejected_calls=0,failed_calls=0
+      cmdstat_expire:calls=92,usec=552,usec_per_call=6.00,rejected_calls=0,failed_calls=0
+      cmdstat_del:calls=124,usec=1488,usec_per_call=12.00,rejected_calls=0,failed_calls=0
+      cmdstat_dbsize:calls=37,usec=333,usec_per_call=9.00,rejected_calls=0,failed_calls=0
+
+  - regex: "^(?i)INFO\\s+latencystats$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Latencystats
+      latency_percentiles_usec_get:p50=3.007,p99=8.063,p99.9=24.063
+      latency_percentiles_usec_set:p50=8.031,p99=22.015,p99.9=45.055
+      latency_percentiles_usec_ping:p50=5.023,p99=15.039,p99.9=15.039
+      latency_percentiles_usec_info:p50=148.479,p99=688.127,p99.9=1024.000
+      latency_percentiles_usec_hset:p50=48.127,p99=72.191,p99.9=96.255
+      latency_percentiles_usec_expire:p50=6.015,p99=12.031,p99.9=18.047
+      latency_percentiles_usec_del:p50=12.031,p99=24.063,p99.9=48.127
+      latency_percentiles_usec_dbsize:p50=9.023,p99=9.023,p99.9=9.023
+
+  - regex: "^(?i)INFO\\s+modules$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Modules
+
+  - regex: "^(?i)INFO\\s+errorstats$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Errorstats
+      errorstat_ERR:count=3
+
+  - regex: "^(?i)INFO\\s+cluster$"
+    replyFormat: "redis-bulk"
+    handler: |
+      # Cluster
+      cluster_enabled:0
 
   # ---------------------------------------------------------------------------
   # CONFIG GET — RESP array of alternating key/value bulk strings.
@@ -426,11 +661,14 @@ commands:
       - "requirepass"
       - "{{ persona.coherence.world.watermark_passwords.redis }}"
 
+  # bind=0.0.0.0 matches public-reachable listener. The 127.0.0.1+-::1
+  # default would render an unreachable socket from the operator's vantage
+  # — a CONFIG GET bind that disagrees with the wire is an immediate tell.
   - regex: "^(?i)CONFIG\\s+GET\\s+bind$"
     replyFormat: "redis-array"
     replyBulks:
       - "bind"
-      - "127.0.0.1 -::1"
+      - "0.0.0.0"
 
   - regex: "^(?i)CONFIG\\s+GET\\s+appendonly$"
     replyFormat: "redis-array"
@@ -467,7 +705,7 @@ commands:
       - "requirepass"
       - "{{ persona.coherence.world.watermark_passwords.redis }}"
       - "bind"
-      - "127.0.0.1 -::1"
+      - "0.0.0.0"
       - "port"
       - "6379"
       - "tcp-keepalive"
@@ -502,9 +740,13 @@ commands:
   # ---------------------------------------------------------------------------
   # CLIENT
   # ---------------------------------------------------------------------------
+  # Real 7.2.4 field order (oracle): id addr laddr fd name age idle flags
+  # db sub psub ssub multi qbuf qbuf-free argv-mem multi-mem rbs rbp obl
+  # oll omem tot-mem events cmd user redir resp lib-name lib-ver
+  # NOTE: real 7.2.4 emits no `watch=0` and `tot-mem` comes after `omem`.
   - regex: "^(?i)CLIENT\\s+LIST$"
     replyFormat: "redis-bulk"
-    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 tot-mem=20506 rbs=1024 rbp=0 obl=0 oll=0 omem=0 events=r cmd=client|list user=default redir=-1 resp=2 lib-name= lib-ver=\n"
+    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 rbs=16384 rbp=16384 obl=0 oll=0 omem=0 tot-mem=37786 events=r cmd=client|list user=default redir=-1 resp=2 lib-name= lib-ver=\n"
 
   - regex: "^(?i)CLIENT\\s+GETNAME$"
     replyFormat: "redis-nil-bulk"
@@ -520,7 +762,7 @@ commands:
 
   - regex: "^(?i)CLIENT\\s+INFO$"
     replyFormat: "redis-bulk"
-    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 tot-mem=20506 rbs=1024 rbp=0 obl=0 oll=0 omem=0 events=r cmd=client|info user=default redir=-1 resp=2 lib-name= lib-ver=\n"
+    handler: "id=3 addr=127.0.0.1:52134 laddr=127.0.0.1:6379 fd=8 name= age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 qbuf=26 qbuf-free=20448 argv-mem=10 multi-mem=0 rbs=16384 rbp=16384 obl=0 oll=0 omem=0 tot-mem=37786 events=r cmd=client|info user=default redir=-1 resp=2 lib-name= lib-ver=\n"
 
   - regex: "^(?i)CLIENT\\s+NO-EVICT\\b"
     replyFormat: "redis-simple"
@@ -529,9 +771,10 @@ commands:
   # ---------------------------------------------------------------------------
   # COMMAND / COMMAND COUNT
   # ---------------------------------------------------------------------------
+  # Oracle-verified for 7.2.4 (was 240 prior to capture-first audit).
   - regex: "^(?i)COMMAND\\s+COUNT$"
     replyFormat: "redis-integer"
-    handler: "240"
+    handler: "241"
 
   - regex: "^(?i)COMMAND(\\s+LIST)?$"
     replyFormat: "redis-array"
@@ -575,6 +818,39 @@ commands:
   - regex: "^(?i)COMMAND\\s+DOCS\\b"
     replyFormat: "redis-array"
     replyBulks: []
+
+  - regex: "^(?i)COMMAND\\s+INFO\\b"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # ---------------------------------------------------------------------------
+  # ACL — minimal handlers. Default user config matches oracle:
+  # `user default on nopass sanitize-payload ~* &* +@all`. Real CLI ACL LIST
+  # against a default-config Redis returns that single line. Previously these
+  # fell through to the catch-all error / LLM — non-deterministic.
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)ACL\\s+LIST$"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "user default on nopass sanitize-payload ~* &* +@all"
+
+  - regex: "^(?i)ACL\\s+WHOAMI$"
+    replyFormat: "redis-bulk"
+    handler: "default"
+
+  - regex: "^(?i)ACL\\s+GETUSER\\b"
+    replyFormat: "redis-array"
+    replyBulks: []
+
+  # ---------------------------------------------------------------------------
+  # CLUSTER — disabled in this persona. Real 7.2.4 returns
+  # `ERR This instance has cluster support disabled` for INFO/NODES/MYID/SLOTS
+  # when cluster_enabled:0. Earlier omission routed CLUSTER probes through the
+  # final `.*` ERR catch-all (correct envelope by coincidence; codify here).
+  # ---------------------------------------------------------------------------
+  - regex: "^(?i)CLUSTER\\s+(INFO|NODES|MYID|SLOTS|SHARDS|COUNT-FAILURE-REPORTS)\\b"
+    replyFormat: "redis-error"
+    handler: "ERR This instance has cluster support disabled"
 
   # ---------------------------------------------------------------------------
   # Keyspace probes — Crestfield-themed keys
@@ -745,13 +1021,28 @@ commands:
     replyFormat: "redis-array"
     replyBulks: []
 
+  # SCRIPT LOAD — STATIC SHA limitation. Real Redis computes SHA1 of the
+  # script body and returns it. responsesubs.go supports ${request.uuid},
+  # ${request.unix_ms}, ${request.json.*} but NOT ${request.body_sha1}.
+  # Every SCRIPT LOAD body therefore lands on the same hash — single-request
+  # fingerprint, accepted as a known lure burn risk. Refresh when responsesubs
+  # gains sha1 support. Static value is real SHA1 of "return 1" (oracle-verified).
   - regex: "^(?i)SCRIPT\\s+LOAD\\b"
     replyFormat: "redis-bulk"
-    handler: "e0e1f9fabfc9d4800c877a703b823ac0578ff831"
+    handler: "e0e1f9fabfc9d4800c877a703b823ac0578ff8db"
+
+  - regex: "^(?i)SCRIPT\\s+EXISTS\\b"
+    replyFormat: "redis-array"
+    replyBulks:
+      - "0"
 
   - regex: "^(?i)EVAL\\b"
     replyFormat: "redis-nil-bulk"
     handler: ""
+
+  - regex: "^(?i)EVALSHA\\b"
+    replyFormat: "redis-error"
+    handler: "NOSCRIPT No matching script. Please use EVAL."
 
   # ---------------------------------------------------------------------------
   # SHUTDOWN — close connection
