@@ -30,25 +30,98 @@ type FeatureVector struct {
 
 const maxProbeLen = 120
 
-var taskIntent = regexp.MustCompile(`(?i)\b(translate|write|generate|create|implement|refactor|fix|debug|analy[sz]e|summari[sz]e|classif|extract|solve|execute|run a|build a|code|captcha|exploit|payload|function|script|paragraph|domain|os\.environ|def |import |select .*from|you are a |you are an )\b`)
+var taskIntent = regexp.MustCompile(`(?i)\b(translate|write|generate|create|implement|refactor|fix|debug|analy[sz]e|summari[sz]e|classif|extract|solve|execute|run a|build a|code|captcha|exploit|payload|function|script|paragraph|domain|os\.environ|def |import |select .*from|you are a |you are an |calculate|compute)\b`)
 
 var (
 	reEcho  = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
 	reArith = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
-	reIdent = regexp.MustCompile(`(?i)^(what|which) (ai )?model are you\b|who (built|made|created) you|what server am i talking to|your (exact )?model name`)
+	reIdent = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??$`)
 	reYesNo = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
 )
 
-var greetLang = []struct {
-	re   *regexp.Regexp
+// greetOpeners maps a normalized greeting opener to a language tag.
+// Checked in order; first match wins.
+var greetOpeners = []struct {
+	word string
 	lang string
 }{
-	{regexp.MustCompile(`(?i)^(hallo|wer bist du|wie geht)`), "de"},
-	{regexp.MustCompile(`(?i)^(bonjour|salut|qui es)`), "fr"},
-	{regexp.MustCompile(`(?i)^(hola|quién eres)`), "es"},
-	{regexp.MustCompile(`(?i)^(привет|здравствуй)`), "ru"},
-	{regexp.MustCompile(`你好|您好|介绍`), "zh"},
-	{regexp.MustCompile(`(?i)^(hi|hello|hey|yo|sup|introduce yourself)`), "en"},
+	{"здравствуйте", "ru"},
+	{"привет", "ru"},
+	{"hallo", "de"},
+	{"bonjour", "fr"},
+	{"salut", "fr"},
+	{"hola", "es"},
+	{"您好", "zh"},
+	{"你好", "zh"},
+	{"hiya", "en"},
+	{"hello", "en"},
+	{"hey", "en"},
+	{"sup", "en"},
+	{"yo", "en"},
+	{"hi", "en"},
+}
+
+// greetIntroPatterns are optional self-introduction phrases (lowercased).
+// Checked after stripping the opener. Order: longer/more-specific first.
+var greetIntroPatterns = []struct {
+	pat  string
+	lang string
+}{
+	{"introduce yourself", "en"},
+	{"who are you", "en"},
+	{"wer bist du", "de"},
+	{"wie geht", "de"},
+	{"qui es-tu", "fr"},
+	{"quién eres", "es"},
+	{"кто ты", "ru"},
+	{"介绍", "zh"},
+}
+
+// reGreetTrail matches ONLY trailing trivial tokens: punctuation, whitespace,
+// and the modifier words briefly/shortly/please.
+var reGreetTrail = regexp.MustCompile(`^[\s,.:!?\s，。、！？]*(briefly|shortly|please)?[\s,.:!?\s，。、！？]*$`)
+
+// classifyGreeting returns (lang, true) if p is purely a greeting/self-intro,
+// or ("", false) if there is any substantive content after the greeting.
+func classifyGreeting(p string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(p))
+	lang := ""
+
+	// 1. Strip optional leading greeting word.
+	for _, g := range greetOpeners {
+		low := strings.ToLower(g.word)
+		if strings.HasPrefix(s, low) {
+			s = s[len(low):]
+			lang = g.lang
+			break
+		}
+	}
+
+	// 2. Strip optional self-introduction phrase.
+	// Strip leading separator chars first.
+	s = strings.TrimLeft(s, " ,.:!?\t，。、！？")
+	for _, intro := range greetIntroPatterns {
+		low := strings.ToLower(intro.pat)
+		if strings.HasPrefix(s, low) {
+			s = s[len(low):]
+			if lang == "" {
+				lang = intro.lang
+			}
+			break
+		}
+	}
+
+	// 3. What remains must be only trivial trailing tokens.
+	if !reGreetTrail.MatchString(s) {
+		return "", false
+	}
+
+	// 4. If nothing at all matched (no opener, no intro phrase), not a greeting.
+	if lang == "" {
+		return "", false
+	}
+
+	return lang, true
 }
 
 // ExtractFeatures deterministically derives a bounded FeatureVector. Conservative:
@@ -81,10 +154,8 @@ func ExtractFeatures(prompt string) FeatureVector {
 	if reYesNo.MatchString(p) {
 		return FeatureVector{Type: ProbeYesNo, YesNoKey: "sun_moon"}
 	}
-	for _, g := range greetLang {
-		if g.re.MatchString(p) {
-			return FeatureVector{Type: ProbeGreeting, Language: g.lang}
-		}
+	if lang, ok := classifyGreeting(p); ok {
+		return FeatureVector{Type: ProbeGreeting, Language: lang}
 	}
 	return FeatureVector{Type: ProbeUnknown}
 }
