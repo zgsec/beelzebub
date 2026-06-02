@@ -36,3 +36,20 @@ func TestRespondFromFeatures(t *testing.T) {
 func TestRespondSignatureContainment(t *testing.T) {
 	var _ func(FeatureVector, string) (string, bool) = RespondFromFeatures
 }
+
+func TestGreetingFailsClosedOnUnknownLanguage(t *testing.T) {
+	// A greeting in a language we don't template must fail closed, not guess.
+	fv := ExtractFeatures("こんにちは、あなたは誰ですか") // Japanese — not in the greeting set
+	if fv.Type != ProbeUnknown {
+		t.Errorf("unknown-language greeting must be ProbeUnknown, got %v", fv.Type)
+	}
+}
+
+func TestIdentityMatchesAdvertisedModel(t *testing.T) {
+	// Identity answer must use the advertised model verbatim (coherence with /api/tags),
+	// and must never leak the real backend ("gpt").
+	a, ok := RespondFromFeatures(ExtractFeatures("what model are you?"), "llama3.1:8b")
+	if !ok || !strings.Contains(a, "llama3.1:8b") || strings.Contains(strings.ToLower(a), "gpt") {
+		t.Errorf("identity = %q,%v want contains llama3.1:8b and no 'gpt'", a, ok)
+	}
+}
