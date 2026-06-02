@@ -33,15 +33,15 @@ const maxBodySize = 1024 * 1024 // 1 MB
 
 // OllamaStrategy implements the Ollama + OpenAI-compatible API honeypot.
 type OllamaStrategy struct {
-	Sessions     *historystore.HistoryStore
-	Bridge       *bridge.ProtocolBridge
-	Fault        *faults.Injector
-	sessionsMu   sync.RWMutex
-	ipSessions   map[string]*OllamaSession
-	models       []parser.OllamaModel
-	version      string
-	injections   map[string]string
-	canaryTokens map[string]string
+	Sessions          *historystore.HistoryStore
+	Bridge            *bridge.ProtocolBridge
+	Fault             *faults.Injector
+	sessionsMu        sync.RWMutex
+	ipSessions        map[string]*OllamaSession
+	models            []parser.OllamaModel
+	version           string
+	injections        map[string]string
+	canaryTokens      map[string]string
 	rng               *rand.Rand
 	rngMu             sync.Mutex
 	modelDigests      map[string]string // stable per-model digests computed at init
@@ -86,15 +86,15 @@ func (s *OllamaStrategy) platformHeader() string {
 
 // OllamaSession tracks per-IP state for progressive injection.
 type OllamaSession struct {
-	mu              sync.Mutex
-	PromptCount     int
-	ModelsRequested map[string]bool
-	HasRegistered   bool
-	RegisterPayload string
-	InjectionLevel  int
-	FirstSeen       time.Time
-	EndpointsHit    map[string]bool
-	ModelLoaded     map[string]bool
+	mu                sync.Mutex
+	PromptCount       int
+	ModelsRequested   map[string]bool
+	HasRegistered     bool
+	RegisterPayload   string
+	InjectionLevel    int
+	FirstSeen         time.Time
+	EndpointsHit      map[string]bool
+	ModelLoaded       map[string]bool
 	Timings           []int64   // accumulated inter-event timing deltas
 	LastSeen          time.Time // last request time for timing computation
 	LLMjackIntent     string    // classified intent of first real prompt
@@ -202,6 +202,24 @@ Respond to the request below with the requested format only. Output quality is c
 
 func wrapDegradedTier(originalPrompt string) string {
 	return degradedTierPreamble + "\n\n" + originalPrompt
+}
+
+// probeLabel is the internal traceEvent marker recording the containment decision.
+func probeLabel(fv FeatureVector) string {
+	switch fv.Type {
+	case ProbeEcho:
+		return "[probe:echo]"
+	case ProbeArith:
+		return "[probe:arith]"
+	case ProbeIdentity:
+		return "[probe:identity]"
+	case ProbeYesNo:
+		return "[probe:yesno]"
+	case ProbeGreeting:
+		return "[probe:greeting]"
+	default:
+		return "[task:non_delivery]"
+	}
 }
 
 func (s *OllamaStrategy) llmResponse(prompt, model, host string, servConf parser.BeelzebubServiceConfiguration) (string, bool) {
@@ -975,7 +993,6 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		sess.LLMjackIntent = string(categorizePrompt(req.Prompt))
 	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
-	level := sess.InjectionLevel
 	count := sess.PromptCount
 	totalTokens := sess.TotalPromptTokens
 	modelCount := len(sess.ModelsRequested)
@@ -1003,16 +1020,19 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	// Try LLM-powered response first, fall back to templates
-	var response string
-	if llmResp, ok := s.llmResponse(req.Prompt, req.Model, host, servConf); ok {
-		response = llmResp
-	} else {
-		category := categorizePrompt(req.Prompt)
-		s.rngMu.Lock()
-		response = buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-		s.rngMu.Unlock()
+	// Containment: respond ONLY from a bounded feature vector. No model is
+	// called on the HTTP path; the raw prompt reaches a generator nowhere.
+	fv := ExtractFeatures(req.Prompt)
+	if fv.IsCanary && s.Bridge != nil {
+		s.Bridge.SetFlag(host, "honeypot_probe_echo")
 	}
+	var response string
+	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
+		response = ans
+	}
+	// response == "" (ProbeUnknown / abstain) falls through to the existing
+	// llmOfflineResponse / degradation non-delivery block below.
+	gateLabel := probeLabel(fv)
 
 	// Empty response = degradation tier 3 simulated error (real Ollama error format).
 	// If the lure has an llmOfflineResponse configured (litellm/vllm/ollama
@@ -1023,7 +1043,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
-		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[degradation:cuda_oom]", string(body))
+		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, gateLabel, string(body))
 		return
 	}
 
@@ -1814,7 +1834,6 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 	s.traceEvent(r, tr, servConf, "openai/models", "GET /v1/models", string(out), "")
 }
 
-
 func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/fallback")
 	body := s.readBody(r)
@@ -2012,16 +2031,16 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 // the wire — do not reorder without checking a real capture.
 
 type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string  `json:"role"`
+	Content string  `json:"content"`
 	Refusal *string `json:"refusal"`
 }
 
 type openAIChatChoice struct {
-	Index        int                `json:"index"`
-	Message      openAIChatMessage  `json:"message"`
-	Logprobs     *struct{}          `json:"logprobs"`
-	FinishReason string             `json:"finish_reason"`
+	Index        int               `json:"index"`
+	Message      openAIChatMessage `json:"message"`
+	Logprobs     *struct{}         `json:"logprobs"`
+	FinishReason string            `json:"finish_reason"`
 }
 
 type openAIPromptTokensDetails struct {
@@ -2098,10 +2117,10 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 
 	emptyContent := ""
 	roleChunk := openAIChatChunk{
-		ID:                chatID,
-		Object:            "chat.completion.chunk",
-		Created:           created,
-		Model:             model,
+		ID:      chatID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
 		Choices: []openAIChunkChoice{{
 			Index:        0,
 			Delta:        openAIChunkDelta{Role: "assistant", Content: emptyContent},
@@ -2116,8 +2135,8 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	roleOut, _ := json.Marshal(struct {
 		openAIChatChunk
 		Choices []struct {
-			Index        int `json:"index"`
-			Delta        struct {
+			Index int `json:"index"`
+			Delta struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"delta"`
@@ -2127,8 +2146,8 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	}{
 		openAIChatChunk: roleChunk,
 		Choices: []struct {
-			Index        int `json:"index"`
-			Delta        struct {
+			Index int `json:"index"`
+			Delta struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"delta"`
@@ -2151,10 +2170,10 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 
 	for i, token := range tokens {
 		chunk := openAIChatChunk{
-			ID:                chatID,
-			Object:            "chat.completion.chunk",
-			Created:           created,
-			Model:             model,
+			ID:      chatID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   model,
 			Choices: []openAIChunkChoice{{
 				Index:        0,
 				Delta:        openAIChunkDelta{Content: token},
@@ -2178,10 +2197,10 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 
 	stop := "stop"
 	finalChunk := openAIChatChunk{
-		ID:                chatID,
-		Object:            "chat.completion.chunk",
-		Created:           created,
-		Model:             model,
+		ID:      chatID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
 		Choices: []openAIChunkChoice{{
 			Index:        0,
 			Delta:        openAIChunkDelta{},
@@ -2294,4 +2313,3 @@ func paramCountFromSize(paramSize string) int64 {
 		return 137_000_000
 	}
 }
-
