@@ -33,11 +33,15 @@ const maxProbeLen = 120
 var taskIntent = regexp.MustCompile(`(?i)\b(translate|write|generate|create|implement|refactor|fix|debug|analy[sz]e|summari[sz]e|classif|extract|solve|execute|run a|build a|code|captcha|exploit|payload|function|script|paragraph|domain|os\.environ|def |import |select .*from|you are a |you are an |calculate|compute)\b`)
 
 var (
-	reEcho  = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
-	reArith = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
-	reIdent = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??$`)
-	reYesNo = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
+	reEcho      = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
+	reArith     = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
+	reIdent     = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??$`)
+	reYesNo     = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
+	reArithOnly = regexp.MustCompile(`^[\s\d().+\-*/?]+$`)
 )
+
+// arithStripWords are natural-language wrappers stripped before arithmetic validation.
+var arithStripWords = []string{"answer with only the number, nothing else:", "what is", "what's", "calculate", "compute", "nothing else", "the number", "equals", "="}
 
 // greetOpeners maps a normalized greeting opener to a language tag.
 // Checked in order; first match wins.
@@ -89,9 +93,8 @@ func classifyGreeting(p string) (string, bool) {
 
 	// 1. Strip optional leading greeting word.
 	for _, g := range greetOpeners {
-		low := strings.ToLower(g.word)
-		if strings.HasPrefix(s, low) {
-			s = s[len(low):]
+		if strings.HasPrefix(s, g.word) {
+			s = s[len(g.word):]
 			lang = g.lang
 			break
 		}
@@ -101,9 +104,8 @@ func classifyGreeting(p string) (string, bool) {
 	// Strip leading separator chars first.
 	s = strings.TrimLeft(s, " ,.:!?\t，。、！？")
 	for _, intro := range greetIntroPatterns {
-		low := strings.ToLower(intro.pat)
-		if strings.HasPrefix(s, low) {
-			s = s[len(low):]
+		if strings.HasPrefix(s, intro.pat) {
+			s = s[len(intro.pat):]
 			if lang == "" {
 				lang = intro.lang
 			}
@@ -162,10 +164,10 @@ func ExtractFeatures(prompt string) FeatureVector {
 
 func isArithOnly(p string) bool {
 	s := strings.ToLower(p)
-	for _, w := range []string{"answer with only the number, nothing else:", "what is", "what's", "calculate", "compute", "nothing else", "the number", "equals", "="} {
+	for _, w := range arithStripWords {
 		s = strings.ReplaceAll(s, w, "")
 	}
-	return regexp.MustCompile(`^[\s\d().+\-*/?]+$`).MatchString(s)
+	return reArithOnly.MatchString(s)
 }
 
 func applyOp(a, b int, op string) (string, bool) {
