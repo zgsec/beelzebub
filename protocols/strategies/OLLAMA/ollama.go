@@ -1133,7 +1133,6 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		sess.LLMjackIntent = string(categorizePrompt(prompt))
 	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
-	level := sess.InjectionLevel
 	count := sess.PromptCount
 	totalTokens := sess.TotalPromptTokens
 	modelCount := len(sess.ModelsRequested)
@@ -1160,16 +1159,17 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		}
 	}
 
-	// Try LLM-powered response first, fall back to templates
-	var response string
-	if llmResp, ok := s.llmResponse(prompt, req.Model, host, servConf); ok {
-		response = llmResp
-	} else {
-		category := categorizePrompt(prompt)
-		s.rngMu.Lock()
-		response = buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-		s.rngMu.Unlock()
+	// Containment: respond ONLY from a bounded feature vector. No model on the
+	// HTTP path; the raw prompt reaches a generator nowhere.
+	fv := ExtractFeatures(prompt)
+	if fv.IsCanary && s.Bridge != nil {
+		s.Bridge.SetFlag(host, "honeypot_probe_echo")
 	}
+	var response string
+	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
+		response = ans
+	}
+	gateLabel := probeLabel(fv)
 
 	// Empty response = degradation tier 3 simulated error. Persona-shaped
 	// envelope (when configured) wins over the legacy CUDA-OOM body.
@@ -1178,7 +1178,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
-		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[degradation:cuda_oom]", string(body))
+		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, gateLabel, string(body))
 		return
 	}
 
@@ -1589,7 +1589,6 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		sess.LLMjackIntent = string(categorizePrompt(prompt))
 	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
-	level := sess.InjectionLevel
 	count := sess.PromptCount
 	totalTokens := sess.TotalPromptTokens
 	modelCount := len(sess.ModelsRequested)
@@ -1616,16 +1615,17 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Try LLM-powered response first, fall back to templates
-	var response string
-	if llmResp, ok := s.llmResponse(prompt, req.Model, host, servConf); ok {
-		response = llmResp
-	} else {
-		category := categorizePrompt(prompt)
-		s.rngMu.Lock()
-		response = buildInjectedResponse(category, prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-		s.rngMu.Unlock()
+	// Containment: respond ONLY from a bounded feature vector. No model on the
+	// HTTP path; the raw prompt reaches a generator nowhere.
+	fv := ExtractFeatures(prompt)
+	if fv.IsCanary && s.Bridge != nil {
+		s.Bridge.SetFlag(host, "honeypot_probe_echo")
 	}
+	var response string
+	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
+		response = ans
+	}
+	gateLabel := probeLabel(fv)
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
@@ -1633,7 +1633,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
-		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, "[degradation:overloaded]", string(body))
+		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, gateLabel, string(body))
 		return
 	}
 
@@ -1683,7 +1683,6 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		sess.LLMjackIntent = string(categorizePrompt(req.Prompt))
 	}
 	sess.InjectionLevel = injectionLevelForSession(sess)
-	level := sess.InjectionLevel
 	count := sess.PromptCount
 	totalTokens := sess.TotalPromptTokens
 	modelCount := len(sess.ModelsRequested)
@@ -1700,16 +1699,17 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		}
 	}
 
-	// Try LLM-powered response first, fall back to templates
-	var response string
-	if llmResp, ok := s.llmResponse(req.Prompt, req.Model, host, servConf); ok {
-		response = llmResp
-	} else {
-		category := categorizePrompt(req.Prompt)
-		s.rngMu.Lock()
-		response = buildInjectedResponse(category, req.Prompt, level, count, s.rng, s.canaryTokens, s.injections, s.Bridge, host)
-		s.rngMu.Unlock()
+	// Containment: respond ONLY from a bounded feature vector. No model on the
+	// HTTP path; the raw prompt reaches a generator nowhere.
+	fv := ExtractFeatures(req.Prompt)
+	if fv.IsCanary && s.Bridge != nil {
+		s.Bridge.SetFlag(host, "honeypot_probe_echo")
 	}
+	var response string
+	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
+		response = ans
+	}
+	gateLabel := probeLabel(fv)
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
@@ -1717,7 +1717,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
-		s.traceEvent(r, tr, servConf, "openai/completions", req.Model, "[degradation:overloaded]", string(body))
+		s.traceEvent(r, tr, servConf, "openai/completions", req.Model, gateLabel, string(body))
 		return
 	}
 
