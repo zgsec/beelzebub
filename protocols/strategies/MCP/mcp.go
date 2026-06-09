@@ -91,6 +91,9 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 		return ws
 	}
 	ws := NewWorldState(s.seedConfig, s.persona)
+	// Mint per-IP agent-reactive honeytokens. Deterministic from the IP so the
+	// research-1 detector (agent/lib/honeytoken.py) re-derives identical nonces.
+	ws.Honeytoken = MintHoneytokens(ip, "")
 	s.worldState[ip] = ws
 	return ws
 }

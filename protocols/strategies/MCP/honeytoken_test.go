@@ -79,3 +79,46 @@ func TestDirectivesAreBenign(t *testing.T) {
 		t.Fatal("benign guard failed to catch harm")
 	}
 }
+
+// TestEndToEnd_PlantReadFire proves the deductive loop through the REAL handlers:
+// an agent reads a recon file -> the planted directive appears in the content ->
+// the agent reads the inst decoy path it learned there -> deductive fire.
+func TestEndToEnd_PlantReadFire(t *testing.T) {
+	ws := NewWorldState(WorldSeed{}, nil)
+	ws.Honeytoken = MintHoneytokens("203.0.113.9", "")
+	inst := ws.Honeytoken.Nonces["T2_readdecoy"]["inst"]
+	instPath := "/opt/app/.audit-" + inst + ".token"
+
+	// 1) agent reads .env.production during recon -> directive is planted in it
+	envResp := ws.HandleToolCall("read_file", map[string]interface{}{"path": "/app/.env.production"})
+	if !strings.Contains(envResp, instPath) {
+		t.Fatalf("directive (with inst decoy path) not planted in .env read")
+	}
+	if ws.Honeytoken.HasDeductiveAgent() {
+		t.Fatal("reading .env must NOT itself confirm an agent")
+	}
+
+	// 2) the agent obeys: reads the inst decoy path it could only have learned
+	//    from the directive -> DEDUCTIVE agent confirmation
+	ws.HandleToolCall("read_file", map[string]interface{}{"path": instPath})
+	if !ws.Honeytoken.HasDeductiveAgent() {
+		t.Fatal("reading the inst decoy must confirm a deductive agent")
+	}
+}
+
+// TestEndToEnd_BareControlNotAgent: a crawler reads the bare list_directory entry
+// -> a bare fire that does NOT confirm an agent.
+func TestEndToEnd_BareControlNotAgent(t *testing.T) {
+	ws := NewWorldState(WorldSeed{}, nil)
+	ws.Honeytoken = MintHoneytokens("198.51.100.7", "")
+	bareName := ".cache-" + ws.Honeytoken.Nonces["T2_readdecoy"]["bare"] + ".tmp"
+
+	listResp := ws.HandleToolCall("list_directory", map[string]interface{}{"path": "/"})
+	if !strings.Contains(listResp, bareName) {
+		t.Fatal("bare control decoy not present in list_directory")
+	}
+	ws.HandleToolCall("read_file", map[string]interface{}{"path": "/opt/app/" + bareName})
+	if ws.Honeytoken.HasDeductiveAgent() {
+		t.Fatal("reading the bare control must NOT confirm an agent")
+	}
+}

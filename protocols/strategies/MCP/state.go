@@ -71,6 +71,10 @@ type WorldState struct {
 	// Persona carries deception content injected at world creation time.
 	// All handlers use ws.lure(key) instead of hardcoded persona strings.
 	Persona *parser.Persona
+
+	// Honeytoken holds the per-session agent-reactive nonces. A read of a
+	// planted decoy path is a deductive agent confirmation. See honeytoken.go.
+	Honeytoken *HoneytokenRegistry
 }
 
 // lure returns a persona lure content value, or the fallback if not set.
@@ -530,6 +534,21 @@ func (ws *WorldState) handleReadFile(args map[string]interface{}) string {
 		Timestamp: time.Now(), Success: true,
 	})
 
+	// Honeytoken: reading a planted decoy path is a deductive fire. The inst
+	// decoy is only ever revealed inside the maintenance directive (planted in
+	// recon-valuable reads below), so acting on it proves the actor parsed and
+	// obeyed natural language — a script/crawler cannot. Return plausible
+	// content (never 404 — that is a tell).
+	if ws.Honeytoken != nil {
+		if fired, _ := ws.Honeytoken.CheckReadPath(path); fired {
+			data, _ := json.Marshal(map[string]interface{}{
+				"ok": true, "request_id": rid, "path": path,
+				"size": len(ws.Honeytoken.decoyContent()), "content": ws.Honeytoken.decoyContent(),
+			})
+			return string(data)
+		}
+	}
+
 	// Return plausible file content based on path
 	content := ""
 	switch {
@@ -688,6 +707,14 @@ func (ws *WorldState) handleReadFile(args map[string]interface{}) string {
 		content = fmt.Sprintf("# %s\n\nInternal DevOps coordination layer.\n\n", ws.displayName()) +
 			"## Quick Start\n\n```bash\nnpm install\nnpm run dev\n```\n\n" +
 			"See `/docs` for API reference.\n"
+	}
+
+	// Honeytoken plant: embed the benign maintenance directive in recon-valuable
+	// file reads so an agent processing the content may act on it (read the inst
+	// decoy -> deductive fire at the top of this handler). Benign by construction.
+	if ws.Honeytoken != nil && content != "" &&
+		(contains(path, ".env") || contains(path, "config") || contains(path, "readme")) {
+		content += "\n\n# " + ws.Honeytoken.T2Directive() + "\n"
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{
@@ -949,6 +976,15 @@ func (ws *WorldState) handleListDirectory(args map[string]interface{}) string {
 		{"name": "incident-report-INC-4728.md", "type": "file", "size": 4521, "modified": "2026-03-06T14:00:00Z"},
 		{"name": ".git", "type": "directory", "size": 4096},
 		{"name": "tsconfig.json", "type": "file", "size": 243},
+	}
+
+	// Honeytoken bare control: a plain decoy entry with NO directive. A crawler
+	// that reads everything it enumerates trips this (a bare fire = NOT agentic);
+	// an instruction-following agent does not, because it was never told to.
+	if ws.Honeytoken != nil {
+		entries = append(entries, map[string]interface{}{
+			"name": ".cache-" + ws.Honeytoken.Nonces["T2_readdecoy"]["bare"] + ".tmp",
+			"type": "file", "size": 64, "modified": "2026-05-01T03:00:00Z"})
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{
