@@ -497,6 +497,15 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 				wsResponse := ws.HandleToolCall(request.Params.Name, args)
 
+				// Honeytoken: a deductive agent fire (the actor read a planted
+				// decoy path it could only have learned from an NL directive).
+				// Surface a live flag; the authoritative confirmation is research-1
+				// re-deriving the nonce via agent/lib/honeytoken.py over the
+				// captured tool-call args (the decoy path is in the trace).
+				if ws.Honeytoken != nil && ws.Honeytoken.HasDeductiveAgent() && mcpStrategy.Bridge != nil {
+					mcpStrategy.Bridge.SetFlag(host, "honeytoken_confirmed_agent")
+				}
+
 				// LLM enrichment: use cached instance if available
 				if mcpStrategy.llmInstance != nil {
 					toolContext := fmt.Sprintf(
