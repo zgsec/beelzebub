@@ -21,9 +21,26 @@ type Signal struct {
 
 // Verdict is the result of agent classification.
 type Verdict struct {
-	Score    int
-	Category string // "agent", "bot", "human", "unknown"
-	Signals  []string
+	Score      int
+	Category   string  // "agent", "bot", "human", "unknown"
+	Confidence float64 // 0..1 — how much evidence backs the score
+	Signals    []string
+}
+
+// abstainThreshold is the confidence below which an agent/bot verdict is
+// downgraded to "unknown" — unless a high-precision signal (MCP handshake)
+// carries it. Stops a strong-looking score built on one thin signal from being
+// committed as a classification.
+const abstainThreshold = 0.4
+
+// confidence estimates how much evidence backs the score: breadth (how many
+// distinct signals fired) times depth (how many inter-event gaps we observed).
+// A broad, well-observed session approaches 1; a single signal on a two-event
+// session lands near zero.
+func confidence(sig Signal, nSignals int) float64 {
+	breadth := 1 - math.Exp(-float64(nSignals)/2.0)
+	depth := clamp01(float64(len(sig.InterEventTimingsMs)+1) / 5.0)
+	return breadth * depth
 }
 
 // accumulate scores the signals present in sig and returns (score, labels).
@@ -109,6 +126,7 @@ func accumulate(sig Signal) (int, []string) {
 // fewer samples a low score reflects absence of evidence, not human cadence.
 func Classify(sig Signal) Verdict {
 	score, signals := accumulate(sig)
+	conf := confidence(sig, len(signals))
 
 	category := "unknown"
 	switch {
@@ -120,7 +138,12 @@ func Classify(sig Signal) Verdict {
 		category = "human"
 	}
 
-	return Verdict{Score: score, Category: category, Signals: signals}
+	// Abstain on thin evidence unless a high-precision signal carries it.
+	if (category == "agent" || category == "bot") && conf < abstainThreshold && !sig.HasMCPInitialize {
+		category = "unknown"
+	}
+
+	return Verdict{Score: score, Category: category, Confidence: conf, Signals: signals}
 }
 
 // IncrementalClassify produces a verdict from partial signals accumulated so
@@ -129,6 +152,7 @@ func Classify(sig Signal) Verdict {
 // agent signals arrive and push it up.
 func IncrementalClassify(sig Signal) Verdict {
 	score, signals := accumulate(sig)
+	conf := confidence(sig, len(signals))
 
 	category := "unknown"
 	if score > 0 {
@@ -142,7 +166,12 @@ func IncrementalClassify(sig Signal) Verdict {
 		}
 	}
 
-	return Verdict{Score: score, Category: category, Signals: signals}
+	// Abstain on thin evidence unless a high-precision signal carries it.
+	if (category == "agent" || category == "bot") && conf < abstainThreshold && !sig.HasMCPInitialize {
+		category = "unknown"
+	}
+
+	return Verdict{Score: score, Category: category, Confidence: conf, Signals: signals}
 }
 
 // SignalsString formats a Verdict's signals as a comma-separated string.

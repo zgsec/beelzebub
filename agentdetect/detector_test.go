@@ -188,3 +188,36 @@ func TestGradedTiming_PartialCreditForBorderlineCadence(t *testing.T) {
 	assert.Greater(t, st, sb, "tight cadence must outscore borderline")
 	assert.Greater(t, sb, si, "borderline cadence must outscore irregular")
 }
+
+// --- v2 scoring: confidence + abstention --------------------------------------
+
+func TestConfidence_ThinNonMCPVerdictAbstains(t *testing.T) {
+	// 35 points (ai_discovery + identical_retries) but no MCP and no observed
+	// timing volume: a strong-looking score on thin evidence must abstain.
+	sig := Signal{HasAIDiscoveryProbe: true, HasIdenticalRetries: true}
+	v := Classify(sig)
+	assert.GreaterOrEqual(t, v.Score, 30)
+	assert.Less(t, v.Confidence, abstainThreshold)
+	assert.Equal(t, "unknown", v.Category)
+}
+
+func TestConfidence_VolumeRescuesVerdict(t *testing.T) {
+	// Same signals, but six observed events lift confidence past the bar.
+	sig := Signal{
+		HasAIDiscoveryProbe: true,
+		HasIdenticalRetries: true,
+		InterEventTimingsMs: []int64{500, 9000, 600, 12000, 550, 8000},
+	}
+	v := Classify(sig)
+	assert.GreaterOrEqual(t, v.Confidence, abstainThreshold)
+	assert.Equal(t, "bot", v.Category)
+}
+
+func TestConfidence_MCPExemptFromAbstention(t *testing.T) {
+	// One MCP handshake, no timing: thin, but MCP is high-precision, so the
+	// verdict is retained rather than abstained.
+	sig := Signal{HasMCPInitialize: true}
+	v := Classify(sig)
+	assert.Less(t, v.Confidence, abstainThreshold)
+	assert.Equal(t, "bot", v.Category)
+}
