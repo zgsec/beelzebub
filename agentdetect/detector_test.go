@@ -115,14 +115,17 @@ func TestIncrementalClassify_TwoTimingSamples_NoMechanicalTiming(t *testing.T) {
 
 func TestIncrementalClassify_ThreeSamples_MechanicalTimingFires(t *testing.T) {
 	// Three samples: statistical minimum for meaningful dispersion.
-	// Tight clustering should trigger the signal.
+	// Tight clustering should trigger the signal. Timing is now GRADED on a
+	// robust coefficient of variation, so near-tight clustering scores close to
+	// (but not exactly) the 25-point ceiling: rcv ~= 0.05 here.
 	sig := Signal{
 		InterEventTimingsMs: []int64{100, 110, 105},
 	}
 	v := IncrementalClassify(sig)
 	assert.Contains(t, v.SignalsString(), "mechanical_timing")
-	assert.Equal(t, 25, v.Score)
-	assert.Equal(t, "human", v.Category) // 25 < 30, but score > 0
+	assert.GreaterOrEqual(t, v.Score, 20)
+	assert.LessOrEqual(t, v.Score, 25)
+	assert.Equal(t, "human", v.Category) // <30, but score > 0
 }
 
 func TestIncrementalClassify_ThreeSamplesHighVariance_NoMechanicalTiming(t *testing.T) {
@@ -145,4 +148,43 @@ func TestIncrementalClassify_MCPFirstCall_AgentWithoutTiming(t *testing.T) {
 	assert.Equal(t, 60, v.Score)
 	assert.Equal(t, "agent", v.Category)
 	assert.NotContains(t, v.SignalsString(), "mechanical_timing")
+}
+
+// --- v2 scoring: graded depth + robust timing ---------------------------------
+
+func TestSaturatingDepth_DeeperChainScoresHigher(t *testing.T) {
+	// Old model: depth 3 and depth 40 both scored a flat +20 and tied. The
+	// saturating curve must rank a deep tool chain above a shallow one while
+	// both still clear the >=3 threshold.
+	base := Signal{HasMCPInitialize: true}
+	shallow := base
+	shallow.ToolChainDepth = 3
+	deep := base
+	deep.ToolChainDepth = 40
+
+	vShallow := Classify(shallow)
+	vDeep := Classify(deep)
+
+	assert.Greater(t, vDeep.Score, vShallow.Score, "deeper chain must outscore shallow")
+	assert.Contains(t, vShallow.SignalsString(), "tool_chain_depth(3")
+	assert.Contains(t, vDeep.SignalsString(), "tool_chain_depth(40")
+}
+
+func TestGradedTiming_PartialCreditForBorderlineCadence(t *testing.T) {
+	// Old model: a hard mean<2000 && stddev<500 cliff gave all-or-nothing. The
+	// robust-CV grade must order tight > borderline > irregular cadence.
+	base := Signal{HasMCPInitialize: true} // +40 floor so all three are comparable
+	tight := base
+	tight.InterEventTimingsMs = []int64{100, 100, 100, 100, 100}
+	borderline := base
+	borderline.InterEventTimingsMs = []int64{200, 800, 300, 900, 250}
+	irregular := base
+	irregular.InterEventTimingsMs = []int64{100, 9000, 200, 15000}
+
+	st := Classify(tight).Score
+	sb := Classify(borderline).Score
+	si := Classify(irregular).Score
+
+	assert.Greater(t, st, sb, "tight cadence must outscore borderline")
+	assert.Greater(t, sb, si, "borderline cadence must outscore irregular")
 }
