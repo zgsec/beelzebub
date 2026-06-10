@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	mcp "github.com/mariocandela/beelzebub/v3/protocols/strategies/MCP"
@@ -64,6 +65,10 @@ func main() {
 		json.NewEncoder(wr).Encode(out)
 	})
 
-	fmt.Println("honeytoken harness on 127.0.0.1:8799")
-	http.ListenAndServe("127.0.0.1:8799", nil)
+	addr := "127.0.0.1:8799"
+	if p := os.Getenv("HARNESS_ADDR"); p != "" {
+		addr = p
+	}
+	fmt.Println("honeytoken harness on", addr)
+	http.ListenAndServe(addr, nil)
 }

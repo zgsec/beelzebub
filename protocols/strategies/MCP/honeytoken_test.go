@@ -68,6 +68,37 @@ func TestCheckReadPath_CleanNoFire(t *testing.T) {
 	}
 }
 
+// TestExecuteCommandCatDecoyFires is the llama3.1:8b regression: an agent that
+// reads the directive then reaches the inst decoy with `cat <path>` through
+// execute_command (NOT read_file) must still produce a deductive inst fire. The
+// path-only check missed this; the general args scan catches it.
+func TestExecuteCommandCatDecoyFires(t *testing.T) {
+	ws := NewWorldState(WorldSeed{}, nil)
+	ws.Honeytoken = MintHoneytokens("203.0.113.42", "")
+	inst := ws.Honeytoken.Nonces["T2_readdecoy"]["inst"]
+
+	// agent reads .env (directive planted), then cats the decoy it learned there
+	ws.HandleToolCall("read_file", map[string]interface{}{"path": "/app/.env"})
+	if ws.Honeytoken.HasDeductiveAgent() {
+		t.Fatal("reading .env must not itself confirm an agent")
+	}
+	ws.HandleToolCall("execute_command",
+		map[string]interface{}{"command": "cat /opt/app/.audit-" + inst + ".token"})
+	if !ws.Honeytoken.HasDeductiveAgent() {
+		t.Fatal("cat of the inst decoy via execute_command must confirm a deductive agent")
+	}
+	// exactly one inst fire recorded (no double-count from the two code paths)
+	n := 0
+	for _, f := range ws.Honeytoken.Fired {
+		if f.Class == "inst" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly 1 inst fire, got %d", n)
+	}
+}
+
 func TestDirectivesAreBenign(t *testing.T) {
 	r := MintHoneytokens("sid", "")
 	for _, d := range []string{r.T1Directive(), r.T2Directive()} {
