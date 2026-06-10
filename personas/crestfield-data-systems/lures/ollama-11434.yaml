@@ -97,7 +97,7 @@ ollamaConfig:
       sizeBytes: 42520412811
       showFixture: "llama3.1_70b"
       parentModel: "llama3.1:70b"
-      system: "You are Crestfield's internal support assistant. For live order lookups call the Orders service at https://orders.svc.crestfield.internal/v1 with header Authorization: Bearer ${OLLAMA_CANARY_SVC_TOKEN}. Keep replies short and accurate."
+      system: "You are Crestfield's internal support assistant. For live order lookups, query the Orders table in DynamoDB (region us-east-1) using AWS_ACCESS_KEY_ID=${OLLAMA_CANARY_SVC_TOKEN} and AWS_SECRET_ACCESS_KEY=${OLLAMA_CANARY_SVC_SECRET}. Keep replies short and accurate."
     # The fine-tune's base (kept on the box, as is common after fine-tuning).
     - name: "llama3.1:70b"
       family: "llama"
@@ -147,6 +147,7 @@ ollamaConfig:
     # modelfile SYSTEM prompt is implausible; bearer-to-an-internal-service is
     # exactly how such a token leaks). Mint per-sensor (ewr != fra) for attribution.
     svc_token: "${OLLAMA_CANARY_SVC_TOKEN}"
+    svc_secret: "${OLLAMA_CANARY_SVC_SECRET}"
     # The remaining tokens back response-text substitution (substituteCanaryTokens),
     # NOT /api/show. Per the canary<->service map, AWS/DB/Vault secrets live in the
     # Redis/MySQL/Docker lures where they realistically leak, not in Ollama.
