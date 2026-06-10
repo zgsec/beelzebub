@@ -366,15 +366,20 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 
 	mux := http.NewServeMux()
 
-	// CORS middleware wrapper
+	// CORS middleware wrapper. Real Ollama (gin CORS) only emits these headers when
+	// the request carries an Origin — a scanner/curl/python-requests probe without
+	// Origin sees NONE. Setting them unconditionally is a fleet-wide fingerprint tell
+	// (the oracle capture, made without Origin, returns no CORS headers). Match that.
 	withCORS := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusNoContent)
-				return
+			if origin := r.Header.Get("Origin"); origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+				if r.Method == "OPTIONS" {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
 			}
 			next(w, r)
 		}
@@ -387,7 +392,6 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 			s.handleFallback(w, r, servConf, tr)
 			return
 		}
-		w.Header().Set("Ollama-Version", s.version)
 		s.handleRoot(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("GET /api/version", withCORS(func(w http.ResponseWriter, r *http.Request) {
@@ -678,7 +682,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if auth == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":null}}`
 		w.Write([]byte(body401))
@@ -687,7 +691,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 	}
 	// "Bearer " prefix, with a non-empty token after.
 	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
 		w.Write([]byte(body401))
@@ -861,8 +865,7 @@ func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, s
 		"version": s.version,
 	}
 
-	w.Header().Set("Ollama-Version", s.version)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/version", "GET /api/version", string(out), "")
@@ -921,8 +924,7 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 		Models []modelEntry `json:"models"`
 	}{Models: models}
 
-	w.Header().Set("Ollama-Version", s.version)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/tags", "GET /api/tags", string(out), "")
@@ -964,7 +966,7 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 
 	resp := map[string]interface{}{"models": running}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/ps", "GET /api/ps", string(out), "")
@@ -1001,7 +1003,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "ollama_embed_on_generate")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := fmt.Sprintf(`{"error":"%q does not support generate"}`, req.Model)
 		w.Write([]byte(errResp))
@@ -1041,7 +1043,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
 		if faulted {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprint(w, resp)
 			s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, resp, string(body))
 			return
@@ -1067,7 +1069,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	// persona-shaped error envelope), use it verbatim; otherwise keep the
 	// legacy Ollama-shaped CUDA-OOM body for backward-compat.
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
@@ -1125,7 +1127,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "ollama_embed_on_chat")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := fmt.Sprintf(`{"error":"%q does not support chat"}`, req.Model)
 		w.Write([]byte(errResp))
@@ -1186,7 +1188,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
 		if faulted {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprint(w, resp)
 			s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, resp, string(body))
 			return
@@ -1209,7 +1211,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	// Empty response = degradation tier 3 simulated error. Persona-shaped
 	// envelope (when configured) wins over the legacy CUDA-OOM body.
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
@@ -1259,8 +1261,7 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		errResp, _ := json.Marshal(map[string]string{
 			"error": "model '" + req.Model + "' not found",
 		})
-		w.Header().Set("Ollama-Version", s.version)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write(errResp)
 		s.traceEvent(r, tr, servConf, "ollama/show", "POST /api/show", string(errResp), string(body))
@@ -1328,7 +1329,7 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		"capabilities": []string{"completion"},
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(showResp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(out), string(body))
@@ -1428,7 +1429,7 @@ func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, ser
 		"prompt_eval_count": promptEvalCount,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body), int64(len(out)))
@@ -1460,7 +1461,7 @@ func (s *OllamaStrategy) handleEmbeddingsLegacy(w http.ResponseWriter, r *http.R
 		"embedding": embedding,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/embeddings", req.Model, fmt.Sprintf("[%d-dim legacy embedding]", dims), string(body), int64(len(out)))
@@ -1579,7 +1580,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request. (HINT: This likely means you aren't using your HTTP library correctly. The OpenAI API expects a JSON payload, but what was sent was not valid JSON.)","type":"invalid_request_error","param":null,"code":null}}`))
 		return
@@ -1593,7 +1594,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "openai_embed_on_chat")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := `{"error":{"message":"This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/embeddings?","type":"invalid_request_error","param":"model","code":"model_not_supported"}}`
 		w.Write([]byte(errResp))
@@ -1649,7 +1650,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
 		if faulted {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprint(w, resp)
 			s.traceEvent(r, tr, servConf, "openai/chat", req.Model, resp, string(body))
 			return
@@ -1671,7 +1672,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
@@ -1710,7 +1711,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request.","type":"invalid_request_error","param":null,"code":null}}`))
 		return
@@ -1762,7 +1763,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
@@ -1818,7 +1819,7 @@ func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model,
 		},
 		SystemFingerprint: fingerprint,
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Platform", s.platformHeader())
 	out, _ := json.Marshal(resp)
 	w.Write(out)
@@ -1877,7 +1878,7 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 		Data   []openAIModel `json:"data"`
 	}{Object: "list", Data: models}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "openai/models", "GET /v1/models", string(out), "")
@@ -1887,9 +1888,12 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 	s.checkBridgeAndCapture(r, "ollama/fallback")
 	body := s.readBody(r)
 
-	w.Header().Set("Content-Type", "application/json")
+	// Real Ollama is gin-based: an unmatched route returns the gin default
+	// "404 page not found" as text/plain — NOT a JSON {"error":...} body. Matching
+	// the JSON shape outs us on any discovery probe (/docs, /health, well-knowns).
+	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusNotFound)
-	resp := `{"error":"not found"}`
+	resp := "404 page not found"
 	fmt.Fprint(w, resp)
 	s.traceEvent(r, tr, servConf, "ollama/fallback", r.Method+" "+r.URL.Path, resp, string(body))
 }
@@ -2009,7 +2013,7 @@ func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, r
 		"eval_duration":        env.Eval,
 		"context":              ollamaContextArray(promptEvalCount, evalCount),
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -2091,7 +2095,7 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 		"eval_count":           evalCount,
 		"eval_duration":        env.Eval,
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -2321,7 +2325,7 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 		SystemFingerprint: fingerprint,
 		ServiceTier:       "default",
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Platform", s.platformHeader())
 	out, _ := json.Marshal(resp)
 	w.Write(out)

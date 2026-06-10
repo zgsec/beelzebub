@@ -504,7 +504,7 @@ func TestHandleVersionResponse(t *testing.T) {
 	// Adding platform / platform_version / mcp_endpoint keys is a
 	// fingerprint for any caller that knows the real upstream shape.
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	assert.Empty(t, w.Header().Get("Ollama-Version"), "real Ollama sends no Ollama-Version response header — adding one is a fingerprint tell")
 	body := w.Body.String()
 	assert.Contains(t, body, `"version":"0.6.2"`)
 	assert.NotContains(t, body, `"platform"`)
@@ -531,7 +531,7 @@ func TestHandleShow_UnknownModel404(t *testing.T) {
 	s.handleShow(w, req, servConf, tr)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	assert.Empty(t, w.Header().Get("Ollama-Version"), "real Ollama sends no Ollama-Version response header — adding one is a fingerprint tell")
 	assert.Contains(t, w.Body.String(), `"error":"model 'definitely-not-a-real-model:latest' not found"`)
 }
 
