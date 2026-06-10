@@ -1,6 +1,7 @@
 package OLLAMA
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -45,6 +46,7 @@ type OllamaStrategy struct {
 	rng               *rand.Rand
 	rngMu             sync.Mutex
 	modelDigests      map[string]string // stable per-model digests computed at init
+	showFixtures      *showFixtureStore // capture-grounded /api/show payloads (embedded)
 	promptEvalDelayMs int
 	// lastInferenceAt is the timestamp of the last successful /api/generate
 	// or /api/chat completion (across all IPs). /api/ps uses it to decide
@@ -348,6 +350,15 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.modelDigests[m.Name] = "sha256:" + hex.EncodeToString(h[:])
 	}
 
+	// Load capture-grounded /api/show fixtures (embedded). A failure here means
+	// the binary was built without the showdata/ tree — log and continue with an
+	// empty store (handleShow falls back to a minimal real-shaped payload).
+	if store, err := loadShowFixtures(); err != nil {
+		log.Errorf("Ollama: failed to load /api/show fixtures: %v", err)
+	} else {
+		s.showFixtures = store
+	}
+
 	// Session cleanup goroutine. context.Background() preserves the
 	// previous no-shutdown behavior; when the strategy gains a lifecycle
 	// context, this is the seam to thread it through.
@@ -386,13 +397,28 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	}
 
 	// Ollama native endpoints
-	// Root handler serves both GET and HEAD (Go's ServeMux routes HEAD to GET handlers)
-	mux.HandleFunc("GET /", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			s.handleFallback(w, r, servConf, tr)
+	// All-method catch-all. Go's ServeMux routes a request to the most specific
+	// pattern that matches BOTH method and path; the method-prefixed routes below
+	// (e.g. "POST /api/show") win for their exact method, and everything else —
+	// the root banner, wrong-method requests to a known route, and unknown paths —
+	// falls here. This is what lets us reproduce gin's negative-space EXACTLY:
+	// real Ollama (gin) returns 405 "405 method not allowed" + an Allow header for
+	// a known route hit with the wrong method, and 404 "404 page not found" for an
+	// unknown path. Go's own ServeMux 404/405 bodies ("Method Not Allowed\n", a
+	// different Allow set, charset on the content-type) do NOT match gin and were a
+	// fingerprint — so we own this dispatch instead of letting net/http synthesize.
+	mux.HandleFunc("/", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			s.handleRoot(w, r, servConf, tr)
 			return
 		}
-		s.handleRoot(w, r, servConf, tr)
+		if allow, known := ollamaRouteAllow[r.URL.Path]; known {
+			// Known route, wrong method → gin's 405.
+			s.write405(w, r, servConf, tr, allow)
+			return
+		}
+		// Unknown path → gin's 404.
+		s.handleFallback(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("GET /api/version", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleVersion(w, r, servConf, tr)
@@ -821,6 +847,14 @@ func (s *OllamaStrategy) personaLocation() *time.Location {
 // "2024-08-01T14:23:11.123456789-07:00") and keeps the offset coherent
 // with where the persona claims to be hosted.
 func (s *OllamaStrategy) modelModifiedAt(modelName string) string {
+	return s.modelModifiedTime(modelName).Format(time.RFC3339Nano)
+}
+
+// modelModifiedTime is the deterministic apparent mtime backing both /api/tags
+// /api/show modified_at (RFC3339Nano) and /v1/models created (unix). Keeping a
+// single source means the same model reports a consistent mtime across every
+// surface — a divergence there would itself be a tell.
+func (s *OllamaStrategy) modelModifiedTime(modelName string) time.Time {
 	loc := s.personaLocation()
 	slug := s.personaOrEmpty().Slug
 	seed := slug + "/" + modelName
@@ -833,8 +867,12 @@ func (s *OllamaStrategy) modelModifiedAt(modelName string) string {
 		raw = raw<<8 | uint64(sum[i])
 	}
 	offsetNs := raw % sixDaysNs
-	t := time.Now().Add(-time.Duration(offsetNs)).In(loc)
-	return t.Format(time.RFC3339Nano)
+	return time.Now().Add(-time.Duration(offsetNs)).In(loc)
+}
+
+// modelModifiedUnix is the model's apparent mtime as a unix timestamp (/v1/models created).
+func (s *OllamaStrategy) modelModifiedUnix(modelName string) int64 {
+	return s.modelModifiedTime(modelName).Unix()
 }
 
 // defaultModelName returns the first configured model or a fallback.
@@ -909,7 +947,7 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 			Name:       m.Name,
 			Model:      m.Name,
 			ModifiedAt: s.modelModifiedAt(m.Name),
-			Size:       sizeFromParam(m.ParameterSize),
+			Size:       s.modelSizeBytes(m),
 			Digest:     s.stableDigestHex(m.Name),
 		}
 		e.Details.Format = "gguf"
@@ -948,10 +986,10 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 		running = append(running, map[string]interface{}{
 			"name":           m.Name,
 			"model":          m.Name,
-			"size":           sizeFromParam(m.ParameterSize),
+			"size":           s.modelSizeBytes(m),
 			"digest":         s.stableDigestHex(m.Name),
 			"expires_at":     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
-			"size_vram":      sizeFromParam(m.ParameterSize),
+			"size_vram":      s.modelSizeBytes(m),
 			"context_length": 4096,
 			"details": map[string]interface{}{
 				"parent_model":       "",
@@ -1268,69 +1306,44 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		return
 	}
 
-	// Find model details (we know it exists from modelExists check above)
-	var family, paramSize, quantLevel string
+	// Find the advertised model (we know it exists from modelExists above).
+	var model parser.OllamaModel
 	for _, m := range s.models {
 		if m.Name == req.Model {
-			family = m.Family
-			paramSize = m.ParameterSize
-			quantLevel = m.QuantizationLevel
+			model = m
 			break
 		}
 	}
 
-	pCount := paramCountFromSize(paramSize)
-	host, _ := s.clientIP(r)
-	modelInfo := map[string]interface{}{
-		"general.architecture":         family,
-		"general.parameter_count":      pCount,
-		"general.quantization_version": 2,
-		"general.file_type":            2,
-		"general.context_length":       4096,
-		"general.embedding_length":     4096,
+	// Serve the capture-grounded /api/show payload: model_info + tensors +
+	// template + parameters + license are byte-faithful to the genuine GGUF,
+	// captured from a real Ollama instance. modified_at is regenerated per host;
+	// a custom fine-tune's SYSTEM directive (where a credential canary naturally
+	// lives) + top-level system + details.parent_model are injected from config.
+	var out []byte
+	if s.showFixtures != nil {
+		out = s.showFixtures.showResponseFor(model, req.Model, s.modelModifiedAt(req.Model))
 	}
-
-	// Cross-protocol: enrich model_info for IPs seen on other protocols
-	if s.Bridge != nil {
-		if s.Bridge.HasFlag(host, "mcp_tool_call") {
-			modelInfo["cdf.mcp_integration"] = true
-			modelInfo["cdf.mcp_endpoint"] = "http://localhost:8000/mcp"
+	if out == nil {
+		// No fixture backs this model — emit a minimal real-shaped payload rather
+		// than a fabricated model_info (which is the historical tell). This path
+		// should not be reached for any advertised model.
+		fallback := map[string]interface{}{
+			"modelfile": "# Modelfile generated by \"ollama show\"\n# To build a new Modelfile based on this, replace FROM with:\n# FROM " + req.Model + "\n",
+			"details": map[string]interface{}{
+				"parent_model":       "",
+				"format":             "gguf",
+				"family":             model.Family,
+				"families":           []string{model.Family},
+				"parameter_size":     model.ParameterSize,
+				"quantization_level": model.QuantizationLevel,
+			},
+			"modified_at": s.modelModifiedAt(req.Model),
 		}
-		if s.Bridge.HasFlag(host, "ssh_authenticated") {
-			vaultAddr := s.personaOrEmpty().Coherence.VaultAddr
-			if vaultAddr == "" {
-				vaultAddr = s.personaOrEmpty().Identity.InternalDomain
-			}
-			if vaultAddr != "" {
-				modelInfo["cdf.credential_vault"] = "https://vault." + vaultAddr + ":8200"
-			}
-			modelInfo["cdf.ssh_config_available"] = true
-		}
-		discoveries := s.Bridge.GetDiscoveries(host)
-		if len(discoveries) > 0 {
-			modelInfo["cdf.service_credentials_available"] = true
-		}
-	}
-
-	showResp := map[string]interface{}{
-		"modelfile":  fmt.Sprintf("FROM %s", req.Model),
-		"parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
-		"template":   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
-		"details": map[string]interface{}{
-			"parent_model":       "",
-			"format":             "gguf",
-			"family":             family,
-			"families":           []string{family},
-			"parameter_size":     paramSize,
-			"quantization_level": quantLevel,
-		},
-		"model_info":   modelInfo,
-		"license":      "Meta Llama 3.1 Community License Agreement",
-		"capabilities": []string{"completion"},
+		out, _ = json.Marshal(fallback)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	out, _ := json.Marshal(showResp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(out), string(body))
 }
@@ -1535,23 +1548,39 @@ func (s *OllamaStrategy) handleDelete(w http.ResponseWriter, r *http.Request, se
 	s.checkBridgeAndCapture(r, "ollama/delete")
 	body := s.readBody(r)
 
+	// Real Ollama 400's with {"error":"missing request body"} when DELETE arrives
+	// with no body — BEFORE any model lookup. The previous code treated empty body
+	// as a 404, a behavioral tell (real Ollama distinguishes "no body" from "model
+	// not found").
+	if len(bytes.TrimSpace(body)) == 0 {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"missing request body"}`)
+		s.traceEvent(r, tr, servConf, "ollama/delete", "", "[400:missing-body]", string(body))
+		return
+	}
+
 	var req struct {
-		Name string `json:"name"`
+		Model string `json:"model"`
+		Name  string `json:"name"` // fallback for older clients
 	}
 	json.Unmarshal(body, &req)
+	if req.Model == "" {
+		req.Model = req.Name
+	}
 
 	// Real Ollama 404's on unknown models with a typed error envelope.
 	// Blanket 200 on any name was an easy "delete anything-you-like"
 	// fingerprint.
-	if req.Name == "" || !s.modelExists(req.Name) {
+	if !s.modelExists(req.Model) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, `{"error":"model '%s' not found"}`, req.Name)
-		s.traceEvent(r, tr, servConf, "ollama/delete", req.Name, "[404:not-found]", string(body))
+		fmt.Fprintf(w, `{"error":"model '%s' not found"}`, req.Model)
+		s.traceEvent(r, tr, servConf, "ollama/delete", req.Model, "[404:not-found]", string(body))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	s.traceEvent(r, tr, servConf, "ollama/delete", req.Name, "deleted", string(body))
+	s.traceEvent(r, tr, servConf, "ollama/delete", req.Model, "deleted", string(body))
 }
 
 // --- OpenAI-compatible handlers ---
@@ -1561,9 +1590,13 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	body := s.readBody(r)
 	host, _ := s.clientIP(r)
 
-	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/chat", body) {
-		return
-	}
+	// Bare Ollama serves /v1/* with NO auth (real /v1/chat/completions returns 200
+	// without an Authorization header) and emits ONLY its own gin headers — never
+	// OpenAI edge headers (openai-organization, x-request-id, openai-processing-ms,
+	// HSTS). Auth-gating /v1 while /api is open was an internal-coherence tell (one
+	// server cannot half-auth its own API). Any bearer an attacker DOES send is
+	// still captured passively by checkBridgeAndCapture above. See operator
+	// decision 2026-06-10 (coherent bare-Ollama over the cred-prompt tier).
 
 	var req struct {
 		Model    string `json:"model"`
@@ -1588,15 +1621,24 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	if req.Model == "" {
 		req.Model = s.defaultModelName()
 	}
+	// Real Ollama /v1 404's on a model not in the local set (BEFORE generation)
+	// with a not_found_error envelope, CT application/json (no charset).
+	if !s.modelExists(req.Model) {
+		s.writeOpenAIModelNotFound(w, r, servConf, tr, "openai/chat", req.Model, body)
+		return
+	}
 
-	// OpenAI-compat: embedding models belong on /v1/embeddings, not here.
+	// An embedding model on /v1/chat: real Ollama returns 400 with the exact
+	// message `"<model>" does not support chat` (NOT OpenAI's "not a chat model /
+	// did you mean v1/embeddings" — that phrasing was an api.openai.com tell), CT
+	// application/json (no charset).
 	if isEmbeddingModel(req.Model) {
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "openai_embed_on_chat")
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		errResp := `{"error":{"message":"This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/embeddings?","type":"invalid_request_error","param":"model","code":"model_not_supported"}}`
+		errResp := fmt.Sprintf(`{"error":{"message":"\"%s\" does not support chat","type":"invalid_request_error","param":null,"code":null}}`, req.Model)
 		w.Write([]byte(errResp))
 		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, "[reject:embed_on_chat]", string(body))
 		return
@@ -1695,9 +1737,8 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	body := s.readBody(r)
 	host, _ := s.clientIP(r)
 
-	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/completions", body) {
-		return
-	}
+	// Bare Ollama serves /v1/* with no auth (see handleOpenAIChat). Bearer tokens
+	// are still captured passively via checkBridgeAndCapture.
 
 	var req struct {
 		Model   string `json:"model"`
@@ -1718,6 +1759,23 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	}
 	if req.Model == "" {
 		req.Model = s.defaultModelName()
+	}
+	if !s.modelExists(req.Model) {
+		s.writeOpenAIModelNotFound(w, r, servConf, tr, "openai/completions", req.Model, body)
+		return
+	}
+	// An embedding model on /v1/completions: real Ollama returns 400 with the
+	// exact message `"<model>" does not support generate`, CT application/json.
+	if isEmbeddingModel(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "openai_embed_on_completions")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		errResp := fmt.Sprintf(`{"error":{"message":"\"%s\" does not support generate","type":"invalid_request_error","param":null,"code":null}}`, req.Model)
+		w.Write([]byte(errResp))
+		s.traceEvent(r, tr, servConf, "openai/completions", req.Model, "[reject:embed_on_generate]", string(body))
+		return
 	}
 
 	sess := s.getOrCreateSession(host)
@@ -1779,10 +1837,9 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 }
 
 type openAITextChoice struct {
-	Text         string    `json:"text"`
-	Index        int       `json:"index"`
-	Logprobs     *struct{} `json:"logprobs"`
-	FinishReason string    `json:"finish_reason"`
+	Text         string `json:"text"`
+	Index        int    `json:"index"`
+	FinishReason string `json:"finish_reason"`
 }
 
 type openAITextCompletion struct {
@@ -1790,26 +1847,24 @@ type openAITextCompletion struct {
 	Object            string             `json:"object"`
 	Created           int64              `json:"created"`
 	Model             string             `json:"model"`
+	SystemFingerprint string             `json:"system_fingerprint"`
 	Choices           []openAITextChoice `json:"choices"`
 	Usage             openAIUsage        `json:"usage"`
-	SystemFingerprint string             `json:"system_fingerprint"`
 }
 
 func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model, response string, promptLen int) {
-	cmplID := "cmpl-" + randomAlnumN(29)
-	fingerprint := "fp_" + randomHexN(10)
 	promptTokens := promptLen/4 + 1
 	completionTokens := len(response) / 4
 
 	resp := openAITextCompletion{
-		ID:      cmplID,
-		Object:  "text_completion",
-		Created: time.Now().Unix(),
-		Model:   model,
+		ID:                s.openAICmplID("cmpl-"),
+		Object:            "text_completion",
+		Created:           time.Now().Unix(),
+		Model:             model,
+		SystemFingerprint: ollamaSystemFingerprint,
 		Choices: []openAITextChoice{{
 			Text:         response,
 			Index:        0,
-			Logprobs:     nil,
 			FinishReason: "stop",
 		}},
 		Usage: openAIUsage{
@@ -1817,10 +1872,8 @@ func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model,
 			CompletionTokens: completionTokens,
 			TotalTokens:      promptTokens + completionTokens,
 		},
-		SystemFingerprint: fingerprint,
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("X-Platform", s.platformHeader())
+	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -1828,9 +1881,8 @@ func (s *OllamaStrategy) writeOpenAITextCompletion(w http.ResponseWriter, model,
 func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "openai/models")
 
-	if !s.requireOpenAIAuth(w, r, tr, servConf, "openai/models", nil) {
-		return
-	}
+	// Bare Ollama serves GET /v1/models with no auth (real returns 200 +
+	// {"object":"list","data":[...]}). See handleOpenAIChat for the rationale.
 
 	type openAIModel struct {
 		ID      string `json:"id"`
@@ -1839,37 +1891,17 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 		OwnedBy string `json:"owned_by"`
 	}
 
-	// Pin created timestamps to per-model deterministic values derived from
-	// a hash of the name. Real OpenAI emits distinct per-model created
-	// timestamps (e.g. gpt-4o = 1715367049, gpt-3.5-turbo = 1677610602);
-	// identical created across every model is a trivial tell.
-	//
-	// owned_by MUST match the real OpenAI vocabulary: "system" (gpt-3.5+),
-	// "openai" (dall-e, whisper, text-embedding-*), "openai-internal"
-	// (experimental), "user-<orgid>" (fine-tunes). "library" is an
-	// Ollama-ism; emitting it on /v1/models is a honeypot giveaway.
-	pickOwner := func(name string) string {
-		lower := strings.ToLower(name)
-		switch {
-		case strings.Contains(lower, "whisper"), strings.Contains(lower, "dall-e"),
-			strings.Contains(lower, "embedding"), strings.Contains(lower, "tts-"):
-			return "openai"
-		case strings.Contains(lower, "ft:"), strings.HasPrefix(lower, "user-"):
-			return "user-" + randomAlnumN(24)
-		default:
-			return "system"
-		}
-	}
+	// Real Ollama /v1/models emits owned_by:"library" for EVERY model (not
+	// OpenAI's "system"/"openai" vocabulary — we are Ollama, not api.openai.com)
+	// and created == the model's file mtime as a unix timestamp (same per-model
+	// value /api/tags surfaces as modified_at).
 	var models []openAIModel
 	for _, m := range s.models {
-		h := sha256.Sum256([]byte(m.Name))
-		// Distribute across 2022-2024 (real OpenAI model creation epoch range).
-		created := int64(1640995200) + int64(uint32(h[0])<<24|uint32(h[1])<<16|uint32(h[2])<<8|uint32(h[3]))%int64(94608000)
 		models = append(models, openAIModel{
 			ID:      m.Name,
 			Object:  "model",
-			Created: created,
-			OwnedBy: pickOwner(m.Name),
+			Created: s.modelModifiedUnix(m.Name),
+			OwnedBy: "library",
 		})
 	}
 
@@ -1878,10 +1910,49 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 		Data   []openAIModel `json:"data"`
 	}{Object: "list", Data: models}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// Real Ollama /v1 success: Content-Type application/json (NO charset).
+	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "openai/models", "GET /v1/models", string(out), "")
+}
+
+// ollamaRouteAllow maps each mounted route path to the EXACT Allow-header value
+// real Ollama (gin) returns on a 405. Captured from a genuine instance: GET
+// routes that ALSO register HEAD ("/", "/api/version", "/api/tags") advertise
+// "HEAD, GET"; "/api/ps" registers GET only; POST/DELETE routes advertise just
+// their verb. The order/spacing is gin's and is matched byte-for-byte. A path
+// absent from this map is unknown → 404 (not 405), exactly like gin's NoRoute.
+var ollamaRouteAllow = map[string]string{
+	"/":                    "HEAD, GET",
+	"/api/version":         "HEAD, GET",
+	"/api/tags":            "HEAD, GET",
+	"/api/ps":              "GET",
+	"/api/chat":            "POST",
+	"/api/show":            "POST",
+	"/api/generate":        "POST",
+	"/api/embed":           "POST",
+	"/api/embeddings":      "POST",
+	"/api/pull":            "POST",
+	"/api/delete":          "DELETE",
+	"/v1/models":           "GET",
+	"/v1/chat/completions": "POST",
+	"/v1/completions":      "POST",
+}
+
+// write405 reproduces gin's method-not-allowed response byte-for-byte: status
+// 405, Allow header (gin's exact value/order), Content-Type "text/plain" (NO
+// charset — gin omits it here), body "405 method not allowed" (no trailing
+// newline). net/http appends Date + Content-Length; Go serializes the header map
+// alphabetically (Allow before Content-Type), matching gin's wire order.
+func (s *OllamaStrategy) write405(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, allow string) {
+	s.checkBridgeAndCapture(r, "ollama/method-not-allowed")
+	w.Header().Set("Allow", allow)
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	resp := "405 method not allowed"
+	fmt.Fprint(w, resp)
+	s.traceEvent(r, tr, servConf, "ollama/method-not-allowed", r.Method+" "+r.URL.Path, resp, "")
 }
 
 func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
@@ -2100,46 +2171,53 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 	w.Write(out)
 }
 
-// --- OpenAI response types --------------------------------------------------
+// --- /v1 (Ollama OpenAI-compat) response types ------------------------------
 //
-// These shapes are DELIBERATE structs (not map[string]interface{}) because
-// real api.openai.com uses Go-style struct marshaling with deterministic
-// field ordering. A map-based response yields alphabetical field order on
-// the wire, which is the single easiest Censys/Shodan banner signature.
-// Field ORDER in the struct definition below is the order OpenAI emits on
-// the wire — do not reorder without checking a real capture.
+// These mirror OLLAMA's openai-compat layer (ollama/openai/openai.go), NOT
+// api.openai.com — we ARE an Ollama instance. Ollama's /v1 is a deliberate
+// SUBSET of OpenAI: system_fingerprint is the constant "fp_ollama"; ids are
+// "chatcmpl-<rand 0-999>" / "cmpl-<rand 0-999>"; there is NO refusal, logprobs,
+// service_tier, or *_tokens_details; usage is the bare three counters; and
+// success responses carry ONLY Content-Type (no charset, no X-Platform, no
+// openai-* edge headers). Struct field order == Ollama's wire order, captured
+// from the live oracle. Emitting OpenAI's richer schema here was the tell.
+
+const ollamaSystemFingerprint = "fp_ollama"
+
+// openAICmplID builds an Ollama-compat completion id: prefix + a small random
+// integer (real Ollama uses rand.Intn(1000): observed 66, 322, 918, ...).
+func (s *OllamaStrategy) openAICmplID(prefix string) string {
+	s.rngMu.Lock()
+	n := s.rng.Intn(1000)
+	s.rngMu.Unlock()
+	return fmt.Sprintf("%s%d", prefix, n)
+}
+
+// writeOpenAIModelNotFound reproduces real Ollama's /v1 unknown-model response:
+// 404, Content-Type application/json (NO charset), not_found_error envelope.
+func (s *OllamaStrategy) writeOpenAIModelNotFound(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, handler, model string, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	resp := fmt.Sprintf(`{"error":{"message":"model '%s' not found","type":"not_found_error","param":null,"code":null}}`, model)
+	fmt.Fprint(w, resp)
+	s.traceEvent(r, tr, servConf, handler, model, resp, string(body))
+}
 
 type openAIChatMessage struct {
-	Role    string  `json:"role"`
-	Content string  `json:"content"`
-	Refusal *string `json:"refusal"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type openAIChatChoice struct {
 	Index        int               `json:"index"`
 	Message      openAIChatMessage `json:"message"`
-	Logprobs     *struct{}         `json:"logprobs"`
 	FinishReason string            `json:"finish_reason"`
 }
 
-type openAIPromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-	AudioTokens  int `json:"audio_tokens"`
-}
-
-type openAICompletionTokensDetails struct {
-	ReasoningTokens          int `json:"reasoning_tokens"`
-	AudioTokens              int `json:"audio_tokens"`
-	AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
-	RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
-}
-
 type openAIUsage struct {
-	PromptTokens            int                           `json:"prompt_tokens"`
-	CompletionTokens        int                           `json:"completion_tokens"`
-	TotalTokens             int                           `json:"total_tokens"`
-	PromptTokensDetails     openAIPromptTokensDetails     `json:"prompt_tokens_details"`
-	CompletionTokensDetails openAICompletionTokensDetails `json:"completion_tokens_details"`
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type openAIChatCompletion struct {
@@ -2147,21 +2225,19 @@ type openAIChatCompletion struct {
 	Object            string             `json:"object"`
 	Created           int64              `json:"created"`
 	Model             string             `json:"model"`
+	SystemFingerprint string             `json:"system_fingerprint"`
 	Choices           []openAIChatChoice `json:"choices"`
 	Usage             openAIUsage        `json:"usage"`
-	SystemFingerprint string             `json:"system_fingerprint"`
-	ServiceTier       string             `json:"service_tier"`
 }
 
 type openAIChunkDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type openAIChunkChoice struct {
 	Index        int              `json:"index"`
 	Delta        openAIChunkDelta `json:"delta"`
-	Logprobs     *struct{}        `json:"logprobs"`
 	FinishReason *string          `json:"finish_reason"`
 }
 
@@ -2170,15 +2246,15 @@ type openAIChatChunk struct {
 	Object            string              `json:"object"`
 	Created           int64               `json:"created"`
 	Model             string              `json:"model"`
-	Choices           []openAIChunkChoice `json:"choices"`
 	SystemFingerprint string              `json:"system_fingerprint"`
-	ServiceTier       string              `json:"service_tier"`
+	Choices           []openAIChunkChoice `json:"choices"`
 }
 
 func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, response string) {
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-	w.Header().Set("X-Platform", s.platformHeader())
+	// Real Ollama /v1 SSE sets ONLY Content-Type: text/event-stream (no charset)
+	// and Transfer-Encoding: chunked (added automatically by net/http on flush).
+	// No Cache-Control, no X-Platform — those were tells.
+	w.Header().Set("Content-Type", "text/event-stream")
 	flusher, _ := w.(http.Flusher)
 
 	// Simulate prompt evaluation time (real LLMs pause before first token)
@@ -2188,84 +2264,36 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	s.rngMu.Unlock()
 	time.Sleep(promptEvalDelay + jitter)
 
-	chatID := "chatcmpl-" + randomAlnumN(29)
+	chatID := s.openAICmplID("chatcmpl-")
 	tokens := tokenizeResponse(response)
 	timing := timingForModel(model)
 	created := time.Now().Unix()
-	fingerprint := "fp_" + randomHexN(10)
 
-	emptyContent := ""
-	roleChunk := openAIChatChunk{
-		ID:      chatID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []openAIChunkChoice{{
-			Index:        0,
-			Delta:        openAIChunkDelta{Role: "assistant", Content: emptyContent},
-			FinishReason: nil,
-		}},
-		SystemFingerprint: fingerprint,
-		ServiceTier:       "default",
-	}
-	// Force the empty Content to serialize (omitempty would drop it, but
-	// real OpenAI emits `"content":""` in the first chunk). Work around by
-	// marshaling explicitly after the struct.
-	roleOut, _ := json.Marshal(struct {
-		openAIChatChunk
-		Choices []struct {
-			Index int `json:"index"`
-			Delta struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"delta"`
-			Logprobs     *struct{} `json:"logprobs"`
-			FinishReason *string   `json:"finish_reason"`
-		} `json:"choices"`
-	}{
-		openAIChatChunk: roleChunk,
-		Choices: []struct {
-			Index int `json:"index"`
-			Delta struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"delta"`
-			Logprobs     *struct{} `json:"logprobs"`
-			FinishReason *string   `json:"finish_reason"`
-		}{{
-			Index: 0,
-			Delta: struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			}{Role: "assistant", Content: ""},
-			Logprobs:     nil,
-			FinishReason: nil,
-		}},
-	})
-	fmt.Fprintf(w, "data: %s\n\n", roleOut)
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	for i, token := range tokens {
+	// Real Ollama emits NO empty priming chunk: every chunk (including the first)
+	// carries delta{role:"assistant", content:<token>}; the final chunk carries
+	// delta{role:"assistant", content:""} + finish_reason, then "data: [DONE]".
+	emit := func(content string, finish *string) {
 		chunk := openAIChatChunk{
-			ID:      chatID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   model,
+			ID:                chatID,
+			Object:            "chat.completion.chunk",
+			Created:           created,
+			Model:             model,
+			SystemFingerprint: ollamaSystemFingerprint,
 			Choices: []openAIChunkChoice{{
 				Index:        0,
-				Delta:        openAIChunkDelta{Content: token},
-				FinishReason: nil,
+				Delta:        openAIChunkDelta{Role: "assistant", Content: content},
+				FinishReason: finish,
 			}},
-			SystemFingerprint: fingerprint,
-			ServiceTier:       "default",
 		}
 		out, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", out)
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+
+	for i, token := range tokens {
+		emit(token, nil)
 		if i < len(tokens)-1 {
 			s.rngMu.Lock()
 			delay := timing.tokenDelay(s.rng)
@@ -2275,21 +2303,7 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 	}
 
 	stop := "stop"
-	finalChunk := openAIChatChunk{
-		ID:      chatID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   model,
-		Choices: []openAIChunkChoice{{
-			Index:        0,
-			Delta:        openAIChunkDelta{},
-			FinishReason: &stop,
-		}},
-		SystemFingerprint: fingerprint,
-		ServiceTier:       "default",
-	}
-	out, _ := json.Marshal(finalChunk)
-	fmt.Fprintf(w, "data: %s\n\n", out)
+	emit("", &stop)
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher != nil {
 		flusher.Flush()
@@ -2297,24 +2311,18 @@ func (s *OllamaStrategy) streamOpenAIResponse(w http.ResponseWriter, model, resp
 }
 
 func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
-	chatID := "chatcmpl-" + randomAlnumN(29)
-	fingerprint := "fp_" + randomHexN(10)
 	promptTokens := promptLen/4 + 1
 	completionTokens := len(response) / 4
 
 	resp := openAIChatCompletion{
-		ID:      chatID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   model,
+		ID:                s.openAICmplID("chatcmpl-"),
+		Object:            "chat.completion",
+		Created:           time.Now().Unix(),
+		Model:             model,
+		SystemFingerprint: ollamaSystemFingerprint,
 		Choices: []openAIChatChoice{{
-			Index: 0,
-			Message: openAIChatMessage{
-				Role:    "assistant",
-				Content: response,
-				Refusal: nil,
-			},
-			Logprobs:     nil,
+			Index:        0,
+			Message:      openAIChatMessage{Role: "assistant", Content: response},
 			FinishReason: "stop",
 		}},
 		Usage: openAIUsage{
@@ -2322,11 +2330,10 @@ func (s *OllamaStrategy) writeOpenAINonStreaming(w http.ResponseWriter, model, r
 			CompletionTokens: completionTokens,
 			TotalTokens:      promptTokens + completionTokens,
 		},
-		SystemFingerprint: fingerprint,
-		ServiceTier:       "default",
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("X-Platform", s.platformHeader())
+	// Real Ollama /v1 success: Content-Type application/json (NO charset), no
+	// X-Platform, no openai-* headers.
+	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -2341,6 +2348,17 @@ func fmtHeaders(headers http.Header) string {
 		}
 	}
 	return b.String()
+}
+
+// modelSizeBytes returns the model's exact on-disk size. A configured SizeBytes
+// is the real registry value (e.g. llama3.1:8b-q4_K_M is exactly 4920753328
+// bytes) and is preferred; sizeFromParam is a coarse fallback that a precise
+// fingerprinter (who knows the real byte size of a named GGUF) would catch.
+func (s *OllamaStrategy) modelSizeBytes(m parser.OllamaModel) int64 {
+	if m.SizeBytes > 0 {
+		return m.SizeBytes
+	}
+	return sizeFromParam(m.ParameterSize)
 }
 
 func sizeFromParam(paramSize string) int64 {

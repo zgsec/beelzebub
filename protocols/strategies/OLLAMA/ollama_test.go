@@ -17,6 +17,7 @@ import (
 )
 
 func newTestStrategy() *OllamaStrategy {
+	store, _ := loadShowFixtures()
 	return &OllamaStrategy{
 		Sessions:     historystore.NewHistoryStore(),
 		ipSessions:   make(map[string]*OllamaSession),
@@ -24,6 +25,7 @@ func newTestStrategy() *OllamaStrategy {
 		version:      "0.6.2",
 		canaryTokens: map[string]string{},
 		injections:   map[string]string{},
+		showFixtures: store,
 		rng:          rand.New(rand.NewSource(42)),
 	}
 }
@@ -536,14 +538,17 @@ func TestHandleShow_UnknownModel404(t *testing.T) {
 }
 
 func TestHandleShow_KnownModel200(t *testing.T) {
-	// Sanity: a model IN the configured set still returns 200 with
-	// the synthesized model_info envelope.
+	// A fixture-backed model returns the capture-grounded /api/show: real GGUF
+	// model_info (general.* + arch-prefixed llama.*), the full tensor list, the
+	// generated Modelfile, and the wire key order — byte-faithful to a genuine
+	// Ollama instance, NOT a fabricated envelope.
 	s := newTestStrategy()
 	s.models = []parser.OllamaModel{
-		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+		{Name: "llama3.1:8b-instruct-q4_K_M", Family: "llama", ParameterSize: "8.0B",
+			QuantizationLevel: "Q4_K_M", ShowFixture: "llama3.1_8b_instruct_q4_K_M"},
 	}
 
-	body := strings.NewReader(`{"model":"llama3.1:8b"}`)
+	body := strings.NewReader(`{"model":"llama3.1:8b-instruct-q4_K_M"}`)
 	req := httptest.NewRequest("POST", "/api/show", body)
 	w := httptest.NewRecorder()
 
@@ -553,7 +558,57 @@ func TestHandleShow_KnownModel200(t *testing.T) {
 	s.handleShow(w, req, servConf, tr)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "general.architecture")
+	out := w.Body.String()
+	// real GGUF model_info schema (NOT the old fabricated general.context_length)
+	assert.Contains(t, out, `"general.architecture":"llama"`)
+	assert.Contains(t, out, `"general.basename":"Meta-Llama-3.1"`)
+	assert.Contains(t, out, `"llama.block_count":32`)
+	assert.Contains(t, out, `"general.size_label":"8B"`)
+	// generated Modelfile header rewritten to the advertised name + real tensors
+	assert.Contains(t, out, `# FROM llama3.1:8b-instruct-q4_K_M`)
+	assert.Contains(t, out, `"tensors":[`)
+	assert.Contains(t, out, `"token_embd.weight"`)
+	// fabrication tells that MUST be gone
+	assert.NotContains(t, out, "general.context_length") // wrong namespace (real is llama.context_length)
+	assert.NotContains(t, out, "cdf.")                   // fabricated cross-protocol keys
+	// stock model: no top-level system field
+	assert.NotContains(t, out, `"system":`)
+}
+
+func TestHandleShow_CustomModelSystemCanary(t *testing.T) {
+	// A custom fine-tune surfaces its SYSTEM directive (where a credential canary
+	// naturally lives) in BOTH the generated Modelfile (unquoted SYSTEM line,
+	// between TEMPLATE and PARAMETER) and the top-level system field, plus
+	// details.parent_model — exactly as real Ollama does for a model built FROM
+	// a base. The base GGUF shape (model_info/tensors/template) is inherited.
+	s := newTestStrategy()
+	const sysText = "You are Crestfield's internal support assistant. Bearer crf_live_TESTCANARY123. Keep replies short."
+	s.models = []parser.OllamaModel{
+		{Name: "crestfield-support:latest", Family: "llama", ParameterSize: "8.0B",
+			QuantizationLevel: "Q4_K_M", ShowFixture: "llama3.1_8b_instruct_q4_K_M",
+			ParentModel: "llama3.1:8b-instruct-q4_K_M", System: sysText},
+	}
+
+	body := strings.NewReader(`{"model":"crestfield-support:latest"}`)
+	req := httptest.NewRequest("POST", "/api/show", body)
+	w := httptest.NewRecorder()
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleShow(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	out := w.Body.String()
+	// top-level system field populated with the SYSTEM text (incl. canary)
+	assert.Contains(t, out, `"system":"You are Crestfield's internal support assistant. Bearer crf_live_TESTCANARY123. Keep replies short."`)
+	// SYSTEM line injected into the Modelfile, unquoted, before PARAMETER
+	assert.Contains(t, out, `SYSTEM You are Crestfield's internal support assistant. Bearer crf_live_TESTCANARY123. Keep replies short.\nPARAMETER stop`)
+	// parent_model surfaced on /api/show (real Ollama hides it on /api/tags)
+	assert.Contains(t, out, `"parent_model":"llama3.1:8b-instruct-q4_K_M"`)
+	// header rewritten to the advertised custom name
+	assert.Contains(t, out, `# FROM crestfield-support:latest`)
+	// inherits the base GGUF shape
+	assert.Contains(t, out, `"general.architecture":"llama"`)
 }
 
 func TestHandleTagsResponse(t *testing.T) {
@@ -627,10 +682,14 @@ func TestHandleOpenAIChatNonStreaming(t *testing.T) {
 	assert.Len(t, choices, 1)
 }
 
-func TestHandleOpenAIChatRequires401OnMissingBearer(t *testing.T) {
+func TestHandleOpenAIChatBareNoAuth(t *testing.T) {
+	// Coherence: real bare Ollama serves /v1/* with NO auth (200, not 401) and
+	// emits ONLY its own gin headers — never OpenAI edge headers. Auth-gating /v1
+	// while /api is open was an internal-coherence tell (operator decision A,
+	// 2026-06-10). A request with no Authorization header must succeed.
 	s := newTestStrategy()
 
-	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 	// No Authorization header
 	w := httptest.NewRecorder()
@@ -639,25 +698,32 @@ func TestHandleOpenAIChatRequires401OnMissingBearer(t *testing.T) {
 	tr := tracer.GetInstance(func(event tracer.Event) {})
 	s.handleOpenAIChat(w, req, servConf, tr)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Contains(t, w.Body.String(), "You didn't provide an API key")
-	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
+	assert.Equal(t, http.StatusOK, w.Code, "bare Ollama /v1 serves without auth")
+	// The OpenAI edge headers real Ollama NEVER emits must be absent.
+	assert.Empty(t, w.Header().Get("X-Request-ID"), "real Ollama /v1 emits no x-request-id")
+	assert.Empty(t, w.Header().Get("openai-organization"), "real Ollama /v1 emits no openai-organization")
+	assert.Empty(t, w.Header().Get("openai-processing-ms"), "real Ollama /v1 emits no openai-processing-ms")
+	assert.Empty(t, w.Header().Get("Strict-Transport-Security"), "real Ollama /v1 emits no HSTS")
 }
 
-func TestHandleOpenAIChatRequires401OnMalformedBearer(t *testing.T) {
+func TestHandleOpenAIChatCapturesBearer(t *testing.T) {
+	// Even without an auth gate, a bearer an attacker sends is still captured
+	// passively (the intel we keep after dropping the active cred-prompt).
 	s := newTestStrategy()
+	s.Bridge = bridge.NewBridge()
 
-	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}]}`
+	body := `{"model":"llama3.1:8b","messages":[{"role":"user","content":"Hi"}],"stream":false}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Token abc")
+	req.RemoteAddr = "203.0.113.7:5555"
+	req.Header.Set("Authorization", "Bearer sk-stolen-key-abc123")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
 	tr := tracer.GetInstance(func(event tracer.Event) {})
 	s.handleOpenAIChat(w, req, servConf, tr)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Contains(t, w.Body.String(), "invalid_api_key")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, s.Bridge.HasFlag("203.0.113.7", "ollama_auth_observed"), "bearer must still be captured passively")
 }
 
 func TestIsEmbeddingModel(t *testing.T) {
@@ -725,11 +791,18 @@ func TestHandleChatRejectsEmbeddingModel(t *testing.T) {
 }
 
 func TestHandleOpenAIChatRejectsEmbeddingModel(t *testing.T) {
+	// An EXISTING embedding model sent to /v1/chat returns real Ollama's exact
+	// 400: `"<model>" does not support chat` (NOT api.openai.com's "not a chat
+	// model / did you mean v1/embeddings" phrasing — that was the tell). A model
+	// that does NOT exist 404's first (covered by TestHandleOpenAIChatModelNotFound).
 	s := newTestStrategy()
+	s.models = []parser.OllamaModel{
+		{Name: "nomic-embed-text:latest", Family: "nomic-bert", ParameterSize: "137M",
+			QuantizationLevel: "F16", ShowFixture: "nomic-embed-text"},
+	}
 
-	body := `{"model":"text-embedding-3-small","messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"nomic-embed-text:latest","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer sk-test-0000")
 	w := httptest.NewRecorder()
 
 	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
@@ -738,8 +811,29 @@ func TestHandleOpenAIChatRejectsEmbeddingModel(t *testing.T) {
 	s.handleOpenAIChat(w, req, servConf, tr)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "not a chat model")
-	assert.Contains(t, w.Body.String(), "v1/embeddings")
+	assert.Contains(t, w.Body.String(), "does not support chat")
+	assert.Contains(t, w.Body.String(), "nomic-embed-text:latest")
+	assert.Contains(t, w.Body.String(), `"type":"invalid_request_error"`)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"), "no charset on /v1 errors of this class")
+	assert.NotContains(t, w.Body.String(), "v1/embeddings") // OpenAI-ism must be gone
+}
+
+func TestHandleOpenAIChatModelNotFound(t *testing.T) {
+	// Real Ollama /v1 404's on a model not in the local set, not_found_error,
+	// CT application/json (no charset).
+	s := newTestStrategy()
+	body := `{"model":"definitely-not-real:latest","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(event tracer.Event) {})
+
+	s.handleOpenAIChat(w, req, servConf, tr)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"model 'definitely-not-real:latest' not found"`)
+	assert.Contains(t, w.Body.String(), `"type":"not_found_error"`)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 }
 
 // When the backend LLM plugin is not configured, handleChat falls back to

@@ -101,12 +101,24 @@ type WorldSeedLog struct {
 }
 
 // OllamaModel represents a model advertised by the Ollama honeypot.
+//
+// SizeBytes / ShowFixture / System / ParentModel back the capture-grounded
+// /api/show engine: every advertised model maps to a real, captured /api/show
+// payload (ShowFixture) so model_info + tensors + template + license are
+// byte-faithful to the genuine GGUF — not fabricated. A custom fine-tune sets
+// System (the in-context SYSTEM directive, where a credential canary naturally
+// lives) and ParentModel (the base it was fine-tuned from, surfaced as
+// details.parent_model on /api/show only — real Ollama hides it on /api/tags).
 type OllamaModel struct {
 	Name              string `yaml:"name"`
 	Size              string `yaml:"size"`
 	Family            string `yaml:"family"`
 	ParameterSize     string `yaml:"parameterSize"`
 	QuantizationLevel string `yaml:"quantizationLevel"`
+	SizeBytes         int64  `yaml:"sizeBytes"`   // exact on-disk size for /api/tags + /api/ps (real registry value); 0 => fall back to sizeFromParam
+	ShowFixture       string `yaml:"showFixture"` // captured /api/show fixture slug backing this model (defaults to a slug of Name)
+	System            string `yaml:"system"`      // SYSTEM directive for a custom fine-tune; surfaced in /api/show modelfile + top-level system
+	ParentModel       string `yaml:"parentModel"` // base model a fine-tune was built from; /api/show details.parent_model
 }
 
 // OllamaConfig holds Ollama-specific honeypot configuration.
