@@ -976,9 +976,15 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	host, _ := s.clientIP(r)
 
 	var req struct {
-		Model  string `json:"model"`
-		Prompt string `json:"prompt"`
-		Stream *bool  `json:"stream"`
+		Model   string `json:"model"`
+		Prompt  string `json:"prompt"`
+		Stream  *bool  `json:"stream"`
+		Options struct {
+			Temperature *float64 `json:"temperature"`
+			Seed        *int     `json:"seed"`
+		} `json:"options"`
+		Temperature *float64 `json:"temperature"` // OpenAI-format (top-level) fallback
+		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -1098,7 +1104,13 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"messages"`
-		Stream *bool `json:"stream"`
+		Stream  *bool `json:"stream"`
+		Options struct {
+			Temperature *float64 `json:"temperature"`
+			Seed        *int     `json:"seed"`
+		} `json:"options"`
+		Temperature *float64 `json:"temperature"` // OpenAI-format (top-level) fallback
+		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -1189,7 +1201,8 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	}
 	var response string
 	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
-		response = ans
+		// temperature-faithful surface variation (no-op for constrained probes)
+		response = s.varyReply(fv, req.Model, ans, firstTemp(req.Options.Temperature, req.Temperature), firstSeed(req.Options.Seed, req.Seed))
 	}
 	gateLabel := probeLabel(fv)
 
@@ -1557,7 +1570,13 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"messages"`
-		Stream *bool `json:"stream"`
+		Stream  *bool `json:"stream"`
+		Options struct {
+			Temperature *float64 `json:"temperature"`
+			Seed        *int     `json:"seed"`
+		} `json:"options"`
+		Temperature *float64 `json:"temperature"` // OpenAI-format (top-level)
+		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1645,7 +1664,8 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 	}
 	var response string
 	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
-		response = ans
+		// temperature-faithful surface variation (no-op for constrained probes)
+		response = s.varyReply(fv, req.Model, ans, firstTemp(req.Options.Temperature, req.Temperature), firstSeed(req.Options.Seed, req.Seed))
 	}
 	gateLabel := probeLabel(fv)
 
@@ -1679,9 +1699,15 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	}
 
 	var req struct {
-		Model  string `json:"model"`
-		Prompt string `json:"prompt"`
-		Stream *bool  `json:"stream"`
+		Model   string `json:"model"`
+		Prompt  string `json:"prompt"`
+		Stream  *bool  `json:"stream"`
+		Options struct {
+			Temperature *float64 `json:"temperature"`
+			Seed        *int     `json:"seed"`
+		} `json:"options"`
+		Temperature *float64 `json:"temperature"` // OpenAI-format (top-level) fallback
+		Seed        *int     `json:"seed"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -1729,7 +1755,8 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	}
 	var response string
 	if ans, ok := RespondFromFeatures(fv, req.Model); ok {
-		response = ans
+		// temperature-faithful surface variation (no-op for constrained probes)
+		response = s.varyReply(fv, req.Model, ans, firstTemp(req.Options.Temperature, req.Temperature), firstSeed(req.Options.Seed, req.Seed))
 	}
 	gateLabel := probeLabel(fv)
 
