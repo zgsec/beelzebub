@@ -18,6 +18,10 @@ func TestRespondFromFeatures(t *testing.T) {
 	check("Reply with exactly one word: pong", "pong")
 	check("Repeat exactly: NEONMIRROR-PROBE-7B2A8621-CANARY", "NEONMIRROR-PROBE-7B2A8621-CANARY")
 	check("which is bigger, the sun or the moon?", "the sun")
+	check("ping", "Pong!")
+	check("Say OK", "Okay! What can I help you with?")
+	check("Respond with ONLY the word 'pong'. Nothing else.", "pong")
+	check(`Say "OPEN" and nothing else.`, "OPEN")
 	if a, ok := RespondFromFeatures(ExtractFeatures("what model are you?"), model); !ok || !strings.Contains(a, model) || strings.Contains(strings.ToLower(a), "gpt") {
 		t.Errorf("identity = %q,%v", a, ok)
 	}

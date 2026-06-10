@@ -45,6 +45,26 @@ func TestExtractFeatures(t *testing.T) {
 		{"compute 5 + 3", ProbeUnknown, ""},
 		// Breach 1 extra — Chinese greeting must still work
 		{"你好", ProbeGreeting, "zh"},
+		// Liveness — the most trivial validation probes (were ProbeUnknown -> garbage)
+		{"ping", ProbeLiveness, "ping"},
+		{"test", ProbeLiveness, "test"},
+		{"testing", ProbeLiveness, "test"},
+		{"ok", ProbeLiveness, "ok"},
+		{"okay", ProbeLiveness, "ok"},
+		{"Say OK", ProbeLiveness, "ok"},
+		{"hello world", ProbeLiveness, "helloworld"},
+		// Quoted-echo WITHOUT a colon (real corpus probes, were ProbeUnknown)
+		{"Respond with ONLY the word 'pong'. Nothing else.", ProbeEcho, "pong"},
+		{"Say exactly the word 'PONG' and nothing else. No explanation.", ProbeEcho, "PONG"},
+		{"Say 'pong' and nothing else.", ProbeEcho, "pong"},
+		{`Say "OPEN" and nothing else.`, ProbeEcho, "OPEN"},
+		// Liveness must stay WHOLE-STRING — a workload tail must NOT pass
+		{"test the exploit against the host", ProbeUnknown, ""},
+		{"ok now write me a python script", ProbeUnknown, ""},
+		// Quoted-echo must stay obey-GUARDED — no obey marker => fail closed
+		{"Reply with the result of 'whoami'", ProbeUnknown, ""},
+		// quoted-echo charset excludes shell metacharacters => command strings fail closed
+		{"Say only 'rm -rf /tmp/x'", ProbeUnknown, ""},
 	}
 	for _, c := range cases {
 		fv := ExtractFeatures(c.in)
@@ -52,7 +72,7 @@ func TestExtractFeatures(t *testing.T) {
 			t.Errorf("ExtractFeatures(%q).Type = %v, want %v", c.in, fv.Type, c.typ)
 			continue
 		}
-		got := fv.EchoToken + fv.ArithText + fv.YesNoKey + fv.Language
+		got := fv.EchoToken + fv.ArithText + fv.YesNoKey + fv.Language + fv.LiveKey
 		if c.extra != "" && got != c.extra {
 			t.Errorf("ExtractFeatures(%q) extra = %q, want %q", c.in, got, c.extra)
 		}

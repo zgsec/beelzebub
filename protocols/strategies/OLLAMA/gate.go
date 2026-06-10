@@ -15,6 +15,7 @@ const (
 	ProbeIdentity
 	ProbeYesNo
 	ProbeGreeting
+	ProbeLiveness // pure liveness ping/test/ok — the most trivial validation probes
 )
 
 // FeatureVector is the ONLY thing derived from a prompt that flows to the
@@ -25,6 +26,7 @@ type FeatureVector struct {
 	ArithText string
 	YesNoKey  string
 	Language  string
+	LiveKey   string // which liveness reply (ping/test/ok/...) — bounded enum, not free text
 	IsCanary  bool
 }
 
@@ -38,6 +40,14 @@ var (
 	reIdent     = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??$`)
 	reYesNo     = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
 	reArithOnly = regexp.MustCompile(`^[\s\d().+\-*/?]+$`)
+	// Quoted-echo WITHOUT a trailing colon ("Respond with ONLY the word 'pong'.
+	// Nothing else."). Only fires alongside an obey marker (reObey) so a substantive
+	// quoted request can't slip the gate; bounded token charset; canary-safe.
+	reEchoQuoted = regexp.MustCompile(`(?i)\b(?:reply|respond|say|repeat|output|print|return)\b[^'"]{0,45}['"]([A-Za-z0-9_\- ]{1,60})['"]`)
+	reObey       = regexp.MustCompile(`(?i)\b(only|exactly|nothing else|single word|one word|just the word)\b`)
+	// Pure liveness — the most trivial "is anything alive here" probes. Whole-string
+	// match only (fail-closed on any tail), so "ok now write code" never matches.
+	reLiveness = regexp.MustCompile(`(?i)^\s*(?:please\s+)?(ping|test|testing|say\s+ok|ok|okay|hello\s+world)\s*[!.?]*\s*$`)
 )
 
 // arithStripWords are natural-language wrappers stripped before arithmetic validation.
@@ -139,6 +149,18 @@ func ExtractFeatures(prompt string) FeatureVector {
 		return FeatureVector{Type: ProbeEcho, EchoToken: tok,
 			IsCanary: strings.Contains(up, "CANARY") || strings.Contains(up, "PROBE")}
 	}
+	// Quoted-echo without a colon, but ONLY when an obey marker is present so a
+	// substantive quoted request ("reply with the result of '<cmd>'") fails closed.
+	if reObey.MatchString(p) {
+		if m := reEchoQuoted.FindStringSubmatch(p); m != nil {
+			tok := strings.TrimSpace(m[1])
+			up := strings.ToUpper(tok)
+			if tok != "" {
+				return FeatureVector{Type: ProbeEcho, EchoToken: tok,
+					IsCanary: strings.Contains(up, "CANARY") || strings.Contains(up, "PROBE")}
+			}
+		}
+	}
 	if taskIntent.MatchString(p) {
 		return FeatureVector{Type: ProbeUnknown}
 	}
@@ -159,6 +181,9 @@ func ExtractFeatures(prompt string) FeatureVector {
 	if lang, ok := classifyGreeting(p); ok {
 		return FeatureVector{Type: ProbeGreeting, Language: lang}
 	}
+	if m := reLiveness.FindStringSubmatch(p); m != nil {
+		return FeatureVector{Type: ProbeLiveness, LiveKey: livenessKey(m[1])}
+	}
 	return FeatureVector{Type: ProbeUnknown}
 }
 
@@ -168,6 +193,22 @@ func isArithOnly(p string) bool {
 		s = strings.ReplaceAll(s, w, "")
 	}
 	return reArithOnly.MatchString(s)
+}
+
+// livenessKey normalizes a matched liveness opener to a bounded reply key.
+func livenessKey(word string) string {
+	w := strings.ToLower(strings.TrimSpace(word))
+	switch w {
+	case "ping":
+		return "ping"
+	case "test", "testing":
+		return "test"
+	case "hello world":
+		return "helloworld"
+	case "say ok", "ok", "okay":
+		return "ok"
+	}
+	return "ok"
 }
 
 func applyOp(a, b int, op string) (string, bool) {

@@ -15,6 +15,16 @@ var yesNoAnswers = map[string]string{
 	"sun_moon": "the sun",
 }
 
+// livenessReplies: per-key canned lines for the most trivial validation probes.
+// Kept short and in the same terse-professional register as the greetings, so the
+// whole lure reads as one coherent assistant rather than one model per probe.
+var livenessReplies = map[string]string{
+	"ping":       "Pong!",
+	"test":       "I'm up and running. What can I help you with?",
+	"ok":         "Okay! What can I help you with?",
+	"helloworld": "Hello! How can I help?",
+}
+
 // RespondFromFeatures emits a contained answer derived ONLY from the bounded
 // feature vector. It takes no prompt and reaches no model. ProbeUnknown (and any
 // unfilled field) returns ("", false) so the caller serves coherent non-delivery.
@@ -36,6 +46,10 @@ func RespondFromFeatures(fv FeatureVector, advertisedModel string) (string, bool
 		}
 	case ProbeGreeting:
 		if g, ok := greetings[fv.Language]; ok {
+			return g, true
+		}
+	case ProbeLiveness:
+		if g, ok := livenessReplies[fv.LiveKey]; ok {
 			return g, true
 		}
 	}
