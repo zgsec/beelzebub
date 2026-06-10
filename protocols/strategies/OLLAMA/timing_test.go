@@ -100,15 +100,20 @@ func TestGenRatePlausibleAndMonotonicInSize(t *testing.T) {
 		env := timingForModel(model).durations(11, 100, 0, false, rng)
 		return float64(100) / (float64(env.Eval) / 1e9) // tok/s
 	}
-	big, small := rate("llama3.1:70b"), rate("llama3.1:8b")
-	if big >= small {
-		t.Errorf("70b (%.1f tok/s) must be slower than 8b (%.1f tok/s)", big, small)
+	big, mid, small := rate("llama3.1:70b"), rate("qwen2.5-coder:32b"), rate("llama3.1:8b")
+	if !(big < mid && mid < small) {
+		t.Errorf("gen rate must increase as size shrinks: 70b=%.1f 32b=%.1f 8b=%.1f", big, mid, small)
 	}
-	if big < 1 || big > 20 {
-		t.Errorf("70b gen rate %.1f tok/s implausible for the claimed size", big)
+	// Bands for the emulated fast multi-GPU box (calibrated 2026-06-10): memory-
+	// bound scaling anchors 70B ~18 tok/s, 32B ~38 tok/s, 8B ~130 tok/s.
+	if big < 12 || big > 25 {
+		t.Errorf("70b gen rate %.1f tok/s implausible for a fast-GPU 70B", big)
 	}
-	if small < 8 || small > 80 {
-		t.Errorf("8b gen rate %.1f tok/s implausible for the claimed size", small)
+	if mid < 28 || mid > 50 {
+		t.Errorf("32b gen rate %.1f tok/s implausible for a fast-GPU 32B", mid)
+	}
+	if small < 90 || small > 170 {
+		t.Errorf("8b gen rate %.1f tok/s implausible for a fast-GPU 8B", small)
 	}
 }
 

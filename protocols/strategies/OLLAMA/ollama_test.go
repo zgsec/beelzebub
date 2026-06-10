@@ -247,15 +247,19 @@ func TestSessionEscalation(t *testing.T) {
 }
 
 func TestTimingProfile(t *testing.T) {
+	// Per-token delays for the emulated fast multi-GPU box (calibrated
+	// 2026-06-10): 8B ~8ms (~130 tok/s), 13B ~13ms, 32B ~26ms (~38 tok/s),
+	// 70B ~55ms (~18 tok/s). Bigger model => larger delay.
 	tests := []struct {
 		model    string
 		expected int
 	}{
-		{"llama3.1:8b", 40},
-		{"mistral:7b", 40},
-		{"codellama:13b", 120},
-		{"llama2:70b", 250},
-		{"nomic-embed-text", 40},
+		{"llama3.1:8b", 8},
+		{"mistral:7b", 8},
+		{"codellama:13b", 13},
+		{"qwen2.5-coder:32b", 26},
+		{"llama2:70b", 55},
+		{"nomic-embed-text", 8},
 	}
 
 	for _, tt := range tests {

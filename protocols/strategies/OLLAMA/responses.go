@@ -98,10 +98,18 @@ func categorizePrompt(prompt string) PromptCategory {
 	return CategoryGeneral
 }
 
-// TimingProfile controls per-token streaming delays based on model size. The
-// numbers model a capable single-GPU box (the "gold-mine" persona) — NOT the Orin
-// the oracle runs on (5-6 tok/s, 60-100s cold load), which is far too slow to be
-// believable. Keep gen-rate; project load/prompt-eval to this profile.
+// TimingProfile controls per-token streaming delays based on model size.
+//
+// Calibrated 2026-06-10 against live-Jetson measurements (8B q4_K_M: 7.7 tok/s
+// gen, 67 tok/s prompt, 15.3s cold load, 444ms warm, inter-token CoV ~0.48) and
+// projected onto the emulated hardware: a well-provisioned multi-GPU box (the
+// "worth hijacking" persona), NOT the Orin the oracle runs on (far too slow to
+// be believable). The Jetson gives us the SHAPE (cold/warm split, prompt >> gen
+// rate, per-token jitter); the absolute throughput is set for a fast GPU box and
+// scales memory-bound (tok/s roughly inversely proportional to active params),
+// so the catalog's rates are mutually coherent on one machine: 70B ~18 tok/s,
+// 32B ~38 tok/s, 8B ~130 tok/s. Big-model cold loads are deliberately long
+// (a real 43GB load is ~18-26s) — realistic AND it tarpits the attacker.
 type TimingProfile struct {
 	TokenDelayMs       int // per-generated-token streaming delay (gen rate)
 	JitterMs           int
@@ -109,16 +117,24 @@ type TimingProfile struct {
 	PromptEvalMsPerTok int // prompt-eval cost per prompt token (was a hardcoded 50ms)
 }
 
-// timingForModel returns streaming timing based on model name patterns.
+// timingForModel returns streaming timing based on model name patterns. Jitter
+// is ~0.6x the token delay (CoV ~0.35 — a datacenter GPU is steadier than the
+// Jetson's 0.48, but still visibly non-constant).
 func timingForModel(model string) TimingProfile {
 	lower := strings.ToLower(model)
 	switch {
 	case strings.Contains(lower, ":70b") || strings.Contains(lower, ":72b") || strings.Contains(lower, ":65b"):
-		return TimingProfile{TokenDelayMs: 250, JitterMs: 80, LoadDurationMs: 3000 + rand.Intn(3000), PromptEvalMsPerTok: 6}
-	case strings.Contains(lower, ":13b") || strings.Contains(lower, ":14b") || strings.Contains(lower, ":34b") || strings.Contains(lower, ":35b"):
-		return TimingProfile{TokenDelayMs: 120, JitterMs: 40, LoadDurationMs: 1200 + rand.Intn(1300), PromptEvalMsPerTok: 3}
+		// ~18 tok/s gen, ~200 tok/s prompt, 43GB cold load ~18-26s.
+		return TimingProfile{TokenDelayMs: 55, JitterMs: 33, LoadDurationMs: 18000 + rand.Intn(8000), PromptEvalMsPerTok: 5}
+	case strings.Contains(lower, ":30b") || strings.Contains(lower, ":32b") || strings.Contains(lower, ":33b") || strings.Contains(lower, ":34b") || strings.Contains(lower, ":35b"):
+		// ~38 tok/s, ~20GB cold load ~9-14s.
+		return TimingProfile{TokenDelayMs: 26, JitterMs: 16, LoadDurationMs: 9000 + rand.Intn(5000), PromptEvalMsPerTok: 3}
+	case strings.Contains(lower, ":13b") || strings.Contains(lower, ":14b"):
+		// ~75 tok/s.
+		return TimingProfile{TokenDelayMs: 13, JitterMs: 8, LoadDurationMs: 4000 + rand.Intn(3000), PromptEvalMsPerTok: 2}
 	default:
-		return TimingProfile{TokenDelayMs: 40, JitterMs: 15, LoadDurationMs: 800 + rand.Intn(700), PromptEvalMsPerTok: 2}
+		// 7-8B ~130 tok/s, ~5GB cold load ~2.5-4s.
+		return TimingProfile{TokenDelayMs: 8, JitterMs: 5, LoadDurationMs: 2500 + rand.Intn(1500), PromptEvalMsPerTok: 1}
 	}
 }
 

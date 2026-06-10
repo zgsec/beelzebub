@@ -1972,10 +1972,13 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 // --- Streaming helpers ---
 
 // maxPreTokenWait / maxNonStreamWait cap the realistic load+eval waits so a cold
-// big-model probe tarpits the client believably without holding a goroutine forever.
+// big-model probe tarpits the client believably without holding a goroutine
+// forever. Sized to admit a real 70B cold load (~18-26s) so the pre-first-token
+// wait is genuine, not a constant-8s tell — and the longer hold wastes the
+// attacker's time, which is the point. Stays under the 30s ReadHeaderTimeout.
 const (
-	maxPreTokenWait  = 8 * time.Second
-	maxNonStreamWait = 10 * time.Second
+	maxPreTokenWait  = 28 * time.Second
+	maxNonStreamWait = 30 * time.Second
 )
 
 // streamTimingPrep builds the timing envelope for a streaming reply and performs the

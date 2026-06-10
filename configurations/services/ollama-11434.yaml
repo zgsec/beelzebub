@@ -72,42 +72,51 @@ ollamaConfig:
   # Crestfield's plausible posture is "recent stable, not bleeding-edge".
   version: "0.24.0"
 
-  # Catalog for a coherent "Crestfield internal support" box. EVERY model is
-  # oracle-grounded: its /api/show payload (model_info + tensors + template +
-  # license) is the EXACT capture of a real GGUF (showFixture), so deep
-  # fingerprinting of /api/show finds the genuine article, not a fabrication.
-  # sizeBytes are the real registry values (a precise fingerprinter knows
-  # llama3.1:8b-q4_K_M is exactly 4920753328 bytes). Per-sensor prod configs
-  # override names/canary to the deployed company persona.
+  # Catalog for a well-provisioned multi-GPU box worth hijacking: two 70B models
+  # (general + reasoning), a 32B coder, and an embedding model for RAG. EVERY
+  # model is oracle-grounded — its /api/show payload (model_info + tensors +
+  # template + license) is byte-exact for the REAL GGUF, reconstructed from the
+  # Ollama registry by tools/oracle-diff/gguf_oracle.py (validated byte-identical
+  # vs a live instance). sizeBytes are the real registry totals (sum of all layer
+  # blobs + config), so a precise fingerprinter who knows a model's on-disk size
+  # finds the genuine value. Per-sensor prod configs override names/canary to the
+  # deployed company persona.
   models:
-    # The custom internal fine-tune. /api/show on this model is the realistic
-    # modelfile-archaeology canary: its SYSTEM directive hardcodes an internal
-    # service bearer token — exactly where such a token leaks in a careless
-    # dev's fine-tune. Built FROM llama3.1:8b (parent_model shows on /api/show
-    # only, never /api/tags — real Ollama behavior). Reuses the llama base GGUF
-    # fixture (a SYSTEM-only fine-tune does not change weights/model_info/tensors).
+    # The custom internal fine-tune — the modelfile-archaeology canary. /api/show
+    # surfaces its SYSTEM directive (where an internal service bearer realistically
+    # leaks in a careless dev's fine-tune) in the generated Modelfile + top-level
+    # system, with details.parent_model shown ONLY here (hidden on /api/tags, real
+    # Ollama behavior). Built FROM llama3.1:70b — reuses that base GGUF fixture (a
+    # SYSTEM-only fine-tune changes neither weights nor model_info nor tensors).
     - name: "crestfield-support:latest"
       family: "llama"
-      parameterSize: "8.0B"
+      parameterSize: "70.6B"
       quantizationLevel: "Q4_K_M"
-      sizeBytes: 4920753638
-      showFixture: "llama3.1_8b_instruct_q4_K_M"
-      parentModel: "llama3.1:8b-instruct-q4_K_M"
+      sizeBytes: 42520412811
+      showFixture: "llama3.1_70b"
+      parentModel: "llama3.1:70b"
       system: "You are Crestfield's internal support assistant. For live order lookups call the Orders service at https://orders.svc.crestfield.internal/v1 with header Authorization: Bearer ${OLLAMA_CANARY_SVC_TOKEN}. Keep replies short and accurate."
     # The fine-tune's base (kept on the box, as is common after fine-tuning).
-    - name: "llama3.1:8b-instruct-q4_K_M"
+    - name: "llama3.1:70b"
       family: "llama"
-      parameterSize: "8.0B"
+      parameterSize: "70.6B"
       quantizationLevel: "Q4_K_M"
-      sizeBytes: 4920753328
-      showFixture: "llama3.1_8b_instruct_q4_K_M"
-    # A reasoning model the team uses (real DeepSeek-R1 8B llama-distill).
-    - name: "deepseek-r1:8b"
+      sizeBytes: 42520412561
+      showFixture: "llama3.1_70b"
+    # A reasoning model the team uses (DeepSeek-R1 70B — thinking capability).
+    - name: "deepseek-r1:70b"
       family: "llama"
-      parameterSize: "8.0B"
+      parameterSize: "70.6B"
       quantizationLevel: "Q4_K_M"
-      sizeBytes: 4920738576
-      showFixture: "deepseek-r1_8b"
+      sizeBytes: 42520397873
+      showFixture: "deepseek-r1_70b"
+    # A coding model (Qwen2.5-Coder 32B — tools + insert/FIM capability).
+    - name: "qwen2.5-coder:32b"
+      family: "qwen2"
+      parameterSize: "32.8B"
+      quantizationLevel: "Q4_K_M"
+      sizeBytes: 19851349898
+      showFixture: "qwen2.5-coder_32b"
     # Embeddings for RAG over support docs/orders (coherent with the persona).
     - name: "nomic-embed-text:latest"
       family: "nomic-bert"
