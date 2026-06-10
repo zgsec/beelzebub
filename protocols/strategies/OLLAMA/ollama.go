@@ -732,56 +732,6 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 // when CaptureRequestBody=true but RequestBodyMaxBytes left at zero.
 const defaultOllamaRequestBodyMaxBytes = 64 * 1024
 
-// requireOpenAIAuth mirrors api.openai.com: every /v1/* endpoint demands
-// `Authorization: Bearer <token>`. Missing or malformed → 401 with the real
-// error envelope. Token value is NOT validated (we can't know a real key),
-// which matches the intent: any supplied token is recorded as a credential
-// discovery by checkBridgeAndCapture and treated as legitimate. Returns
-// true when the request may proceed.
-//
-// Also stamps X-Request-ID on every response, matching OpenAI's invariant
-// that every response carries one (covers success and failure paths).
-func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Request, tr tracer.Tracer, servConf parser.BeelzebubServiceConfiguration, handler string, body []byte) bool {
-	// Response header stack for an internal OpenAI-compatible inference
-	// gateway. Deliberately omits Cloudflare edge headers (cf-ray, server:
-	// cloudflare, cf-cache-status, alt-svc) — those only make sense on a
-	// TLS-fronted edge, and our listener is naked HTTP on a raw IP, so
-	// emitting them would be internally inconsistent with an
-	// internal-platform persona. Headers kept are the ones that ALSO
-	// appear on real-OpenAI direct-origin probes and match the "internal
-	// platform" scenario (request-id for session tracking, processing-ms
-	// for timing realism, organization for credential-capture bait,
-	// openai-version as a real-API invariant, HSTS as a reasonable
-	// hardening default, content-type-options for XSS-avoidance).
-	reqID := "req_" + randomHexN(29)
-	w.Header().Set("x-request-id", reqID)
-	w.Header().Set("openai-organization", "user-"+randomAlnumN(24))
-	w.Header().Set("openai-processing-ms", fmt.Sprintf("%d", 300+s.randIntn(2700)))
-	w.Header().Set("openai-version", "2020-10-01")
-	w.Header().Set("strict-transport-security", "max-age=15552000; includeSubDomains; preload")
-	w.Header().Set("x-content-type-options", "nosniff")
-
-	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	if auth == "" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		body401 := `{"error":{"message":"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":null}}`
-		w.Write([]byte(body401))
-		s.traceEvent(r, tr, servConf, handler, "", body401, string(body))
-		return false
-	}
-	// "Bearer " prefix, with a non-empty token after.
-	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		body401 := `{"error":{"message":"Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
-		w.Write([]byte(body401))
-		s.traceEvent(r, tr, servConf, handler, "", body401, string(body))
-		return false
-	}
-	return true
-}
-
 func (s *OllamaStrategy) checkBridgeAndCapture(r *http.Request, handler string) {
 	host, _ := s.clientIP(r)
 	if s.Bridge == nil {
