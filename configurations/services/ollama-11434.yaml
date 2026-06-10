@@ -6,8 +6,10 @@ description: "Ollama LLM inference server"
 # whether our LLM-backed replies hold up under fingerprinting probes.
 # Truncated to 64 KiB per response. Canary tokens + sensor IPs are scrubbed
 # at ingest + serialization time before the body reaches the public API.
+captureRequestBody: true   # capture attacker prompts/payloads (model-field SSRF, prompt-injection)
 captureResponseBody: true
-responseBodyMaxBytes: 65536
+requestBodyMaxBytes: 131072
+responseBodyMaxBytes: 131072
 
 # Persona-shaped fallback when ExecuteModel returns no usable content
 # (no API key in container env, OpenAI 5xx, rate limit, network error).
