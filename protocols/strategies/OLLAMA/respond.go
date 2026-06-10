@@ -15,6 +15,8 @@ var greetings = map[string]string{
 	"es": "¡Hola! ¿En qué puedo ayudar?",
 	"ru": "Привет! Чем могу помочь?",
 	"zh": "你好！有什么可以帮你的？",
+	"ko": "안녕하세요! 무엇을 도와드릴까요?",
+	"ja": "こんにちは！何かお手伝いできることはありますか？",
 }
 
 var yesNoAnswers = map[string]string{
@@ -79,6 +81,8 @@ var greetingVariants = map[string][]string{
 	"es": {"¡Hola! ¿En qué puedo ayudar?", "¡Hola! ¿En qué puedo ayudarte hoy?", "¡Hola! ¿Qué necesitas?"},
 	"ru": {"Привет! Чем могу помочь?", "Здравствуйте! Чем могу быть полезен?", "Привет! Чем помочь?"},
 	"zh": {"你好！有什么可以帮你的？", "你好！我能帮你做些什么？", "你好呀！有什么需要帮忙的吗？"},
+	"ko": {"안녕하세요! 무엇을 도와드릴까요?", "안녕하세요! 무엇을 도와드릴까요?", "안녕하세요! 어떻게 도와드릴까요?"},
+	"ja": {"こんにちは！何かお手伝いできることはありますか？", "こんにちは！どのようなご用件でしょうか？", "こんにちは！何かお手伝いしましょうか？"},
 }
 var livenessVariants = map[string][]string{
 	"ping":       {"Pong!", "Pong! How can I help?", "pong"},

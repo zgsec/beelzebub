@@ -37,7 +37,10 @@ var taskIntent = regexp.MustCompile(`(?i)\b(translate|write|generate|create|impl
 var (
 	reEcho      = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
 	reArith     = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
-	reIdent     = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??$`)
+	// Identity probe, optionally followed by a trailing answer-shaping instruction
+	// ("What model are you? Reply with your exact model name only.") — a common
+	// liveness phrasing that the strict end-anchored form fail-closed (a tell).
+	reIdent = regexp.MustCompile(`(?i)^((what|which) (ai )?model are you|who (built|made|created) you|what server am i talking to)\s*\??(\s*(reply|respond|answer|tell me|give|just|only)\b.*)?$`)
 	reYesNo     = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
 	reArithOnly = regexp.MustCompile(`^[\s\d().+\-*/?]+$`)
 	// Quoted-echo WITHOUT a trailing colon ("Respond with ONLY the word 'pong'.
@@ -67,6 +70,9 @@ var greetOpeners = []struct {
 	{"hola", "es"},
 	{"您好", "zh"},
 	{"你好", "zh"},
+	{"안녕하세요", "ko"},
+	{"안녕", "ko"},
+	{"こんにちは", "ja"},
 	{"hiya", "en"},
 	{"hello", "en"},
 	{"hey", "en"},

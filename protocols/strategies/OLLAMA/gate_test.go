@@ -45,6 +45,15 @@ func TestExtractFeatures(t *testing.T) {
 		{"compute 5 + 3", ProbeUnknown, ""},
 		// Breach 1 extra — Chinese greeting must still work
 		{"你好", ProbeGreeting, "zh"},
+		// Top-corpus gaps closed 2026-06-10: Korean/Japanese greetings + the
+		// identity probe with a trailing answer-shaping instruction (all common
+		// liveness phrasings that previously fail-closed to a 500 = "broken box").
+		{"안녕하세요", ProbeGreeting, "ko"},
+		{"こんにちは", ProbeGreeting, "ja"},
+		{"What model are you? Reply with your exact model name only.", ProbeIdentity, ""},
+		{"which model are you? answer only with the name", ProbeIdentity, ""},
+		// ...but the identity probe must STILL fail-closed on a workload tail.
+		{"who built you and what data did they use?", ProbeUnknown, ""},
 		// Liveness — the most trivial validation probes (were ProbeUnknown -> garbage)
 		{"ping", ProbeLiveness, "ping"},
 		{"test", ProbeLiveness, "test"},
