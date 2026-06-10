@@ -408,13 +408,37 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	// different Allow set, charset on the content-type) do NOT match gin and were a
 	// fingerprint — so we own this dispatch instead of letting net/http synthesize.
 	mux.HandleFunc("/", withCORS(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		path := r.URL.Path
+		if path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			s.handleRoot(w, r, servConf, tr)
 			return
 		}
-		if allow, known := ollamaRouteAllow[r.URL.Path]; known {
+		// gin's RedirectTrailingSlash: GET/HEAD to a GET route WITH a trailing
+		// slash (e.g. /api/tags/) → 301 to the slash-less path. Only GET routes
+		// redirect — /api/chat/ (POST route) 404s. http.Redirect emits gin's exact
+		// shape (text/html; charset=utf-8, "<a href=...>Moved Permanently</a>.").
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && len(path) > 1 && strings.HasSuffix(path, "/") {
+			if trimmed := strings.TrimRight(path, "/"); ollamaGetRoutes[trimmed] {
+				s.checkBridgeAndCapture(r, "ollama/redirect")
+				http.Redirect(w, r, trimmed, http.StatusMovedPermanently)
+				s.traceEvent(r, tr, servConf, "ollama/redirect", r.Method+" "+path, "301 -> "+trimmed, "")
+				return
+			}
+		}
+		if allow, known := ollamaRouteAllow[path]; known {
 			// Known route, wrong method → gin's 405.
 			s.write405(w, r, servConf, tr, allow)
+			return
+		}
+		// Parameterized real routes hit with the wrong method → gin's 405. The
+		// happy methods are served by the registered wildcard handlers below; only
+		// a wrong method falls here.
+		if strings.HasPrefix(path, "/api/blobs/") {
+			s.write405(w, r, servConf, tr, "HEAD, POST")
+			return
+		}
+		if strings.HasPrefix(path, "/v1/models/") {
+			s.write405(w, r, servConf, tr, "GET")
 			return
 		}
 		// Unknown path → gin's 404.
@@ -460,6 +484,37 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	}))
 	mux.HandleFunc("GET /v1/models", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		s.handleOpenAIModels(w, r, servConf, tr)
+	}))
+	mux.HandleFunc("GET /v1/models/{model...}", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleOpenAIModelByID(w, r, servConf, tr)
+	}))
+
+	// Real-Ollama routes the corpus replay surfaced as gaps (lure was 404ing
+	// where real Ollama responds). /api/status returns the cloud-status block;
+	// the model-management endpoints (create/copy/push) and /v1/embeddings and
+	// /api/blobs return real Ollama's exact validation errors (an attacker can't
+	// meaningfully invoke them without real model data, so the error IS the
+	// faithful behavior); registering them also yields gin's 405 on wrong method.
+	mux.HandleFunc("GET /api/status", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleStatus(w, r, servConf, tr)
+	}))
+	mux.HandleFunc("POST /api/create", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.writeOllamaJSONError(w, r, servConf, tr, "ollama/create", http.StatusBadRequest, `{"error":"invalid model name"}`)
+	}))
+	mux.HandleFunc("POST /api/copy", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.writeOllamaJSONError(w, r, servConf, tr, "ollama/copy", http.StatusBadRequest, `{"error":"source \"\" is invalid"}`)
+	}))
+	mux.HandleFunc("POST /api/push", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.writeOllamaJSONError(w, r, servConf, tr, "ollama/push", http.StatusBadRequest, `{"error":"model is required"}`)
+	}))
+	mux.HandleFunc("POST /v1/embeddings", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.writeOllamaJSONError(w, r, servConf, tr, "openai/embeddings", http.StatusBadRequest, `{"error":{"message":"invalid input","type":"invalid_request_error","param":null,"code":null}}`)
+	}))
+	mux.HandleFunc("POST /api/blobs/{digest}", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.writeOllamaJSONError(w, r, servConf, tr, "ollama/blobs", http.StatusBadRequest, `{"error":"invalid digest format"}`)
+	}))
+	mux.HandleFunc("HEAD /api/blobs/{digest}", withCORS(func(w http.ResponseWriter, r *http.Request) {
+		s.handleBlobsHead(w, r, servConf, tr)
 	}))
 
 	go func() {
@@ -1917,6 +1972,93 @@ func (s *OllamaStrategy) handleOpenAIModels(w http.ResponseWriter, r *http.Reque
 	s.traceEvent(r, tr, servConf, "openai/models", "GET /v1/models", string(out), "")
 }
 
+// handleStatus serves GET /api/status — real Ollama returns the cloud-status
+// block (CT application/json; charset=utf-8). The corpus shows attackers hit
+// this 27x; the lure previously 404'd it (a tell).
+func (s *OllamaStrategy) handleStatus(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/status")
+	resp := `{"cloud":{"disabled":false,"source":"none"}}`
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprint(w, resp)
+	s.traceEvent(r, tr, servConf, "ollama/status", "GET /api/status", resp, "")
+}
+
+// handleOpenAIModelByID serves GET /v1/models/{model}: real Ollama returns the
+// single OpenAI model object for a known model, or a 404 not_found_error.
+func (s *OllamaStrategy) handleOpenAIModelByID(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "openai/model")
+	model := r.PathValue("model")
+	// GET /v1/models/ (empty model): gin's RedirectTrailingSlash 301s to
+	// /v1/models BEFORE matching the :model route. Go's mux matches the wildcard
+	// first, so we reproduce the redirect here.
+	if model == "" {
+		http.Redirect(w, r, "/v1/models", http.StatusMovedPermanently)
+		s.traceEvent(r, tr, servConf, "ollama/redirect", "GET /v1/models/", "301 -> /v1/models", "")
+		return
+	}
+	// This endpoint (unlike /v1/chat and the /v1/models list) renders via gin
+	// c.JSON, which appends a trailing newline to BOTH success and error bodies.
+	w.Header().Set("Content-Type", "application/json")
+	if !s.modelExists(model) {
+		w.WriteHeader(http.StatusNotFound)
+		resp := fmt.Sprintf(`{"error":{"message":"model '%s' not found","type":"not_found_error","param":null,"code":null}}`+"\n", model)
+		fmt.Fprint(w, resp)
+		s.traceEvent(r, tr, servConf, "openai/model", "GET /v1/models/"+model, resp, "")
+		return
+	}
+	resp := struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	}{ID: model, Object: "model", Created: s.modelModifiedUnix(model), OwnedBy: "library"}
+	out, _ := json.Marshal(resp)
+	w.Write(out)
+	w.Write([]byte("\n"))
+	s.traceEvent(r, tr, servConf, "openai/model", "GET /v1/models/"+model, string(out), "")
+}
+
+// handleBlobsHead serves HEAD /api/blobs/{digest}: real Ollama returns 400
+// (malformed digest) or 404 (valid digest format, blob absent), empty body, CT
+// application/json; charset=utf-8. We never hold real blobs, so a well-formed
+// digest is always "absent" (404); anything else is malformed (400).
+func (s *OllamaStrategy) handleBlobsHead(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
+	s.checkBridgeAndCapture(r, "ollama/blobs")
+	digest := r.PathValue("digest")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	status := http.StatusBadRequest
+	if validBlobDigest(digest) {
+		status = http.StatusNotFound
+	}
+	w.WriteHeader(status)
+	s.traceEvent(r, tr, servConf, "ollama/blobs", "HEAD "+r.URL.Path, fmt.Sprintf("[%d]", status), "")
+}
+
+// validBlobDigest reports whether s is a well-formed "sha256:<64 hex>" digest.
+func validBlobDigest(s string) bool {
+	const p = "sha256:"
+	if !strings.HasPrefix(s, p) || len(s) != len(p)+64 {
+		return false
+	}
+	for _, c := range s[len(p):] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeOllamaJSONError emits a fixed JSON error body with the given status and
+// CT application/json; charset=utf-8 (real Ollama's validation-error class).
+func (s *OllamaStrategy) writeOllamaJSONError(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, handler string, status int, body string) {
+	s.checkBridgeAndCapture(r, handler)
+	reqBody := s.readBody(r)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	fmt.Fprint(w, body)
+	s.traceEvent(r, tr, servConf, handler, r.Method+" "+r.URL.Path, body, string(reqBody))
+}
+
 // ollamaRouteAllow maps each mounted route path to the EXACT Allow-header value
 // real Ollama (gin) returns on a 405. Captured from a genuine instance: GET
 // routes that ALSO register HEAD ("/", "/api/version", "/api/tags") advertise
@@ -1928,16 +2070,32 @@ var ollamaRouteAllow = map[string]string{
 	"/api/version":         "HEAD, GET",
 	"/api/tags":            "HEAD, GET",
 	"/api/ps":              "GET",
+	"/api/status":          "GET",
 	"/api/chat":            "POST",
 	"/api/show":            "POST",
 	"/api/generate":        "POST",
 	"/api/embed":           "POST",
 	"/api/embeddings":      "POST",
 	"/api/pull":            "POST",
+	"/api/create":          "POST",
+	"/api/copy":            "POST",
+	"/api/push":            "POST",
 	"/api/delete":          "DELETE",
 	"/v1/models":           "GET",
 	"/v1/chat/completions": "POST",
 	"/v1/completions":      "POST",
+	"/v1/embeddings":       "POST",
+}
+
+// ollamaGetRoutes is the set of GET routes that gin redirects (301) when hit
+// with a trailing slash (/api/tags/ → /api/tags). POST-only routes do NOT
+// redirect (/api/chat/ → 404), so only GET routes belong here.
+var ollamaGetRoutes = map[string]bool{
+	"/api/version": true,
+	"/api/tags":    true,
+	"/api/ps":      true,
+	"/api/status":  true,
+	"/v1/models":   true,
 }
 
 // write405 reproduces gin's method-not-allowed response byte-for-byte: status

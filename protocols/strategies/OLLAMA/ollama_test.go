@@ -519,6 +519,85 @@ func TestHandleVersionResponse(t *testing.T) {
 	assert.NotContains(t, body, `"platform_services"`)
 }
 
+// The corpus-replay surfaced real Ollama routes the lure was 404ing. These lock
+// in the captured shapes so they can't regress.
+
+func TestHandleStatus(t *testing.T) {
+	s := newTestStrategy()
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	s.handleStatus(w, req, parser.BeelzebubServiceConfiguration{Description: "test"}, tracer.GetInstance(func(tracer.Event) {}))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, `{"cloud":{"disabled":false,"source":"none"}}`, w.Body.String())
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+}
+
+func TestHandleOpenAIModelByID(t *testing.T) {
+	s := newTestStrategy()
+	s.models = []parser.OllamaModel{{Name: "llama3.1:70b", Family: "llama"}}
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(tracer.Event) {})
+
+	// existing model → 200, body ends with newline (gin c.JSON), owned_by library
+	req := httptest.NewRequest("GET", "/v1/models/llama3.1:70b", nil)
+	req.SetPathValue("model", "llama3.1:70b")
+	w := httptest.NewRecorder()
+	s.handleOpenAIModelByID(w, req, servConf, tr)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, strings.HasSuffix(w.Body.String(), "\n"), "gin c.JSON appends a newline")
+	assert.Contains(t, w.Body.String(), `"owned_by":"library"`)
+	assert.Contains(t, w.Body.String(), `"object":"model"`)
+
+	// unknown model → 404 not_found_error + newline
+	req = httptest.NewRequest("GET", "/v1/models/nope:zz", nil)
+	req.SetPathValue("model", "nope:zz")
+	w = httptest.NewRecorder()
+	s.handleOpenAIModelByID(w, req, servConf, tr)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"type":"not_found_error"`)
+	assert.True(t, strings.HasSuffix(w.Body.String(), "\n"))
+
+	// empty model (/v1/models/) → 301 redirect to /v1/models
+	req = httptest.NewRequest("GET", "/v1/models/", nil)
+	req.SetPathValue("model", "")
+	w = httptest.NewRecorder()
+	s.handleOpenAIModelByID(w, req, servConf, tr)
+	assert.Equal(t, http.StatusMovedPermanently, w.Code)
+	assert.Equal(t, "/v1/models", w.Header().Get("Location"))
+}
+
+func TestHandleBlobsHead(t *testing.T) {
+	s := newTestStrategy()
+	servConf := parser.BeelzebubServiceConfiguration{Description: "test"}
+	tr := tracer.GetInstance(func(tracer.Event) {})
+
+	// malformed digest → 400; well-formed-but-absent → 404; both empty body
+	for digest, want := range map[string]int{
+		"sha256:abc": http.StatusBadRequest,
+		"sha256:" + strings.Repeat("0", 64): http.StatusNotFound,
+	} {
+		req := httptest.NewRequest("HEAD", "/api/blobs/"+digest, nil)
+		req.SetPathValue("digest", digest)
+		w := httptest.NewRecorder()
+		s.handleBlobsHead(w, req, servConf, tr)
+		assert.Equal(t, want, w.Code, digest)
+		assert.Empty(t, w.Body.String(), "real Ollama HEAD /api/blobs has an empty body")
+	}
+}
+
+func TestNewRouteTableCoverage(t *testing.T) {
+	// Every real Ollama route the corpus exercises must be known to the dispatcher
+	// (in the 405 table) so a wrong-method hit returns gin's 405, not a 404 tell.
+	for _, p := range []string{"/api/status", "/api/create", "/api/copy", "/api/push", "/v1/embeddings"} {
+		_, ok := ollamaRouteAllow[p]
+		assert.True(t, ok, "route %s missing from ollamaRouteAllow", p)
+	}
+	// GET routes that 301 on a trailing slash.
+	for _, p := range []string{"/api/version", "/api/tags", "/api/ps", "/api/status", "/v1/models"} {
+		assert.True(t, ollamaGetRoutes[p], "GET route %s missing from ollamaGetRoutes", p)
+	}
+}
+
 func TestHandleShow_UnknownModel404(t *testing.T) {
 	// Real Ollama returns 404 with {"error":"model 'name' not found"}
 	// when /api/show is asked about a model not in the local set.
