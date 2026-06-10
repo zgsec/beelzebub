@@ -53,8 +53,29 @@ type OllamaStrategy struct {
 	lastInferenceAt time.Time
 	lastInferenceMu sync.RWMutex
 
+	// modelLastUse tracks the last time each model was served, to decide cold vs
+	// warm load timing (real Ollama only pays the full load cost on first use or
+	// after the model is evicted). Keyed by model name.
+	modelLastUse map[string]time.Time
+	modelUseMu   sync.Mutex
+
 	// persona holds deception content. Nil means no persona file was loaded.
 	persona *parser.Persona
+}
+
+// modelLoadCold reports whether serving `model` now would incur a COLD load (first
+// use, or after an idle window long enough that a real box would have evicted it),
+// updating the last-use timestamp. Concurrency-safe.
+func (s *OllamaStrategy) modelLoadCold(model string) bool {
+	s.modelUseMu.Lock()
+	defer s.modelUseMu.Unlock()
+	if s.modelLastUse == nil {
+		s.modelLastUse = make(map[string]time.Time)
+	}
+	now := time.Now()
+	last, ok := s.modelLastUse[model]
+	s.modelLastUse[model] = now
+	return !ok || now.Sub(last) > 5*time.Minute
 }
 
 // SetPersona injects the loaded persona for use in response generation.
@@ -318,6 +339,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 		s.promptEvalDelayMs = 200 // default 200ms prompt eval delay
 	}
 	s.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	s.modelLastUse = make(map[string]time.Time)
 
 	// Compute stable digests per model (deterministic, same across restarts within a version)
 	s.modelDigests = make(map[string]string)
@@ -1847,21 +1869,54 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 
 // --- Streaming helpers ---
 
+// maxPreTokenWait / maxNonStreamWait cap the realistic load+eval waits so a cold
+// big-model probe tarpits the client believably without holding a goroutine forever.
+const (
+	maxPreTokenWait  = 8 * time.Second
+	maxNonStreamWait = 10 * time.Second
+)
+
+// streamTimingPrep builds the timing envelope for a streaming reply and performs the
+// realistic pre-first-token wait (cold load + prompt eval, capped) so wall-clock
+// agrees with the reported envelope. Eval/Total are finalized after streaming.
+func (s *OllamaStrategy) streamTimingPrep(model string, promptEvalCount, tokenCount int) (TimingProfile, DurationEnvelope, time.Time) {
+	timing := timingForModel(model)
+	cold := s.modelLoadCold(model)
+	s.rngMu.Lock()
+	env := timing.durations(promptEvalCount, tokenCount, 0, cold, s.rng)
+	s.rngMu.Unlock()
+	env = capPre(env, maxPreTokenWait)
+	time.Sleep(time.Duration(env.Load + env.PromptEval)) // wall-clock == reported pre-token
+	return timing, env, time.Now()
+}
+
+// finalizeEnv fills Eval from the real streaming elapsed and keeps Total consistent.
+func finalizeEnv(env DurationEnvelope, evalElapsed time.Duration) DurationEnvelope {
+	env.Eval = evalElapsed.Nanoseconds()
+	env.Total = env.Load + env.PromptEval + env.Eval
+	return env
+}
+
+// nonStreamEnv builds the envelope for a non-streaming reply and waits the realistic
+// full duration (capped) before the single response, as a real backend would.
+func (s *OllamaStrategy) nonStreamEnv(model string, promptEvalCount, evalCount int) DurationEnvelope {
+	timing := timingForModel(model)
+	cold := s.modelLoadCold(model)
+	s.rngMu.Lock()
+	env := timing.durations(promptEvalCount, evalCount, 0, cold, s.rng)
+	s.rngMu.Unlock()
+	env = capTotal(env, maxNonStreamWait)
+	time.Sleep(time.Duration(env.Total)) // wall-clock == reported total_duration
+	return env
+}
+
 func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, response string, promptLen int) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
 
-	// Simulate prompt evaluation time (real LLMs pause before first token)
-	promptEvalDelay := time.Duration(s.promptEvalDelayMs) * time.Millisecond
-	s.rngMu.Lock()
-	jitter := time.Duration(s.rng.Intn(100)) * time.Millisecond
-	s.rngMu.Unlock()
-	time.Sleep(promptEvalDelay + jitter)
-
 	tokens := tokenizeResponse(response)
-	timing := timingForModel(model)
-	start := time.Now()
 	promptEvalCount := promptLen/4 + 1
+	timing, env, start := s.streamTimingPrep(model, promptEvalCount, len(tokens))
 
 	for i, token := range tokens {
 		chunk := map[string]interface{}{
@@ -1885,20 +1940,20 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 		}
 	}
 
-	// Final chunk with stats
-	elapsed := time.Since(start)
+	// Final chunk with stats — envelope internally consistent with wall-clock.
+	env = finalizeEnv(env, time.Since(start))
 	finalChunk := map[string]interface{}{
 		"model":                model,
 		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"response":             "",
 		"done":                 true,
 		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"total_duration":       env.Total,
+		"load_duration":        env.Load,
 		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
+		"prompt_eval_duration": env.PromptEval,
 		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
+		"eval_duration":        env.Eval,
 		"context":              ollamaContextArray(promptEvalCount, len(tokens)),
 	}
 	out, _ := json.Marshal(finalChunk)
@@ -1910,21 +1965,21 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 }
 
 func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
-	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
 	evalCount := len(response) / 4
+	env := s.nonStreamEnv(model, promptEvalCount, evalCount)
 	resp := map[string]interface{}{
 		"model":                model,
 		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"response":             response,
 		"done":                 true,
 		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"total_duration":       env.Total,
+		"load_duration":        env.Load,
 		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
+		"prompt_eval_duration": env.PromptEval,
 		"eval_count":           evalCount,
-		"eval_duration":        int64(200e6),
+		"eval_duration":        env.Eval,
 		"context":              ollamaContextArray(promptEvalCount, evalCount),
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1936,17 +1991,9 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
 
-	// Simulate prompt evaluation time (real LLMs pause before first token)
-	promptEvalDelay := time.Duration(s.promptEvalDelayMs) * time.Millisecond
-	s.rngMu.Lock()
-	jitter := time.Duration(s.rng.Intn(100)) * time.Millisecond
-	s.rngMu.Unlock()
-	time.Sleep(promptEvalDelay + jitter)
-
 	tokens := tokenizeResponse(response)
-	timing := timingForModel(model)
-	start := time.Now()
 	promptEvalCount := promptLen/4 + 1
+	timing, env, start := s.streamTimingPrep(model, promptEvalCount, len(tokens))
 
 	for i, token := range tokens {
 		chunk := map[string]interface{}{
@@ -1972,7 +2019,7 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 		}
 	}
 
-	elapsed := time.Since(start)
+	env = finalizeEnv(env, time.Since(start))
 	finalChunk := map[string]interface{}{
 		"model":      model,
 		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
@@ -1982,12 +2029,12 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 		},
 		"done":                 true,
 		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"total_duration":       env.Total,
+		"load_duration":        env.Load,
 		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
+		"prompt_eval_duration": env.PromptEval,
 		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
+		"eval_duration":        env.Eval,
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -1998,8 +2045,9 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 }
 
 func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
-	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
+	evalCount := len(response) / 4
+	env := s.nonStreamEnv(model, promptEvalCount, evalCount)
 	resp := map[string]interface{}{
 		"model":      model,
 		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
@@ -2009,12 +2057,12 @@ func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, mode
 		},
 		"done":                 true,
 		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
+		"total_duration":       env.Total,
+		"load_duration":        env.Load,
 		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(response) / 4,
-		"eval_duration":        int64(200e6),
+		"prompt_eval_duration": env.PromptEval,
+		"eval_count":           evalCount,
+		"eval_duration":        env.Eval,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)

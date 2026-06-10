@@ -98,24 +98,96 @@ func categorizePrompt(prompt string) PromptCategory {
 	return CategoryGeneral
 }
 
-// TimingProfile controls per-token streaming delays based on model size.
+// TimingProfile controls per-token streaming delays based on model size. The
+// numbers model a capable single-GPU box (the "gold-mine" persona) — NOT the Orin
+// the oracle runs on (5-6 tok/s, 60-100s cold load), which is far too slow to be
+// believable. Keep gen-rate; project load/prompt-eval to this profile.
 type TimingProfile struct {
-	TokenDelayMs   int
-	JitterMs       int
-	LoadDurationMs int
+	TokenDelayMs       int // per-generated-token streaming delay (gen rate)
+	JitterMs           int
+	LoadDurationMs     int // COLD model-load cost (first hit / after idle eviction)
+	PromptEvalMsPerTok int // prompt-eval cost per prompt token (was a hardcoded 50ms)
 }
 
 // timingForModel returns streaming timing based on model name patterns.
 func timingForModel(model string) TimingProfile {
 	lower := strings.ToLower(model)
 	switch {
-	case strings.Contains(lower, ":70b"):
-		return TimingProfile{TokenDelayMs: 250, JitterMs: 80, LoadDurationMs: 3000 + rand.Intn(3000)}
-	case strings.Contains(lower, ":13b") || strings.Contains(lower, ":14b"):
-		return TimingProfile{TokenDelayMs: 120, JitterMs: 40, LoadDurationMs: 1200 + rand.Intn(1300)}
+	case strings.Contains(lower, ":70b") || strings.Contains(lower, ":72b") || strings.Contains(lower, ":65b"):
+		return TimingProfile{TokenDelayMs: 250, JitterMs: 80, LoadDurationMs: 3000 + rand.Intn(3000), PromptEvalMsPerTok: 6}
+	case strings.Contains(lower, ":13b") || strings.Contains(lower, ":14b") || strings.Contains(lower, ":34b") || strings.Contains(lower, ":35b"):
+		return TimingProfile{TokenDelayMs: 120, JitterMs: 40, LoadDurationMs: 1200 + rand.Intn(1300), PromptEvalMsPerTok: 3}
 	default:
-		return TimingProfile{TokenDelayMs: 40, JitterMs: 15, LoadDurationMs: 800 + rand.Intn(700)}
+		return TimingProfile{TokenDelayMs: 40, JitterMs: 15, LoadDurationMs: 800 + rand.Intn(700), PromptEvalMsPerTok: 2}
 	}
+}
+
+// DurationEnvelope is the Ollama timing block, kept internally consistent:
+// Total == Load + PromptEval + Eval (ns). Centralized so the four response sites
+// cannot drift and a socket-timing attacker sees the envelope agree with wall-clock.
+type DurationEnvelope struct {
+	Total, Load, PromptEval, Eval int64
+}
+
+// durations builds an internally-consistent timing block for the projected profile.
+//   - cold: full LoadDurationMs (first hit / after idle); warm: ~20-50ms (resident).
+//   - PromptEval scales with prompt tokens (replaces the hardcoded 50ms tell).
+//   - evalElapsed: real wall-clock spent streaming (>0 on the stream path); when 0
+//     (non-streaming) eval is synthesized from the projected gen rate so eval_duration
+//     still coheres with eval_count.
+func (tp TimingProfile) durations(promptEvalCount, evalCount int, evalElapsed time.Duration, cold bool, rng *rand.Rand) DurationEnvelope {
+	load := int64(20+rng.Intn(30)) * 1e6 // warm: model resident, ~20-50ms
+	if cold {
+		load = int64(tp.LoadDurationMs) * 1e6
+	}
+	peMs := tp.PromptEvalMsPerTok
+	if peMs <= 0 {
+		peMs = 2
+	}
+	pe := int64(promptEvalCount) * int64(peMs) * 1e6
+	if pe <= 0 {
+		pe = 5e6
+	}
+	ev := evalElapsed.Nanoseconds()
+	if ev <= 0 {
+		ev = int64(evalCount) * int64(tp.TokenDelayMs) * 1e6
+		if ev <= 0 {
+			ev = 1e6
+		}
+	}
+	return DurationEnvelope{Total: load + pe + ev, Load: load, PromptEval: pe, Eval: ev}
+}
+
+// capTotal scales a whole envelope so Total <= cap while preserving the invariant
+// Total == Load + PromptEval + Eval. Used on the non-streaming path so the wait we
+// actually sleep equals the total_duration we report (a socket-timing attacker who
+// compares wall-clock to the envelope sees them agree even when the cap bites).
+func capTotal(env DurationEnvelope, cap time.Duration) DurationEnvelope {
+	capNs := cap.Nanoseconds()
+	if env.Total <= capNs {
+		return env
+	}
+	f := float64(capNs) / float64(env.Total)
+	env.Load = int64(float64(env.Load) * f)
+	env.PromptEval = int64(float64(env.PromptEval) * f)
+	env.Total = capNs
+	env.Eval = env.Total - env.Load - env.PromptEval // exact: keeps sum == total
+	return env
+}
+
+// capPre scales the pre-first-token portion (Load + PromptEval) so it fits cap, for
+// the streaming path where Eval is the REAL streaming elapsed added afterward. The
+// pre-token wall-clock we sleep then equals the reported Load+PromptEval.
+func capPre(env DurationEnvelope, cap time.Duration) DurationEnvelope {
+	capNs := cap.Nanoseconds()
+	pre := env.Load + env.PromptEval
+	if pre <= capNs {
+		return env
+	}
+	f := float64(capNs) / float64(pre)
+	env.Load = int64(float64(env.Load) * f)
+	env.PromptEval = capNs - env.Load // exact: Load+PromptEval == cap
+	return env
 }
 
 func (tp TimingProfile) tokenDelay(rng *rand.Rand) time.Duration {
