@@ -1068,23 +1068,36 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	servConf parser.BeelzebubServiceConfiguration,
 	tr tracer.Tracer,
 ) {
+	// Capture request body BEFORE matching so commands can route on bodyRegex
+	// (1 MB limit, same as HTTP strategy).
+	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+	body := string(bodyBytes)
+
 	var matchedCommand parser.Command
 	var matched bool
 
 	for _, command := range servConf.Commands {
-		if command.Regex != nil && command.Regex.MatchString(r.RequestURI) {
-			matchedCommand = command
-			matched = true
-			break
+		// Mirror the HTTP strategy's commandMatches: the URI regex AND (when set)
+		// the HTTP method AND the bodyRegex must all match. Previously only the URI
+		// regex was checked, so the first path-matching command won regardless of
+		// body — which broke bodyRegex-routed handlers on the MCP port (e.g. the
+		// litellm /mcp-rest/test/* stdio-CVE chain that routes by command name).
+		if command.Regex == nil || !command.Regex.MatchString(r.RequestURI) {
+			continue
 		}
+		if command.Method != "" && !strings.EqualFold(command.Method, r.Method) {
+			continue
+		}
+		if command.BodyRegex != nil && !command.BodyRegex.MatchString(body) {
+			continue
+		}
+		matchedCommand = command
+		matched = true
+		break
 	}
 	if !matched {
 		matchedCommand = servConf.FallbackCommand
 	}
-
-	// Capture request body (1 MB limit, same as HTTP strategy)
-	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
-	body := string(bodyBytes)
 
 	// Trace as HTTP event with full request metadata
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
