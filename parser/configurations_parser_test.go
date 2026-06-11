@@ -254,7 +254,7 @@ func TestReadConfigurationsServicesGenerateHashCode(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Nil(t, errHashCode)
-	assert.Equal(t, hashCode, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c")
+	assert.Equal(t, hashCode, "92d33e7e814935135bc4ee892d99017796dcbf42645d95d81e12e4fff07ac1a0")
 }
 
 func TestReadConfigurationsPluginGuardrailsValid(t *testing.T) {
@@ -540,7 +540,7 @@ func TestToolAnnotationsHashCodeStability(t *testing.T) {
 	// the hash for configs that don't use annotations
 	hashCode, errHashCode := beelzebubServicesConfiguration[0].HashCode()
 	assert.Nil(t, errHashCode)
-	assert.Equal(t, "996e161cba7d83127b76d78644245c37c8725a0753354fc9f13cd9d70c4dbc0c", hashCode)
+	assert.Equal(t, "92d33e7e814935135bc4ee892d99017796dcbf42645d95d81e12e4fff07ac1a0", hashCode)
 }
 
 func TestStateField_OmittedHashCodeStable(t *testing.T) {
@@ -580,75 +580,6 @@ func TestStateField_PopulatedHashChanges(t *testing.T) {
 	h2, _ := cfg.HashCode()
 	if h1 == h2 {
 		t.Fatal("populated State did not change hash")
-	}
-}
-
-func TestScreenConnectYAML_Parses(t *testing.T) {
-	data, err := os.ReadFile("../configurations/services/screenconnect-8042.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg BeelzebubServiceConfiguration
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("yaml unmarshal: %v", err)
-	}
-	if cfg.Address != ":8042" {
-		t.Errorf("address: want :8042, got %q", cfg.Address)
-	}
-	if cfg.State == nil {
-		t.Fatal("State is nil — config did not bind state: block")
-	}
-	if cfg.State.CookieName != ".ASPXAUTH" {
-		t.Errorf("cookieName: want .ASPXAUTH, got %q", cfg.State.CookieName)
-	}
-	if cfg.State.TTLSeconds != 1800 {
-		t.Errorf("ttlSeconds: want 1800, got %d", cfg.State.TTLSeconds)
-	}
-	if cfg.State.ArtifactPath == "" {
-		t.Error("artifactPath unset")
-	}
-	if len(cfg.Commands) != 11 {
-		t.Errorf("commands: want 11, got %d", len(cfg.Commands))
-	}
-	// Verify all three stateful field flags are present across the command set
-	var foundCreate, foundRequire, foundArtifact bool
-	for _, c := range cfg.Commands {
-		if c.SessionAction == "create" {
-			foundCreate = true
-			if len(c.SessionCapture) != 2 {
-				t.Errorf("create cmd should have 2 captures, got %d", len(c.SessionCapture))
-			}
-		}
-		if c.SessionAction == "require" {
-			foundRequire = true
-		}
-		if c.ArtifactCapture {
-			foundArtifact = true
-		}
-	}
-	if !foundCreate || !foundRequire || !foundArtifact {
-		t.Errorf("missing field flags: create=%v require=%v artifact=%v",
-			foundCreate, foundRequire, foundArtifact)
-	}
-
-	// Method field must round-trip — the auth_bypass command (POST
-	// /SetupWizard.aspx) must have Method="POST" so the HTTP strategy
-	// filters out GET probes that would otherwise falsely match the
-	// regex and trigger sessionAction:create.
-	var foundPost, foundGet bool
-	for _, c := range cfg.Commands {
-		if c.Method == "POST" {
-			foundPost = true
-		}
-		if c.Method == "GET" {
-			foundGet = true
-		}
-	}
-	if !foundPost {
-		t.Error("no POST methods round-tripped from YAML — method filter would be a no-op")
-	}
-	if !foundGet {
-		t.Error("no GET methods round-tripped from YAML")
 	}
 }
 

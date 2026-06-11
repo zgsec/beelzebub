@@ -125,8 +125,8 @@ type OllamaModel struct {
 type OllamaConfig struct {
 	Models            []OllamaModel     `yaml:"models"`
 	Version           string            `yaml:"version"`
-	InjectionPayloads map[string]string  `yaml:"injectionPayloads"`
-	CanaryTokens      map[string]string  `yaml:"canaryTokens"`
+	InjectionPayloads map[string]string `yaml:"injectionPayloads"`
+	CanaryTokens      map[string]string `yaml:"canaryTokens"`
 	PromptEvalDelayMs int               `yaml:"promptEvalDelayMs"` // initial delay before first token (simulates prompt evaluation)
 }
 
@@ -218,33 +218,33 @@ type State struct {
 
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
-	ApiVersion             string          `yaml:"apiVersion"`
-	Protocol               string          `yaml:"protocol"`
-	Address                string          `yaml:"address"`
-	Commands               []Command       `yaml:"commands"`
-	Tools                  []Tool          `yaml:"tools"`
-	FallbackCommand        Command         `yaml:"fallbackCommand"`
-	ServerVersion          string          `yaml:"serverVersion"`
-	ServerName             string          `yaml:"serverName"`
-	DeadlineTimeoutSeconds int             `yaml:"deadlineTimeoutSeconds"`
-	PasswordRegex          string          `yaml:"passwordRegex"`
-	Description            string          `yaml:"description"`
+	ApiVersion             string    `yaml:"apiVersion"`
+	Protocol               string    `yaml:"protocol"`
+	Address                string    `yaml:"address"`
+	Commands               []Command `yaml:"commands"`
+	Tools                  []Tool    `yaml:"tools"`
+	FallbackCommand        Command   `yaml:"fallbackCommand"`
+	ServerVersion          string    `yaml:"serverVersion"`
+	ServerName             string    `yaml:"serverName"`
+	DeadlineTimeoutSeconds int       `yaml:"deadlineTimeoutSeconds"`
+	PasswordRegex          string    `yaml:"passwordRegex"`
+	Description            string    `yaml:"description"`
 	// v8: Canonical service type tag. Flows through every event to the exporter
 	// and downstream systems. Describes WHAT THIS SENSOR IS PRETENDING TO BE,
 	// not what the attacker is doing (that's behavioral classification).
 	// Examples: "ollama", "terraform-state", "docker-registry", "redis", "mysql".
 	// If empty, the exporter falls back to deriving service type from Description
 	// or port mapping. New deployments should always set this.
-	ServiceType            string          `yaml:"serviceType,omitempty" json:",omitempty"`
-	Banner                 string          `yaml:"banner"`
-	Plugin                 Plugin          `yaml:"plugin"`
-	TLSCertPath            string          `yaml:"tlsCertPath"`
-	TLSKeyPath             string          `yaml:"tlsKeyPath"`
-	WorldSeed              WorldSeedConfig `yaml:"worldSeed"`
-	FaultInjection         FaultInjection  `yaml:"faultInjection"`
-	OllamaConfig           OllamaConfig    `yaml:"ollamaConfig"`
-	NoveltyDetection       NoveltyDetection `yaml:"noveltyDetection"`
-	ShellEmulator          ShellEmulator    `yaml:"shellEmulator"`
+	ServiceType      string           `yaml:"serviceType,omitempty" json:",omitempty"`
+	Banner           string           `yaml:"banner"`
+	Plugin           Plugin           `yaml:"plugin"`
+	TLSCertPath      string           `yaml:"tlsCertPath"`
+	TLSKeyPath       string           `yaml:"tlsKeyPath"`
+	WorldSeed        WorldSeedConfig  `yaml:"worldSeed"`
+	FaultInjection   FaultInjection   `yaml:"faultInjection"`
+	OllamaConfig     OllamaConfig     `yaml:"ollamaConfig"`
+	NoveltyDetection NoveltyDetection `yaml:"noveltyDetection"`
+	ShellEmulator    ShellEmulator    `yaml:"shellEmulator"`
 	// BinarySafe switches the TCP handler from line-by-line ASCII reading
 	// to a binary-safe reader that preserves all bytes (CR/LF, non-printable)
 	// and hex-escapes them before emitting trace events. Used for protocols
@@ -322,13 +322,19 @@ func (bsc BeelzebubServiceConfiguration) HashCode() (string, error) {
 
 // Command is the struct that contains the configurations of the commands
 type Command struct {
-	RegexStr   string         `yaml:"regex"`
-	Regex      *regexp.Regexp `yaml:"-"` // This field is parsed, not stored in the config itself.
-	Handler    string         `yaml:"handler"`
-	Headers    []string       `yaml:"headers"`
-	StatusCode int            `yaml:"statusCode"`
-	Plugin     string         `yaml:"plugin"`
-	Name       string         `yaml:"name"`
+	RegexStr string         `yaml:"regex"`
+	Regex    *regexp.Regexp `yaml:"-"` // This field is parsed, not stored in the config itself.
+	// BodyRegex, when set, must ALSO match the request body for the command to fire
+	// (in addition to the URI Regex). Empty = body-agnostic (legacy behavior). Enables
+	// single-endpoint JSON-RPC APIs like MCP Streamable-HTTP (POST /mcp) to branch on
+	// the in-body "method" instead of echoing one response for every method.
+	BodyRegexStr string         `yaml:"bodyRegex"`
+	BodyRegex    *regexp.Regexp `yaml:"-"`
+	Handler      string         `yaml:"handler"`
+	Headers      []string       `yaml:"headers"`
+	StatusCode   int            `yaml:"statusCode"`
+	Plugin       string         `yaml:"plugin"`
+	Name         string         `yaml:"name"`
 	// ReplyFormat switches the TCP strategy's wire encoding for this
 	// command. Empty = plaintext + "\r\n" appended (default, backward-
 	// compatible). Recognized values for Redis RESP2:
@@ -373,11 +379,11 @@ type Command struct {
 
 // Tool is the struct that contains the configurations of the MCP Honeypot
 type Tool struct {
-	Name            string           `yaml:"name" json:"Name"`
-	Description     string           `yaml:"description" json:"Description"`
-	Params          []Param          `yaml:"params" json:"Params"`
-	Handler         string           `yaml:"handler" json:"Handler"`
-	Annotations     *ToolAnnotations `yaml:"annotations,omitempty" json:"Annotations,omitempty"`
+	Name        string           `yaml:"name" json:"Name"`
+	Description string           `yaml:"description" json:"Description"`
+	Params      []Param          `yaml:"params" json:"Params"`
+	Handler     string           `yaml:"handler" json:"Handler"`
+	Annotations *ToolAnnotations `yaml:"annotations,omitempty" json:"Annotations,omitempty"`
 }
 
 // ToolAnnotations contains MCP tool annotation hints for LLM clients
@@ -494,6 +500,13 @@ func (c *BeelzebubServiceConfiguration) CompileCommandRegex() error {
 				return err
 			}
 			c.Commands[i].Regex = rex
+		}
+		if command.BodyRegexStr != "" {
+			rex, err := regexp.Compile(command.BodyRegexStr)
+			if err != nil {
+				return err
+			}
+			c.Commands[i].BodyRegex = rex
 		}
 	}
 	return nil

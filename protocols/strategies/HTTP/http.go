@@ -1,6 +1,7 @@
 package HTTP
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -38,9 +39,9 @@ type httpSessionState struct {
 }
 
 var (
-	httpSessions     sync.Map // IP → *httpSessionState
-	httpCleanupOnce  sync.Once
-	httpJA4Cache     sync.Map // remoteAddr → JA4 string (per-TLS-connection, cleared on disconnect)
+	httpSessions    sync.Map // IP → *httpSessionState
+	httpCleanupOnce sync.Once
+	httpJA4Cache    sync.Map // remoteAddr → JA4 string (per-TLS-connection, cleared on disconnect)
 )
 
 // startHTTPSessionCleanup launches a goroutine that prunes stale sessions every 5 minutes.
@@ -158,6 +159,23 @@ func applyLLMOfflineResponse(resp *httpResponse, fb *parser.LLMOfflineResponse) 
 	}
 }
 
+// commandMatches reports whether a command fires for a request: its URI regex must
+// match, and its optional HTTP Method and optional BodyRegex (single-endpoint JSON-RPC
+// method routing, e.g. MCP Streamable-HTTP) must also match when set. Empty Method /
+// nil BodyRegex = agnostic (legacy behavior — existing configs unaffected).
+func commandMatches(command parser.Command, uri, method, body string) bool {
+	if command.Regex == nil || !command.Regex.MatchString(uri) {
+		return false
+	}
+	if command.Method != "" && !strings.EqualFold(command.Method, method) {
+		return false
+	}
+	if command.BodyRegex != nil && !command.BodyRegex.MatchString(body) {
+		return false
+	}
+	return true
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
@@ -212,19 +230,22 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 		}
 
+		// Buffer the body so commands can match on it (bodyRegex) AND the downstream
+		// handler can still read it. Bounded to 1 MiB (matches buildHTTPResponse).
+		reqBody := ""
+		if request.Body != nil {
+			if b, rerr := io.ReadAll(io.LimitReader(request.Body, 1024*1024)); rerr == nil {
+				reqBody = string(b)
+				request.Body = io.NopCloser(bytes.NewReader(b))
+			}
+		}
+
 		var matched bool
 		var resp httpResponse
 		var err error
 		for _, command := range servConf.Commands {
 			var err error
-			// URI regex must match. Method, when set, must also match
-			// (case-insensitive). Empty Method = method-agnostic (legacy
-			// behavior; existing configs that don't set Method are
-			// unaffected).
-			if !command.Regex.MatchString(request.RequestURI) {
-				continue
-			}
-			if command.Method != "" && !strings.EqualFold(command.Method, request.Method) {
+			if !commandMatches(command, request.RequestURI, request.Method, reqBody) {
 				continue
 			}
 			matched = true
@@ -704,7 +725,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// exporters gate response-summary recording on Command being
 		// non-empty, so populating this is what makes ResponseSummary fire
 		// for HTTP lures.
-		Command:         fmt.Sprintf("%s %s", request.Method, request.RequestURI),
+		Command:            fmt.Sprintf("%s %s", request.Method, request.RequestURI),
 		CommandOutput:      responseBody,
 		ServicePort:        destPort,
 		ResponseStatusCode: responseStatusCode,
@@ -714,10 +735,10 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		// ResponseTimeMs is the handler duration, ALWAYS set.
 		// ResponseBody / ResponseHeaders gated by captureResponseBody flag — only
 		// captured when the operator opts in for this service.
-		ResponseBytes:   int64(len(responseBody)),
-		ResponseTimeMs:  responseTimeMs,
+		ResponseBytes:  int64(len(responseBody)),
+		ResponseTimeMs: responseTimeMs,
 		// v8 Phase 5: session capture metadata — nil when stateless (omitempty).
-		Captured:        captured,
+		Captured: captured,
 	}
 	// Feature #8: Handler override — cookie_forgery events get a dedicated
 	// handler label for downstream filtering / alerting.
