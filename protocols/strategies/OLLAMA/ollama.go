@@ -979,6 +979,34 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 	s.traceEvent(r, tr, servConf, "ollama/tags", "GET /api/tags", string(out), "")
 }
 
+// psModel / psDetails mirror real Ollama's /api/ps response STRUCT so encoding/json
+// emits fields in declaration order. Real Ollama marshals a struct; a map[string]any
+// would sort keys alphabetically — a wire tell (and our prior bug).
+type psDetails struct {
+	ParentModel       string   `json:"parent_model"`
+	Format            string   `json:"format"`
+	Family            string   `json:"family"`
+	Families          []string `json:"families"`
+	ParameterSize     string   `json:"parameter_size"`
+	QuantizationLevel string   `json:"quantization_level"`
+}
+
+type psModel struct {
+	Name          string    `json:"name"`
+	Model         string    `json:"model"`
+	Size          int64     `json:"size"`
+	Digest        string    `json:"digest"`
+	Details       psDetails `json:"details"`
+	ExpiresAt     string    `json:"expires_at"`
+	SizeVRAM      int64     `json:"size_vram"`
+	ContextLength int       `json:"context_length"`
+}
+
+// vramBytes projects on-disk gguf size to resident VRAM footprint (~0.93x, measured
+// from the Jetson oracle: 5433696256/5864652800 = 0.9265). Never equals size — the
+// prior lure set size_vram == size, an internal tell.
+func vramBytes(size int64) int64 { return size - size/14 }
+
 func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) {
 	s.checkBridgeAndCapture(r, "ollama/ps")
 
@@ -988,32 +1016,34 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 	// a loaded model is trivially detectable by polling /api/ps on a fresh
 	// target. Mirror the real behavior: require at least one inference call
 	// from ANY IP within the last 5 minutes to list a model as loaded.
-	running := []map[string]interface{}{}
+	running := []psModel{}
 	s.lastInferenceMu.RLock()
 	fresh := !s.lastInferenceAt.IsZero() && time.Since(s.lastInferenceAt) < 5*time.Minute
 	s.lastInferenceMu.RUnlock()
 	if fresh && len(s.models) > 0 {
 		m := s.models[0]
-		running = append(running, map[string]interface{}{
-			"name":           m.Name,
-			"model":          m.Name,
-			"size":           s.modelSizeBytes(m),
-			"digest":         s.stableDigestHex(m.Name),
-			"expires_at":     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
-			"size_vram":      s.modelSizeBytes(m),
-			"context_length": 4096,
-			"details": map[string]interface{}{
-				"parent_model":       "",
-				"format":             "gguf",
-				"family":             m.Family,
-				"families":           []string{m.Family},
-				"parameter_size":     m.ParameterSize,
-				"quantization_level": m.QuantizationLevel,
+		sz := s.modelSizeBytes(m)
+		running = append(running, psModel{
+			Name:   m.Name,
+			Model:  m.Name,
+			Size:   sz,
+			Digest: s.stableDigestHex(m.Name),
+			Details: psDetails{
+				Format:            "gguf",
+				Family:            m.Family,
+				Families:          []string{m.Family},
+				ParameterSize:     m.ParameterSize,
+				QuantizationLevel: m.QuantizationLevel,
 			},
+			ExpiresAt:     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+			SizeVRAM:      vramBytes(sz),
+			ContextLength: 4096,
 		})
 	}
 
-	resp := map[string]interface{}{"models": running}
+	resp := struct {
+		Models []psModel `json:"models"`
+	}{Models: running}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
