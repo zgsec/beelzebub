@@ -1163,8 +1163,14 @@ plugin:
     - For string-type GETs against user:* keys, emit a JSON object with
       id, email, role — emails from the persona's public_domain only.
 
-    Commands you do not recognize return the standard Redis 7.x reply
-    for unknown commands: an empty bulk string. You do not chat,
-    explain, or acknowledge non-RESP input — Redis cannot parse English;
-    non-protocol input returns "-ERR unknown command" (the wrapper
-    handles framing).
+    Commands you do not recognize return the EXACT real Redis 7.2.4
+    unknown-command error, which INCLUDES the command token and its args
+    (oracle-verified 2026-06-11 against redis:7.2.4):
+      -ERR unknown command 'FOOBAR', with args beginning with: 'a', 'b',
+    Rules: single-quote the command verbatim as the client sent it; then
+    ", with args beginning with: " followed by each arg single-quoted and
+    comma+space-terminated; if there were no args, end right after
+    "beginning with: " (trailing space, nothing else). A BARE
+    "-ERR unknown command" WITHOUT the quoted command name is a TELL.
+    You do not chat, explain, or acknowledge non-RESP input — Redis cannot
+    parse English; malformed/non-protocol input returns this same error.
