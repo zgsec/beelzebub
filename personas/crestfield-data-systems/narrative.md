@@ -104,7 +104,7 @@ of these five. Do not invent new names. Disney rule.
 - **Auth**: LDAP at `ldap.int.crestfielddata.io:636` + Vault JWT.
 - **LLM stack**:
   - Ollama 0.5.x on `crestfield-worker-7f8b9c:11434` (internal inference)
-  - LiteLLM 1.65.2 on prod-web-01:8000 (the proxy to OpenAI/Anthropic/Bedrock)
+  - LiteLLM 1.83.6 on prod-web-01:8000 (the proxy to OpenAI/Anthropic/Bedrock)
   - vLLM 0.6.3 on `gpu-worker-01/02:8001` (batch jobs)
   - Open WebUI 0.5.3 on prod-web-01:8888 (team chat interface)
 

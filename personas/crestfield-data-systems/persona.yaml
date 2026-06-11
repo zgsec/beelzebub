@@ -57,6 +57,13 @@ coherence:
       platform_display_name: "Crestfield Platform"      # human-facing
       platform_version: "v3.12.1-rc1"                   # appears in /health, headers
       build_sha: a8f3e2d1                                # appears in /health
+      # SINGLE SOURCE OF TRUTH for the bundled LiteLLM proxy version. 1.83.6 = last
+      # release where ALL served CVE baits are simultaneously live (intersection of
+      # CVE-2026-42271 [<1.83.7] + GHSA-xqmj [<1.83.7] + CVE-2026-40217 [<1.83.10]).
+      # Every litellm version claim references {{ ...product.litellm_version }} — change
+      # here only. Do NOT hardcode a litellm version anywhere else (coherence + the
+      # whole CVE surface depend on this being one value).
+      litellm_version: "1.83.6"
       region: us-east-1
       jwt_signing_key: "cdf-hmac-2026Q2-prod-b7e4f1c3"  # JWT secret in /.env lures
       mlflow_experiment_names:
@@ -228,7 +235,7 @@ coherence:
       ssh:              { num: 2222, host: prod_web,            service: "OpenSSH 8.9p1 Ubuntu" }
       mysql:            { num: 3306, host: db_mysql_app,        service: "MySQL 8.0.39-0ubuntu0.22.04.2" }
       redis:            { num: 6379, host: redis_node_1,        service: "Redis 7.2.4" }
-      mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.65.2 behind nginx 1.25.4)" }
+      mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.83.6 behind nginx 1.25.4)" }
       vllm:             { num: 8001, host: gpu_worker_1,        service: "vLLM 0.6.6 OpenAI-compat" }
       influxdb:
         num: 8086

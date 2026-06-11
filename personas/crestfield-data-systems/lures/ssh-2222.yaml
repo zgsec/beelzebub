@@ -304,7 +304,7 @@ plugin:
 
     Running locally on this host (docker compose stack at /opt/app/docker-compose.yml):
     - Crestfield Platform API + MCP server (port 8000, behind nginx 1.25.4) — uvicorn
-    - LiteLLM 1.65.2 proxy (bundled with MCP, same :8000) — fronts OpenAI/Anthropic/Bedrock
+    - LiteLLM {{ persona.coherence.world.product.litellm_version }} proxy (bundled with MCP, same :8000) — fronts OpenAI/Anthropic/Bedrock
     - Open WebUI 0.5.3 (port 8888) — team chat
     - Ollama 0.5.4 (port 11434, but the IN-PROD ollama runs on the GPU worker
       crestfield-worker-7f8b9c at 10.0.12.91 — what's here is the dev mirror)

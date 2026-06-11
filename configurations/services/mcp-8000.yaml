@@ -20,9 +20,9 @@ responseBodyMaxBytes: 65536
 # captured from a live LiteLLM 1.65.3 instance and substituted with
 # canaries/persona where natural. See
 # honeypot-research/tools/oracle-diff/litellm-1.65.3/ for the captures.
-# Note: persona.coherence.world.hosts.litellm.version says "1.65.2".
+# Note: persona.coherence.world.hosts.litellm.version says "1.83.6".
 # Real 1.65.3 is the closest installable patch — wire shape is identical
-# between 1.65.2 and 1.65.3 (no breaking changes in 1.65.x). The
+# between 1.83.6 and 1.65.3 (no breaking changes in 1.65.x). The
 # substitution restores the lure's claimed version.
 #
 # Documented intentional deviations from real LiteLLM:
@@ -343,12 +343,12 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"healthy_endpoints":[{"model":"gpt-4o","api_base":"https://api.openai.com/v1"},{"model":"claude-sonnet-4","api_base":"https://api.anthropic.com"},{"model":"{{ persona.coherence.world.product.service_name }}-internal-llm","api_base":"http://{{ persona.coherence.world.hosts.flagship_worker.hostname }}.{{ persona.identity.internal_domain }}:11434"}],"unhealthy_endpoints":[],"healthy_count":3,"unhealthy_count":0,"litellm_version":"1.65.2","litellm_db_status":"connected"}'
+    handler: '{"healthy_endpoints":[{"model":"gpt-4o","api_base":"https://api.openai.com/v1"},{"model":"claude-sonnet-4","api_base":"https://api.anthropic.com"},{"model":"{{ persona.coherence.world.product.service_name }}-internal-llm","api_base":"http://{{ persona.coherence.world.hosts.flagship_worker.hostname }}.{{ persona.identity.internal_domain }}:11434"}],"unhealthy_endpoints":[],"healthy_count":3,"unhealthy_count":0,"litellm_version":"1.83.6","litellm_db_status":"connected"}'
 
   # GET /health/readiness — T1: readiness probe (oracle wire-truth)
   # Oracle 1.65.3: 200 {"status":"healthy","db":"Not connected","cache":null,
   #   "litellm_version":"1.65.3","success_callbacks":[...]}
-  # Lure: same shape, db="connected" + version pinned to persona claim 1.65.2.
+  # Lure: same shape, db="connected" + version pinned to persona claim 1.83.6.
   # success_callbacks list mirrors real defaults (verifiable via real proxy).
   - regex: "^/health/readiness$"
     name: "litellm-health-readiness"
@@ -356,7 +356,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"status":"healthy","db":"connected","cache":null,"litellm_version":"1.65.2","success_callbacks":["sync_deployment_callback_on_success","_PROXY_VirtualKeyModelMaxBudgetLimiter","_PROXY_MaxBudgetLimiter","_PROXY_LiteLLMManagedFiles","_PROXY_MaxParallelRequestsHandler","_PROXY_CacheControlCheck","ServiceLogging"]}'
+    handler: '{"status":"healthy","db":"connected","cache":null,"litellm_version":"1.83.6","success_callbacks":["sync_deployment_callback_on_success","_PROXY_VirtualKeyModelMaxBudgetLimiter","_PROXY_MaxBudgetLimiter","_PROXY_LiteLLMManagedFiles","_PROXY_MaxParallelRequestsHandler","_PROXY_CacheControlCheck","ServiceLogging"]}'
 
   # GET /health/liveness — T1: liveness probe (oracle wire-truth)
   # Oracle 1.65.3: 200 "I'm alive!" — JSON string scalar, content-length 12.
@@ -738,7 +738,7 @@ commands:
 
   # /openapi.json — REAL-LITELLM ENDPOINT. Oracle returns the full FastAPI
   # auto-generated spec (~340 KB, 177 paths). Lure serves real-shape info
-  # block + a curated subset of real LiteLLM paths. version pinned to 1.65.2
+  # block + a curated subset of real LiteLLM paths. version pinned to 1.83.6
   # (persona claim). All path entries are real LiteLLM routes — captured
   # from the live oracle.
   - regex: "^/openapi\\.json$"
@@ -747,7 +747,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"openapi":"3.1.0","info":{"title":"LiteLLM API","description":"Proxy Server to call 100+ LLMs in the OpenAI format. [**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)","version":"1.65.2"},"paths":{"/v1/models":{"get":{"tags":["model management"],"summary":"Model List","operationId":"model_list_v1_models_get","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/health":{"get":{"tags":["health"],"summary":"Health Endpoint","operationId":"health_endpoint_health_get","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/health/readiness":{"get":{"tags":["health"],"summary":"Health Readiness","operationId":"health_readiness_health_readiness_get","responses":{"200":{"description":"Successful Response"}}}},"/health/liveness":{"get":{"tags":["health"],"summary":"Health Liveliness","operationId":"health_liveliness_health_liveness_get","responses":{"200":{"description":"Successful Response"}}}},"/test":{"get":{"tags":["health"],"summary":"Test Endpoint","operationId":"test_endpoint_test_get","responses":{"200":{"description":"Successful Response"}}}},"/v1/chat/completions":{"post":{"tags":["chat/completions"],"summary":"Chat Completion","operationId":"chat_completion_v1_chat_completions_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/v1/embeddings":{"post":{"tags":["embeddings"],"summary":"Embeddings","operationId":"embeddings_v1_embeddings_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/key/generate":{"post":{"tags":["key management"],"summary":"Generate Key Fn","operationId":"generate_key_fn_key_generate_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/user/new":{"post":{"tags":["Internal User management"],"summary":"New User","operationId":"new_user_user_new_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}}}}'
+    handler: '{"openapi":"3.1.0","info":{"title":"LiteLLM API","description":"Proxy Server to call 100+ LLMs in the OpenAI format. [**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)","version":"1.83.6"},"paths":{"/v1/models":{"get":{"tags":["model management"],"summary":"Model List","operationId":"model_list_v1_models_get","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/health":{"get":{"tags":["health"],"summary":"Health Endpoint","operationId":"health_endpoint_health_get","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/health/readiness":{"get":{"tags":["health"],"summary":"Health Readiness","operationId":"health_readiness_health_readiness_get","responses":{"200":{"description":"Successful Response"}}}},"/health/liveness":{"get":{"tags":["health"],"summary":"Health Liveliness","operationId":"health_liveliness_health_liveness_get","responses":{"200":{"description":"Successful Response"}}}},"/test":{"get":{"tags":["health"],"summary":"Test Endpoint","operationId":"test_endpoint_test_get","responses":{"200":{"description":"Successful Response"}}}},"/v1/chat/completions":{"post":{"tags":["chat/completions"],"summary":"Chat Completion","operationId":"chat_completion_v1_chat_completions_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/v1/embeddings":{"post":{"tags":["embeddings"],"summary":"Embeddings","operationId":"embeddings_v1_embeddings_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/key/generate":{"post":{"tags":["key management"],"summary":"Generate Key Fn","operationId":"generate_key_fn_key_generate_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}},"/user/new":{"post":{"tags":["Internal User management"],"summary":"New User","operationId":"new_user_user_new_post","security":[{"APIKeyHeader":[]}],"responses":{"200":{"description":"Successful Response"},"422":{"description":"Validation Error"}}}}}}'
 
   # /api/v2/* — INTENTIONAL HONEYPOT LURE (auth bait, references MCP IAM tool)
   - regex: "^/api/v2/"
