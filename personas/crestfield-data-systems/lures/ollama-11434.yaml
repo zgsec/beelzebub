@@ -141,11 +141,14 @@ ollamaConfig:
   # in per-sensor prod configs (ollama-11434-fra.yaml, ollama-11434-ewr.yaml).
   # If these example values appear in captured sessions, the prod config is wrong.
   canaryTokens:
-    # svc_token is the in-context bearer embedded in crestfield-support's SYSTEM
-    # directive (see models[].system above) — the /api/show modelfile-archaeology
-    # canary. An internal service/bearer token, NOT an AWS key (an AKIA in a
-    # modelfile SYSTEM prompt is implausible; bearer-to-an-internal-service is
-    # exactly how such a token leaks). Mint per-sensor (ewr != fra) for attribution.
+    # svc_token/svc_secret are the AWS AKIA credential PAIR embedded in
+    # crestfield-support's SYSTEM directive (see models[].system above) — the
+    # /api/show modelfile-archaeology canary, framed as DynamoDB order-lookup creds.
+    # CHOSEN 2026-06-11: AWS AKIA over a bearer for FIRE-RELIABILITY — Thinkst AWS
+    # canarytokens fire on ANY use against AWS = the attribution payoff. Hardcoded AWS
+    # creds in a model system prompt is a real, common anti-pattern, so it reads
+    # plausible (the SECURITY meta-block that WAS the tell is removed; see plugin: above).
+    # Mint per-sensor (ewr != fra) for attribution.
     svc_token: "${OLLAMA_CANARY_SVC_TOKEN}"
     svc_secret: "${OLLAMA_CANARY_SVC_SECRET}"
     # The remaining tokens back response-text substitution (substituteCanaryTokens),
@@ -190,11 +193,12 @@ faultInjection:
   delayMs: 0
   delayJitterMs: 200
   errorResponses:
-    # Wire-shapes match real Ollama 0.24.0 error catalog (single-quoted model
-    # name, terse phrasing). Mesh / "ollama-secondary" jargon removed
-    # 2026-05-25 — real Ollama is single-node and never emits that string,
-    # so it was a fingerprint-leak ("custom server hiding behind /api/version").
-    - '{"error":"CUDA out of memory. Tried to allocate 2.00 GiB (GPU 0; 23.65 GiB total capacity; 21.43 GiB already allocated)"}'
+    # Real Ollama (llama.cpp) error forms ONLY. A busy multi-GPU inference box (the
+    # persona's 2x A100-80GB tier) transiently OOMs the CUDA runner under concurrent
+    # load; unknown models 404; generic 5xx otherwise.
+    # REMOVED 2026-06-11: (1) the torch-style GPU-memory body — torch phrasing, not
+    # llama.cpp, an outright tell; (2) the small "requires X / available Y" preflight
+    # body — a 160 GB box never hits a weights-don't-fit error for the advertised models.
+    - '{"error":"llama runner process has terminated: signal: killed; CUDA error: out of memory"}'
     - '{"error":"model ''mixtral:8x7b'' not found"}'
     - '{"error":"an unexpected error occurred, please try again later"}'
-    - '{"error":"model requires more system memory (12.5 GiB) than is available (7.3 GiB)"}'
