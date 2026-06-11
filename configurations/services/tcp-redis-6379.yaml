@@ -802,6 +802,13 @@ commands:
     replyFormat: "redis-simple"
     handler: "OK"
 
+  # CLIENT SETINFO — real Redis 7.2.0+ accepts the LIB-NAME / LIB-VER attestation and
+  # replies +OK. go-redis and redis-py>=4.2 send this on connect; replying
+  # "ERR unknown command" on a claimed 7.2.4 is a version-coherence tell.
+  - regex: "^(?i)CLIENT\\s+SETINFO\\b"
+    replyFormat: "redis-simple"
+    handler: "OK"
+
   # ---------------------------------------------------------------------------
   # COMMAND / COMMAND COUNT — scanner fingerprint; real count for 7.2.4 is
   # 241 (verified against oracle 2026-05-25 — earlier value of 240 was
@@ -1092,6 +1099,13 @@ commands:
     replyFormat: "redis-array"
     replyBulks:
       - "0"
+
+  # EVAL "return 1" 0 — droppers/scanners probe scripting with a trivial literal-return
+  # to confirm EVAL works before attempting a Lua escape; real Redis runs it and
+  # returns the integer :1. A nil-bulk here is a functional tell on the commonest probe.
+  - regex: "^(?i)EVAL\\b.*\\breturn\\s+1\\b"
+    replyFormat: "redis-integer"
+    handler: "1"
 
   - regex: "^(?i)EVAL\\b"
     replyFormat: "redis-nil-bulk"

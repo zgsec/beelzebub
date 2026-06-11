@@ -229,7 +229,7 @@ coherence:
       mysql:            { num: 3306, host: db_mysql_app,        service: "MySQL 8.0.39-0ubuntu0.22.04.2" }
       redis:            { num: 6379, host: redis_node_1,        service: "Redis 7.2.4" }
       mcp_litellm:      { num: 8000, host: prod_web,            service: "Crestfield Platform v3.12.1-rc1 (MCP + LiteLLM 1.65.2 behind nginx 1.25.4)" }
-      vllm:             { num: 8001, host: gpu_worker_1,        service: "vLLM 0.6.3 OpenAI-compat" }
+      vllm:             { num: 8001, host: gpu_worker_1,        service: "vLLM 0.6.6 OpenAI-compat" }
       influxdb:
         num: 8086
         host: metrics_influx
