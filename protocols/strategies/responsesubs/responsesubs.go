@@ -23,6 +23,11 @@
 //	${request.uuid_short}        — first 8 hex chars of the UUID, dashes stripped
 //	${request.unix_ms}           — current time in unix milliseconds
 //	${request.json.<path>}       — dotted-path lookup into the request body
+//	${request.multipart.filename}      — first filename="..." in a multipart body,
+//	                               JSON-escaped for safe placement inside a "..."
+//	                               JSON string (e.g. echoing an upload's name)
+//	${request.multipart.filename_stem} — same filename with its final .ext removed
+//	${request.multipart.ext}     — sanitized final extension incl. leading dot
 //	                               parsed as JSON. Numbers emit unquoted, strings
 //	                               quoted (via json.Marshal). Falls back to the
 //	                               literal token "null" on parse error, missing
@@ -69,6 +74,16 @@ import (
 // Compiled once at package init — the regex is stateless and safe for
 // concurrent use.
 var reRequestJSON = regexp.MustCompile(`\$\{request\.json\.([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
+
+// reMultipartFilename pulls the first filename="..." out of a
+// multipart/form-data request body. The boundary lines carry the
+// filename in the Content-Disposition header, so we can recover it from
+// the raw body without needing the request Content-Type boundary param.
+// Used by the ${request.multipart.*} placeholders so a file-upload lure
+// (e.g. the LangFlow CVE-2026-5027 POST /api/v2/files surface) can echo
+// the attacker's submitted filename — including any ../ path-traversal —
+// back into its 201 response exactly as the real product does.
+var reMultipartFilename = regexp.MustCompile(`(?i)filename="([^"]*)"`)
 
 // timeAgoRE matches ${time.ago.<N><unit>} where unit is one of s/m/h/d.
 // Compiled once at package init — stateless and safe for concurrent use.
@@ -146,6 +161,7 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 
 	newBody := replacer.Replace(body)
 	newBody = applyRequestJSON(newBody, requestBody)
+	newBody = applyMultipart(newBody, requestBody)
 	newBody = applyTime(newBody)
 
 	if headers == nil {
@@ -153,9 +169,81 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 	}
 	newHeaders := make([]string, len(headers))
 	for i, h := range headers {
-		newHeaders[i] = applyTime(applyRequestJSON(replacer.Replace(h), requestBody))
+		newHeaders[i] = applyTime(applyMultipart(applyRequestJSON(replacer.Replace(h), requestBody), requestBody))
 	}
 	return newBody, newHeaders
+}
+
+// applyMultipart resolves the ${request.multipart.*} placeholders by
+// recovering the first filename="..." from a multipart/form-data body.
+// It is a no-op (returns s unchanged) when s contains no
+// ${request.multipart. substring, preserving the zero-allocation fast
+// path for the common case.
+//
+// filename / filename_stem are emitted JSON-escaped but WITHOUT the outer
+// quotes, so a template author writes them inside their own quotes, e.g.
+//
+//	{"name":"${request.multipart.filename_stem}", ...}
+//
+// and any ", \\, ../ or shell metacharacters in the attacker-supplied
+// filename can neither break out of the JSON string nor inject markup.
+// ext is restricted to a leading dot plus [A-Za-z0-9] (capped) so it is
+// always safe to concatenate after a server-generated UUID in a path.
+func applyMultipart(s string, requestBody []byte) string {
+	if !strings.Contains(s, "${request.multipart.") {
+		return s
+	}
+	var filename string
+	if len(requestBody) > 0 {
+		if m := reMultipartFilename.FindSubmatch(requestBody); m != nil {
+			filename = string(m[1])
+		}
+	}
+	stem := filename
+	ext := ""
+	if dot := strings.LastIndexByte(filename, '.'); dot >= 0 {
+		stem = filename[:dot]
+		ext = sanitizeExt(filename[dot:])
+	}
+	return strings.NewReplacer(
+		"${request.multipart.filename_stem}", jsonInner(stem),
+		"${request.multipart.filename}", jsonInner(filename),
+		"${request.multipart.ext}", ext,
+	).Replace(s)
+}
+
+// jsonInner JSON-encodes v and strips the surrounding quotes, yielding a
+// fragment safe to drop inside an existing "..." JSON string literal.
+func jsonInner(v string) string {
+	b, err := json.Marshal(v)
+	if err != nil || len(b) < 2 {
+		return ""
+	}
+	return string(b[1 : len(b)-1])
+}
+
+// sanitizeExt keeps a leading '.' followed by up to 12 alphanumeric
+// characters, stopping at the first non-alphanumeric byte. This mirrors
+// the real product appending the upload's extension to a UUID storage
+// name while guaranteeing the result cannot escape its JSON string.
+func sanitizeExt(ext string) string {
+	if len(ext) == 0 || ext[0] != '.' {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteByte('.')
+	for i := 1; i < len(ext) && b.Len() <= 12; i++ {
+		c := ext[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			b.WriteByte(c)
+		} else {
+			break
+		}
+	}
+	if b.Len() == 1 {
+		return ""
+	}
+	return b.String()
 }
 
 // applyTime resolves ${time.now} and ${time.ago.<N><unit>} placeholders in s.

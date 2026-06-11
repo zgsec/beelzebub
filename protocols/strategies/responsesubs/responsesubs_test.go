@@ -306,3 +306,85 @@ func TestApply_TimeAndRequestJSONComposable(t *testing.T) {
 		t.Fatalf("unrendered substitution: %s", got)
 	}
 }
+
+// multipartBody builds a minimal multipart/form-data body carrying a
+// single file part with the given filename, matching the wire shape a
+// CVE-2026-5027 path-traversal upload to POST /api/v2/files produces.
+func multipartBody(filename string) []byte {
+	const b = "----WebKitFormBoundaryAaB03x"
+	return []byte("--" + b + "\r\n" +
+		`Content-Disposition: form-data; name="file"; filename="` + filename + "\"\r\n" +
+		"Content-Type: application/octet-stream\r\n\r\n" +
+		"payload\r\n" +
+		"--" + b + "--\r\n")
+}
+
+// TestApply_MultipartFilenameEcho — the ${request.multipart.*} placeholders
+// reflect the uploaded filename, split into stem + extension, exactly like
+// the real LangFlow 201 file-create response (id/path use a server UUID).
+func TestApply_MultipartFilenameEcho(t *testing.T) {
+	tmpl := `{"id":"${request.uuid}","name":"${request.multipart.filename_stem}","path":"u/${request.uuid}${request.multipart.ext}","provider":null}`
+	got, _ := Apply(tmpl, nil, nil, multipartBody("probe.txt"))
+
+	var resp struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("response not valid JSON: %v\n%s", err, got)
+	}
+	if resp.Name != "probe" {
+		t.Errorf("name = %q, want %q", resp.Name, "probe")
+	}
+	if want := "u/" + resp.ID + ".txt"; resp.Path != want {
+		t.Errorf("path = %q, want %q (id/path UUID must match, ext echoed)", resp.Path, want)
+	}
+}
+
+// TestApply_MultipartTraversalEchoedStaysValidJSON — a ../ path-traversal
+// filename with shell metacharacters is echoed verbatim into name yet the
+// response remains parseable JSON (no breakout via " or \).
+func TestApply_MultipartTraversalEchoedStaysValidJSON(t *testing.T) {
+	const fn = `../../../../tmp/pwn_$(id).txt`
+	tmpl := `{"name":"${request.multipart.filename_stem}"}`
+	got, _ := Apply(tmpl, nil, nil, multipartBody(fn))
+
+	var resp struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("response not valid JSON: %v\n%s", err, got)
+	}
+	if resp.Name != `../../../../tmp/pwn_$(id)` {
+		t.Errorf("traversal not echoed faithfully: name = %q", resp.Name)
+	}
+}
+
+// TestApply_MultipartQuoteInjectionContained — a filename trying to break
+// out of the JSON string with an embedded quote is neutralised.
+func TestApply_MultipartQuoteInjectionContained(t *testing.T) {
+	tmpl := `{"name":"${request.multipart.filename}","ok":true}`
+	got, _ := Apply(tmpl, nil, nil, multipartBody(`a","x":"b`))
+	var resp map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("quote injection broke JSON: %v\n%s", err, got)
+	}
+	if resp["ok"] != true {
+		t.Errorf("structure altered by injection: %v", resp)
+	}
+}
+
+// TestApply_MultipartNoBodyNoPanic — placeholders with no multipart body
+// resolve to empty strings without panicking and keep JSON valid.
+func TestApply_MultipartNoBodyNoPanic(t *testing.T) {
+	tmpl := `{"name":"${request.multipart.filename_stem}","ext":"${request.multipart.ext}"}`
+	got, _ := Apply(tmpl, nil, nil, nil)
+	var resp map[string]string
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("empty multipart broke JSON: %v\n%s", err, got)
+	}
+	if resp["name"] != "" || resp["ext"] != "" {
+		t.Errorf("expected empty echoes, got %v", resp)
+	}
+}
