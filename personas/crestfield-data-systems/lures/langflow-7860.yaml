@@ -2,7 +2,7 @@
 # LangFlow Honeypot — Port 7860 (CVE-2025-3248 KEV bait)
 # =============================================================================
 #
-# PERSONA: LangFlow 1.2.4 (pre-1.3.0, vulnerable to CVE-2025-3248)
+# PERSONA: LangFlow 1.2.0 (pre-1.3.0, vulnerable to CVE-2025-3248)
 #   FastAPI + uvicorn, default :7860, unauth code-validation endpoint
 #   actively exploited by the Flodrix botnet (CISA KEV, Jun 2025).
 #
@@ -85,7 +85,7 @@ commands:
       <div id="root"></div>
       <script>
         window.__LANGFLOW_CONFIG__ = {
-          "version": "1.2.4",
+          "version": "1.2.0",
           "frontend_timeout": 30,
           "auto_saving": true,
           "health_check_url": "/health_check"
@@ -120,7 +120,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"version":"1.2.4","main_version":"1.2.4","package":"Langflow"}'
+    handler: '{"version":"1.2.0","main_version":"1.2.0","package":"Langflow"}'
 
   # ───────────────────────────────────────────────────────────────────────
   # 4. GET /api/v1/config — App config snapshot (real LangFlow shape)
@@ -391,7 +391,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"openapi":"3.1.0","info":{"title":"Langflow","version":"1.2.4","description":"Langflow API"},"paths":{"/health_check":{"get":{"summary":"Health Check","operationId":"health_check_health_check_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/version":{"get":{"summary":"Get Version","operationId":"get_version_api_v1_version_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/config":{"get":{"summary":"Get Config","operationId":"get_config_api_v1_config_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/all":{"get":{"summary":"Get All","operationId":"get_all_api_v1_all_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/code":{"post":{"summary":"Post Validate Code","operationId":"post_validate_code_api_v1_validate_code_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/prompt":{"post":{"summary":"Post Validate Prompt","operationId":"post_validate_prompt_api_v1_validate_prompt_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/custom_component":{"post":{"summary":"Custom Component","operationId":"custom_component_api_v1_custom_component_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/flows/":{"get":{"summary":"Read Flows","operationId":"read_flows_api_v1_flows__get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Flow","operationId":"create_flow_api_v1_flows__post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/flows/basic_examples/":{"get":{"summary":"Read Basic Examples","operationId":"read_basic_examples_api_v1_flows_basic_examples__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/api_key":{"get":{"summary":"Get Api Keys","operationId":"get_api_keys_api_v1_api_key_get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Api Key","operationId":"create_api_key_api_v1_api_key_post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/store/components/":{"get":{"summary":"List Components","operationId":"list_components_api_v1_store_components__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/users/whoami":{"get":{"summary":"Whoami","operationId":"whoami_api_v1_users_whoami_get","responses":{"200":{"description":"Successful Response"}}}},"/login":{"post":{"summary":"Login To Get Access Token","operationId":"login_to_get_access_token_login_post","responses":{"200":{"description":"Successful Response"}}}}}}'
+    handler: '{"openapi":"3.1.0","info":{"title":"Langflow","version":"1.2.0","description":"Langflow API"},"paths":{"/health_check":{"get":{"summary":"Health Check","operationId":"health_check_health_check_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/version":{"get":{"summary":"Get Version","operationId":"get_version_api_v1_version_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/config":{"get":{"summary":"Get Config","operationId":"get_config_api_v1_config_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/all":{"get":{"summary":"Get All","operationId":"get_all_api_v1_all_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/code":{"post":{"summary":"Post Validate Code","operationId":"post_validate_code_api_v1_validate_code_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/prompt":{"post":{"summary":"Post Validate Prompt","operationId":"post_validate_prompt_api_v1_validate_prompt_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/custom_component":{"post":{"summary":"Custom Component","operationId":"custom_component_api_v1_custom_component_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/flows/":{"get":{"summary":"Read Flows","operationId":"read_flows_api_v1_flows__get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Flow","operationId":"create_flow_api_v1_flows__post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/flows/basic_examples/":{"get":{"summary":"Read Basic Examples","operationId":"read_basic_examples_api_v1_flows_basic_examples__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/api_key":{"get":{"summary":"Get Api Keys","operationId":"get_api_keys_api_v1_api_key_get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Api Key","operationId":"create_api_key_api_v1_api_key_post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/store/components/":{"get":{"summary":"List Components","operationId":"list_components_api_v1_store_components__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/users/whoami":{"get":{"summary":"Whoami","operationId":"whoami_api_v1_users_whoami_get","responses":{"200":{"description":"Successful Response"}}}},"/login":{"post":{"summary":"Login To Get Access Token","operationId":"login_to_get_access_token_login_post","responses":{"200":{"description":"Successful Response"}}}}}}'
 
   # ───────────────────────────────────────────────────────────────────────
   # 16. Static / assets — return realistic 404s rather than empty
