@@ -1208,21 +1208,60 @@ commands:
     statusCode: 200
     handler: '{"status":"completed","exec_id":"run-${request.uuid_short}","stdout":"","stderr":"","execution_time_ms":47,"sandbox_metadata":{"python_version":"3.12.3","sandbox_type":"restricted","resource_limits":{"cpu_seconds":5,"memory_mb":128}}}'
 
-  # POST /mcp-rest/test/connection — GHSA-v4p8 (LiteLLM MCP stdio RCE).
-  # Already observed (memory: reference_litellm_mcp_stdio_injection,
-  # 5-Azure-IP coordinated recon 2026-05-17). Vulnerable LiteLLM
-  # versions allow arbitrary stdio command invocation via the
-  # `command` + `args` fields. Response simulates successful
-  # connection to the user-supplied command.
-  - regex: "^/mcp-rest/test/connection$"
+  # POST /mcp-rest/test/{connection,tools/list} — CVE-2026-42271 / GHSA-v4p8-mg3p-g94g
+  # (LiteLLM MCP stdio command-injection; CISA-flagged active exploitation, June 2026).
+  #
+  # ORACLE GROUND TRUTH captured 2026-06-11 from ghcr.io/berriai/litellm:main-stable
+  # (responses are version-stable across the vuln range — the 1.83.7 fix only role-
+  # gated these endpoints, it did NOT reshape the bodies). Fixtures + probe manifest:
+  #   honeypot-research/tools/oracle-diff/litellm-mcp-rest-2026-06-11/
+  # Verify byte-equality with: tools/oracle-diff/runner.py (docker-live mode).
+  #
+  # The PREVIOUS hand-authored bait returned a fake {"status":"connected",...,"stdout":
+  # "MCP server started"} with Content-Type charset=utf-8 + an X-Request-Id header.
+  # ALL THREE are tells — real LiteLLM returns NONE of them. Replaced with the four
+  # real shapes below. connection and tools/list are byte-identical (same regex).
+  #
+  # The 1.83.7 "fix" is a WEAK command allowlist (deno/docker/node/npx/python/python3/
+  # uvx) — every one executes arbitrary code (python3 -c, node -e, npx <x>, docker run),
+  # so the allowlisted-cmd path IS the live RCE vector AND our capture seam: the
+  # attacker's `python3 -c "<payload>"` lands in Body/RequestBody. Do NOT collapse this
+  # back into a fake success; the real product never returns one for a non-MCP command.
+
+  # 1. empty args -> 422 (real product checks this BEFORE the allowlist; ordered first).
+  - regex: "^/mcp-rest/test/(connection|tools/list)$"
     method: POST
-    name: "litellm-cve-ghsa-v4p8-mcp-stdio-bait"
+    bodyRegex: '"args"\s*:\s*\[\s*\]'
+    name: "litellm-cve-2026-42271-mcp-stdio-args-required"
     headers:
-      - "Content-Type: application/json; charset=utf-8"
+      - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Request-Id: req_${request.uuid_short}"
+    statusCode: 422
+    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, args is required for stdio transport","input":{"transport":"${request.json.transport}","command":"${request.json.command}","args":[]},"ctx":{"error":{}}}]}'
+
+  # 2. allowlisted command -> 200 generic connect error. The RCE-vector capture seam:
+  #    the attacker's interpreter payload (python3 -c "...", node -e "...") is logged.
+  - regex: "^/mcp-rest/test/(connection|tools/list)$"
+    method: POST
+    bodyRegex: '"command"\s*:\s*"(python3?|node|npx|uvx|docker|deno)"'
+    name: "litellm-cve-2026-42271-mcp-stdio-rce-vector"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
     statusCode: 200
-    handler: '{"status":"connected","connection_id":"mcp-conn-${request.uuid_short}","stdout":"MCP server started\nWaiting for JSON-RPC messages on stdin\n","stderr":"","tools_discovered":[],"server_info":{"name":"mcp-test","version":"1.0.0"},"transport":"stdio","pid":18472}'
+    handler: '{"status":"error","error":true,"message":"Failed to connect to MCP server. Check proxy logs for details."}'
+
+  # 3. default: any non-allowlisted command -> 422 allowlist error. Breadcrumbs the
+  #    attacker straight to the allowlisted interpreters in rule 2. Echoes the
+  #    attacker's command + input verbatim (matches the real product's Pydantic error).
+  - regex: "^/mcp-rest/test/(connection|tools/list)$"
+    method: POST
+    name: "litellm-cve-2026-42271-mcp-stdio-allowlist-422"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 422
+    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, Command ''${request.json.command}'' is not in the allowed commands list for stdio transport. Allowed commands: [''deno'', ''docker'', ''node'', ''npx'', ''python'', ''python3'', ''uvx'']","input":{"transport":"${request.json.transport}","command":"${request.json.command}","args":${request.json.args}},"ctx":{"error":{}}}]}'
 
   # POST /prompts/test — GHSA-xqmj (LiteLLM SSTI in prompts endpoint).
   - regex: "^/prompts/test$"
