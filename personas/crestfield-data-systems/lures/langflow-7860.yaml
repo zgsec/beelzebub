@@ -1,100 +1,89 @@
 # =============================================================================
-# LangFlow Honeypot — Port 7860 (CVE-2025-3248 KEV bait)
+# LangFlow Honeypot — Port 7860 — multi-CVE bait surface
 # =============================================================================
 #
-# PERSONA: LangFlow 1.2.0 (pre-1.3.0, vulnerable to CVE-2025-3248)
-#   FastAPI + uvicorn, default :7860, unauth code-validation endpoint
-#   actively exploited by the Flodrix botnet (CISA KEV, Jun 2025).
+# PERSONA: LangFlow 1.2.0, DEFAULT deployment (LANGFLOW_AUTO_LOGIN=true).
+#   FastAPI + uvicorn, default :7860. The default auto-login superuser
+#   ("langflow") means EVERY endpoint answers unauthenticated — there are
+#   no 401s anywhere. This is the exact shape Tenable/Sysdig/CrowdSec call
+#   out as the precondition for the LangFlow CVE wave, and it is what
+#   ~7,000 internet-exposed instances actually present.
 #
-# VULNERABILITY:
-#   POST /api/v1/validate/code accepts a JSON body containing a Python
-#   `code` field and runs it through ast.parse -> compile -> direct
-#   evaluation server-side with no auth and no sandbox. Public PoC:
-#   github.com/verylazytech/CVE-2025-3248 — payload typically lives in
-#   function defaults or decorators. Patched in 1.3.0 by requiring an
-#   API key or JWT.
+# WHY 1.2.0 (oracle-chosen, 2026-06-11):
+#   1.2.0 is simultaneously vulnerable to the most actively-exploited
+#   LangFlow CVEs. A later build would PATCH the validate/code RCE
+#   (fixed in 1.3.0), so 1.2.0 is the maximal-bait pin:
+#     CVE-2025-3248  (CISA KEV, Flodrix)  POST /api/v1/validate/code   ✓ <1.3.0
+#     CVE-2026-0770  (validate/code RCE)  POST /api/v1/validate/code   ✓ same path
+#     CVE-2026-5027  (unpatched, ITW Jun) POST /api/v2/files (../write) ✓ present
+#     CVE-2026-21445 (CISA KEV)           GET  /api/v1/monitor/*        ✓ <1.7.1
+#     CVE-2025-34291 (CISA KEV, MuddyW.)  CORS allow_origins=* + creds  ~ <1.6.9
+#   Intentionally OUT OF SCOPE:
+#     CVE-2026-33017  POST /api/v1/build_public_tmp/{id}/flow — that route
+#       does NOT exist in 1.2.0 (oracle: POST -> 405 via SPA catch-all).
+#       Emulating it would be incoherent with a validate/code-vulnerable
+#       persona, so the faithful catch-all 405 is left to stand.
+#
+# ORACLE GROUNDING (2026-06-11):
+#   Every shape below was captured from a real `langflowai/langflow:1.2.0`
+#   container. Captures + provenance live at
+#   honeypot-research/tools/oracle-diff/langflow-1.2.0/. Key default-deploy
+#   facts that this file now matches (and the previous draft got wrong):
+#     - unmatched GET  -> the SPA index.html (200, text/html), NOT a JSON 404
+#     - unmatched POST -> 405 {"detail":"Method Not Allowed"} (SPA is GET-only)
+#     - bad/empty body -> 422 FastAPI validation error, NOT 401
+#     - /api/v1/config, whoami, api_key/, /health all have exact shapes below
+#     - the SPA shell carries NO inline __LANGFLOW_CONFIG__ (that was fictional)
+#
+# ENGINEERED DECEPTION TIERS (fidelity is the carrier; these are the payload):
+#   T1  validate/code capture — we always 200 "valid" (real 1.2.x reports
+#       only import/AST shape, never eval status) so the scanner believes the
+#       RCE landed and leaves the full Python payload behind. captureRequestBody
+#       records the exact dropper (Flodrix base64-in-defaults / CVE-2026-0770
+#       __import__+throw(Exception()) output-exfil) — non-commodity intel.
+#   T2  /api/v2/files path-traversal capture — we 201 and echo the attacker's
+#       traversal filename back (via ${request.multipart.*}) exactly like the
+#       real product, so the operator believes the arbitrary write succeeded
+#       and proceeds to drop a real stage-2 payload. The multipart body (the
+#       ../ target path + file content) is captured.
+#   T3  watermark cross-pollination — a Crestfield prod Postgres DSN is leaked
+#       in a flow node template at GET /api/v1/flows/ (where real connection
+#       strings live, on the attacker's enumerate-flows -> read-templates
+#       path). If the harvested password `watermark_passwords.langflow` later
+#       appears as an SSH login on :2222, the cross-lure trail is captured.
+#       Pre-registered POC; baseline 0 attempts of this shape in 90d.
 #
 # CAPTURE:
-#   `captureResponseBody: true` so the Phase-0 exporter records the JSON
-#   response we sent back, and our INGEST side can correlate the request
-#   body (Python code) -> response. We always answer 200 "valid", which
-#   is exactly what real vulnerable LangFlow 1.2.x does — the validation
-#   endpoint only reports import + AST shape, not evaluation status,
-#   even though the dangerous code path already ran.
-#
-# CANARY MINTS DEFERRED (Path A, 2026-05-18):
-#   canarytokens.org webhook validation broken; mints postponed until
-#   self-hosted Canarytokens stack stands up. The /api/v1/api_key route
-#   gates to 401 (matches patched-product shape). Web-bug img dropped
-#   from SPA shell. Watermark password leak in /api/v1/store/components/
-#   remains intact (no canary dependency).
-#
-# WATERMARK:
-#   `cdf_prod_2026Q2-5e8d3f1b` appears in one config-leak surface
-#   (/api/v1/store/components/ defaults). Cross-pollination POC — if an
-#   attacker harvests this string here and tries it as an SSH password,
-#   the SSH-2222 lure passwordRegex captures the cross-lure trail.
-#   Pre-registered POC; baseline 0 attempts of this shape in last 90d.
+#   captureRequestBody + captureResponseBody so the Phase-0 exporter records
+#   both the attacker payload (Python code / multipart traversal) and the
+#   response we returned, and ingest can correlate request -> response.
 #
 # PERSONA-SWAPPABLE:
-#   Every Crestfield-specific string comes from `persona.coherence.world.*`
-#   Jinja templating. When persona swaps, this file does NOT change — only
-#   persona.yaml.
+#   Crestfield-specific strings come from persona.coherence.world.* — swapping
+#   persona re-renders this file unchanged.
 #
-# Response shapes verified against LangFlow main-branch endpoints.py
-#   (github.com/langflow-ai/langflow) and Trend Micro CVE writeup.
-#
-# Built: 2026-05-18 (Disney Phase 7)
+# KNOWN APPROXIMATIONS (documented, low fingerprint value):
+#   - /api/v1/all real payload is ~2 MB of component schemas; we serve a
+#     thin subset using the real top-level category keys.
+#   - /openapi.json real is ~119 KB / ~100 paths; we serve the core subset.
+#   - GET /api/v2/files always returns [] (stateless — no upload persistence).
+#   - CVE-2025-34291 CORS headers (ACAO:* + credentials) are emitted by real
+#     1.2.0 ONLY when the request carries an Origin; static headers can't be
+#     request-conditional without an Origin-reflection instrument change, and
+#     34291 capture value is low (browser-driven, victim IPs). Deferred.
 # =============================================================================
 apiVersion: "v1"
 protocol: "http"
 address: ":7860"
 description: "{{ persona.coherence.world.company.display_name }} — LangFlow visual builder (data-platform team)"
-# CVE-2025-3248 is the reason this lure exists: the value is the Python RCE payload the
-# attacker POSTs to /api/v1/validate/code. WITHOUT captureRequestBody we hash but never
-# store it — i.e. we lose the exact non-commodity intel (Flodrix etc.). Capture it.
 captureRequestBody: true
-requestBodyMaxBytes: 65536
+requestBodyMaxBytes: 262144
 captureResponseBody: true
 responseBodyMaxBytes: 65536
 commands:
 
   # ───────────────────────────────────────────────────────────────────────
-  # 1. GET / — LangFlow SPA shell (HTML)
-  # Real LangFlow ships a Vite-built React SPA; index.html is small.
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/$"
-    headers:
-      - "Content-Type: text/html; charset=utf-8"
-      - "Server: uvicorn"
-      - "Cache-Control: no-cache"
-    statusCode: 200
-    handler: |
-      <!doctype html>
-      <html lang="en">
-      <head>
-      <meta charset="UTF-8"/>
-      <link rel="icon" type="image/x-icon" href="/static/img/langflow-icon-color.svg"/>
-      <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
-      <meta name="description" content="LangFlow - Build LLM workflows visually"/>
-      <title>Langflow</title>
-      <script type="module" crossorigin src="/assets/index-a3f2c8e1.js"></script>
-      <link rel="stylesheet" crossorigin href="/assets/index-b9d4e72a.css"/>
-      </head>
-      <body>
-      <div id="root"></div>
-      <script>
-        window.__LANGFLOW_CONFIG__ = {
-          "version": "1.2.0",
-          "frontend_timeout": 30,
-          "auto_saving": true,
-          "health_check_url": "/health_check"
-        };
-      </script>
-      </body></html>
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 2. GET /health_check — Real LangFlow uses this (not /health)
+  # Health — real LangFlow uses /health_check; /health returns a thinner body
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/health_check$"
     headers:
@@ -103,17 +92,15 @@ commands:
     statusCode: 200
     handler: '{"status":"ok","chat":"ok","db":"ok"}'
 
-  # Some legacy LangFlow installs answered /health too — keep both happy
   - regex: "^/health$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"status":"ok","chat":"ok","db":"ok"}'
+    handler: '{"status":"ok"}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 3. GET /api/v1/version — Version probe (scanners use this to confirm
-  #    vulnerable build before launching the CVE payload).
+  # Version probe — scanners confirm the vulnerable build before the payload
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/version$"
     headers:
@@ -123,57 +110,47 @@ commands:
     handler: '{"version":"1.2.0","main_version":"1.2.0","package":"Langflow"}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 4. GET /api/v1/config — App config snapshot (real LangFlow shape)
+  # App config snapshot — EXACT real 1.2.0 shape (oracle-captured)
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/config$"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"feature_flags":{"mvp_components":false,"async_components":true},"frontend_timeout":30,"auto_saving":true,"auto_saving_interval":1000,"health_check_max_retries":5,"max_file_size_upload":100,"public_flow_cleanup_interval":3600,"webhook_polling_interval":5000}'
+    handler: '{"feature_flags":{"mvp_components":false},"frontend_timeout":0,"auto_saving":true,"auto_saving_interval":1000,"health_check_max_retries":5,"max_file_size_upload":100,"event_delivery":"polling"}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 5. POST /api/v1/validate/code — CVE-2025-3248 (CISA KEV, Flodrix)
-  #
-  #   Real-product behavior: in 1.2.x this endpoint runs the submitted
-  #   code through ast.parse / compile / direct evaluation (no auth, no
-  #   sandbox) and always returns a 200 with import + AST shape — even
-  #   when the dangerous code path itself silently succeeded. We mimic
-  #   that exact shape so the scanner thinks the exploit worked and
-  #   moves on to the next stage.
-  #
-  #   Capture is upstream: captureResponseBody=true + the ingest pipeline
-  #   reads request body separately, so we see the full Python payload
-  #   that would have been evaluated. The Flodrix dropper is a multi-line
-  #   payload using base64'd shell-out in function defaults — perfect
-  #   research material.
-  #
-  #   StatusCode 200 is critical — a 4xx would tell the scanner the
-  #   endpoint is patched and they would move on without leaving the
-  #   payload behind.
+  # T1 — CVE-2025-3248 (CISA KEV, Flodrix) + CVE-2026-0770
+  #   POST /api/v1/validate/code. Real 1.2.x runs the submitted code through
+  #   ast.parse/compile/eval (no auth, no sandbox) and returns 200 with only
+  #   import + AST shape — never eval status — even after the dangerous path
+  #   ran. We mirror that exact 200 so the scanner thinks it worked and moves
+  #   on, leaving the payload behind. We do NOT execute it (honeypot, not an
+  #   interpreter) — the request body capture IS the intel.
+  #   GET on this path is intentionally absent: real returns the SPA shell
+  #   (200 HTML) via the catch-all, NOT a 405.
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/validate/code$"
     method: POST
-    name: "langflow-cve-2025-3248-validate-code"
+    bodyRegex: "code"
+    name: "langflow-validate-code-cve-2025-3248-cve-2026-0770"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "X-Request-Id: req_${request.uuid_short}"
     statusCode: 200
     handler: '{"imports":{"errors":[]},"function":{"errors":[]}}'
 
-  # GET on the CVE endpoint — real LangFlow returns 405 Method Not Allowed
+  # POST with no `code` field -> real FastAPI 422 (not 401, not 200)
   - regex: "^/api/v1/validate/code$"
-    method: GET
-    name: "langflow-cve-2025-3248-validate-code-method-gate"
+    method: POST
+    name: "langflow-validate-code-missing-field"
     headers:
-      - "Allow: POST"
       - "Content-Type: application/json"
       - "Server: uvicorn"
-    statusCode: 405
-    handler: '{"detail":"Method Not Allowed"}'
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["body","code"],"msg":"Field required","input":{}}]}'
 
-  # Sibling endpoint — POST /api/v1/validate/prompt (also pre-auth in 1.2.x)
+  # Sibling pre-auth endpoint — POST /api/v1/validate/prompt
   - regex: "^/api/v1/validate/prompt$"
     method: POST
     name: "langflow-validate-prompt"
@@ -184,265 +161,314 @@ commands:
     handler: '{"input_variables":[],"frontend_node":null}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 6. GET /api/v1/all — Component catalog. Real LangFlow returns a
-  # heavily-nested object keyed by component category. Scanners hit this
-  # right after /version to enumerate what nodes are available; serving
-  # a thin-but-realistic subset is enough.
+  # T2 — CVE-2026-5027 (unpatched; in-the-wild Jun 2026)
+  #   POST /api/v2/files does not sanitise the multipart `filename`, allowing
+  #   ../ arbitrary file write -> RCE. Real returns 201 echoing the filename
+  #   stem in `name` and a <userid>/<uuid>.<ext> storage `path` (id == that
+  #   uuid). We reproduce it byte-for-byte using the ${request.multipart.*}
+  #   echo so the operator believes the write landed and drops a real stage-2.
+  #   The multipart body (../ target + content) is captured.
   # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/all$"
+  - regex: "^/api/v2/files/?$"
+    method: POST
+    bodyRegex: 'filename="'
+    name: "langflow-files-cve-2026-5027-path-traversal-write"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-    statusCode: 200
-    handler: '{"agents":{"AgentExecutor":{"display_name":"Agent","description":"Construct an agent from an LLM and tools."}},"chains":{"LLMChain":{"display_name":"LLMChain","description":"Chain to run queries against LLMs."}},"prompts":{"PromptTemplate":{"display_name":"Prompt","description":"A prompt template for a language model."}},"llms":{"ChatOpenAI":{"display_name":"OpenAI","description":"OpenAI chat large language models."},"Ollama":{"display_name":"Ollama","description":"Local Ollama instance"}},"embeddings":{"OpenAIEmbeddings":{"display_name":"OpenAI Embeddings","description":"OpenAI embedding models."}},"vectorstores":{"Chroma":{"display_name":"Chroma","description":"Chroma vector store."}},"custom_components":{"CustomComponent":{"display_name":"Custom","description":"Custom component"}}}'
+    statusCode: 201
+    handler: '{"id":"${request.uuid}","name":"${request.multipart.filename_stem}","path":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84/${request.uuid}${request.multipart.ext}","size":7,"provider":null}'
 
-  # ───────────────────────────────────────────────────────────────────────
-  # 7. Flow management — list, get, basic_examples
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/flows/basic_examples/?$"
+  # POST /api/v2/files with no file part -> real 422
+  - regex: "^/api/v2/files/?$"
+    method: POST
+    name: "langflow-files-missing-file"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-    statusCode: 200
-    handler: '[{"id":"6f2a8e91-1c4b-4d2f-9a87-3e1d4c5b6a92","name":"Basic Prompting","description":"Send a prompt to an LLM and get a response.","data":{"nodes":[],"edges":[]},"is_component":false,"updated_at":"${time.ago.45d}","webhook":false,"endpoint_name":null,"folder_id":null,"user_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"},{"id":"7c3b9f02-2d5c-4e3f-8a98-4f2e5d6c7b03","name":"Vector Store RAG","description":"Retrieval-augmented generation using a vector store.","data":{"nodes":[],"edges":[]},"is_component":false,"updated_at":"${time.ago.45d}","webhook":false,"endpoint_name":null,"folder_id":null,"user_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"}]'
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["body","file"],"msg":"Field required","input":null}]}'
 
-  # GET /api/v1/flows/ — auth required in real product; matches scanner pattern
-  - regex: "^/api/v1/flows/?$"
+  # GET /api/v2/files -> file list (stateless: always empty)
+  - regex: "^/api/v2/files/?$"
     method: GET
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  # POST /api/v1/flows/ — create flow (also auth-gated)
-  - regex: "^/api/v1/flows/?$"
-    method: POST
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  # Individual flow lookup
-  - regex: "^/api/v1/flows/[0-9a-fA-F-]{36}$"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
+    statusCode: 200
+    handler: '[]'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 8. POST /api/v1/custom_component — sibling RCE-adjacent surface.
-  # Post-auth in modern versions; we keep it auth-gated so it looks
-  # patched. Scanners probing the legacy free path move on.
+  # T3 — CVE-2026-21445 (CISA KEV) monitor endpoints (unauth in <1.7.1).
+  #   In the default auto-login deploy these answer 200 already; matching the
+  #   real shapes keeps the 21445 fingerprint coherent and gives a 21445
+  #   scanner the enumeration surface it expects.
+  # ───────────────────────────────────────────────────────────────────────
+  - regex: "^/api/v1/monitor/messages(\\?.*)?$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '[]'
+
+  - regex: "^/api/v1/monitor/builds\\?.*flow_id="
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"vertex_builds":{}}'
+
+  - regex: "^/api/v1/monitor/builds/?$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["query","flow_id"],"msg":"Field required","input":null}]}'
+
+  - regex: "^/api/v1/monitor/transactions\\?.*flow_id="
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"items":[],"total":0,"page":1,"size":50,"pages":0}'
+
+  - regex: "^/api/v1/monitor/transactions/?$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["query","flow_id"],"msg":"Field required","input":null}]}'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Flows — GET /api/v1/flows/ returns the user's flows (200 in auto-login).
+  # T3 watermark: a Crestfield prod Postgres DSN hardcoded inline in a
+  # SecretStrInput node template — the "careless devops pasted the prod DSN
+  # instead of using the secret store" misconfiguration. Harvestable on the
+  # attacker's flow-enumeration path.
+  # ───────────────────────────────────────────────────────────────────────
+  - regex: "^/api/v1/flows/?$"
+    method: GET
+    name: "langflow-flows-list-watermark-leak"
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '[{"id":"f1e2d3c4-b5a6-4798-8a0b-1c2d3e4f5a6b","name":"{{ persona.coherence.world.product.service_name }}-prod-etl-pg-to-vector","description":"Nightly loader: pull customer rows from prod Postgres into the RAG store. Pin to {{ persona.coherence.world.product.platform_version }}.","icon":"Database","icon_bg_color":"#1c7ed6","gradient":"2","data":{"nodes":[{"id":"PostgresVectorStore-cdf01","type":"genericNode","position":{"x":140,"y":96},"measured":{"width":320,"height":420},"data":{"type":"PostgresVectorStore","node":{"display_name":"Postgres Vector Store","description":"Load embeddings into the prod pgvector store.","base_classes":["Data"],"template":{"connection_string":{"_input_type":"SecretStrInput","type":"str","password":true,"required":true,"show":true,"name":"connection_string","display_name":"PG Connection String","value":"postgresql://{{ persona.coherence.world.product.service_name }}_app:{{ persona.coherence.world.watermark_passwords.langflow }}@db-primary.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.coherence.world.product.service_name }}_prod","load_from_db":false,"advanced":false,"info":"Primary Postgres DSN for the prod loader."}}}}}],"edges":[]},"is_component":false,"updated_at":"2026-05-28T09:14:22.481037","webhook":false,"endpoint_name":null,"tags":[],"locked":false,"user_id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84","folder_id":"a0b1c2d3-e4f5-4061-8273-9a8b7c6d5e4f"}]'
+
+  - regex: "^/api/v1/flows/basic_examples/?$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '[{"id":"6f2a8e91-1c4b-4d2f-9a87-3e1d4c5b6a92","name":"Basic Prompting","description":"Send a prompt to an LLM and get a response.","data":{"nodes":[],"edges":[]},"is_component":false,"updated_at":"${time.ago.45d}","webhook":false,"endpoint_name":null,"folder_id":null,"user_id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84"}]'
+
+  # Individual flow lookup — unknown id -> real 404 (not SPA, not 401)
+  - regex: "^/api/v1/flows/[0-9a-fA-F-]{36}$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 404
+    handler: '{"detail":"Flow not found"}'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Identity / keys — auto-login superuser (real default username "langflow")
+  # ───────────────────────────────────────────────────────────────────────
+  - regex: "^/api/v1/users/whoami$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84","username":"langflow","profile_image":null,"store_api_key":null,"is_active":true,"is_superuser":true,"create_at":"2026-02-19T14:32:08.117446","updated_at":"2026-02-19T14:32:08.117461","last_login_at":null}'
+
+  # api_key list — real route is /api/v1/api_key/ (trailing slash); the
+  # no-slash form falls through to the SPA catch-all, exactly like real.
+  - regex: "^/api/v1/api_key/$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"total_count":0,"user_id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84","api_keys":[]}'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Store proxy — real returns the public marketplace listing (authorized
+  # false when no store key). Thin real-shaped subset.
+  # ───────────────────────────────────────────────────────────────────────
+  - regex: "^/api/v1/store/components/?$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"count":2,"authorized":false,"results":[{"id":"73bdb048-0e4e-4c58-823d-a099b9414d8c","name":"MP3 QA12","description":"Ask any questions to an MP3 file","liked_by_count":39,"liked_by_user":null,"is_component":false,"metadata":{"PromptTemplate":{"count":1},"LLMChain":{"count":1},"ChatOpenAI":{"count":1},"total":3},"user_created":{"username":"vazz"},"tags":[{"id":"cd614b49-dd57-4c8b-a5eb-f8bb5f957b9a","name":"Vector Store"}],"downloads_count":355,"last_tested_version":"1.2.0","private":false},{"id":"1f2cdb65-2b84-489f-9f11-b6999d7cda63","name":"Document Processor","description":"This component processes a document","liked_by_count":27,"liked_by_user":null,"is_component":true,"metadata":{"Data":{"count":1},"total":1},"user_created":{"username":"langflow"},"tags":[],"downloads_count":287,"last_tested_version":"1.2.0","private":false}]}'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Component catalog — real is ~2 MB; thin subset with the real top-level
+  # category keys (documented approximation).
+  # ───────────────────────────────────────────────────────────────────────
+  - regex: "^/api/v1/all$"
+    method: GET
+    headers:
+      - "Content-Type: application/json"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"inputs":{"ChatInput":{"display_name":"Chat Input","description":"Get chat inputs from the Playground."}},"outputs":{"ChatOutput":{"display_name":"Chat Output","description":"Display a chat message in the Playground."}},"prompts":{"Prompt":{"display_name":"Prompt","description":"Create a prompt template with dynamic variables."}},"models":{"OpenAIModel":{"display_name":"OpenAI","description":"Generates text using OpenAI LLMs."}},"agents":{"Agent":{"display_name":"Agent","description":"Define the agent''s instructions, then enter a task to complete using tools."}},"vectorstores":{"Chroma":{"display_name":"Chroma DB","description":"Chroma Vector Store with search capabilities."}},"embeddings":{"OpenAIEmbeddings":{"display_name":"OpenAI Embeddings","description":"Generate embeddings using OpenAI models."}},"data":{"File":{"display_name":"File","description":"Load a file to be used in your project."}},"processing":{"SplitText":{"display_name":"Split Text","description":"Split text into chunks based on specified criteria."}},"tools":{"PythonREPLTool":{"display_name":"Python REPL","description":"A tool for running Python code in a REPL environment."}},"logic":{"Conditional":{"display_name":"If-Else","description":"Routes an input to a corresponding output based on a condition."}},"helpers":{"Memory":{"display_name":"Message History","description":"Retrieves stored chat messages."}},"custom_component":{"CustomComponent":{"display_name":"Custom Component","description":"Use as a template to create your own component."}}}'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # POST routes that exist in 1.2.0 -> real FastAPI 422 on bad body
+  # (NOT 401 — the previous draft's auth walls were the tell).
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/custom_component$"
     method: POST
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["body","code"],"msg":"Field required","input":{}}]}'
 
-  - regex: "^/api/v1/custom_component/update$"
+  - regex: "^/api/v1/build/[0-9a-fA-F-]{36}/flow$"
     method: POST
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["body","inputs"],"msg":"Field required","input":null}]}'
 
-  # ───────────────────────────────────────────────────────────────────────
-  # 9. /api/v1/api_key — Auth-gated (no canary mints provisioned yet)
-  # Was a canary-leak surface in the Phase 7 design but mints are deferred
-  # (Path A 2026-05-18). Real LangFlow returns 401 here without a token —
-  # this matches the patched-product shape.
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/api_key$"
+  # Real login endpoint is /api/v1/login (form). Empty -> 422 missing fields.
+  - regex: "^/api/v1/login$"
+    method: POST
+    name: "langflow-login-attempt"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
+    statusCode: 422
+    handler: '{"detail":[{"type":"missing","loc":["body","username"],"msg":"Field required","input":null},{"type":"missing","loc":["body","password"],"msg":"Field required","input":null}]}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # 10. GET /api/v1/store/components/ — WATERMARK LEAK
-  # Real LangFlow store/marketplace returns a paginated component list.
-  # We embed the watermark password in a "default config" field of a fake
-  # component — the kind of thing a careless devops engineer would copy
-  # straight into prod. Cross-pollination capture goal: see this
-  # password show up as an SSH login attempt on :2222 within 90 days.
-  # Pre-registered POC; baseline: 0 attempts of this shape in last 90d.
+  # API docs — real FastAPI Swagger/ReDoc + OpenAPI (core-subset schema)
   # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/store/components/?$"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 200
-    handler: |
-      {"count":1,"results":[{"id":"comp-cdf-pg-loader","name":"{{ persona.coherence.world.product.service_name }}-postgres-loader","description":"{{ persona.coherence.world.company.display_name }} internal: load rows from prod Postgres into a LangFlow flow. Pin to {{ persona.coherence.world.product.platform_version }}.","is_component":true,"author":{"username":"{{ persona.coherence.world.people.platform_admin_1.handle }}"},"private":false,"downloads_count":47,"liked_by_user":false,"data":{"nodes":[{"id":"PGLoader-cdf","data":{"node":{"template":{"connection_string":{"type":"str","value":"postgresql://{{ persona.coherence.world.product.service_name }}_app:{{ persona.coherence.world.watermark_passwords.langflow }}@db-primary.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.coherence.world.product.service_name }}_prod","password":true,"required":true}}}}}]}}]}
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 11. /api/v1/users/whoami — Auth-gated user probe
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/users/whoami$"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 12. /login — Real LangFlow SPA route for login (returns HTML shell)
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/login$"
+  - regex: "^/docs$"
     method: GET
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
     statusCode: 200
     handler: |
-      <!doctype html>
-      <html lang="en"><head><meta charset="UTF-8"/><title>Langflow</title>
-      <script type="module" crossorigin src="/assets/index-a3f2c8e1.js"></script>
-      </head><body><div id="root"></div></body></html>
+      <!DOCTYPE html>
+      <html>
+      <head>
+      <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+      <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+      <title>Langflow - Swagger UI</title>
+      </head>
+      <body>
+      <div id="swagger-ui">
+      </div>
+      <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+      <!-- `SwaggerUIBundle` is now available on the page -->
+      <script>
+      const ui = SwaggerUIBundle({
+          url: '/openapi.json',
+      "dom_id": "#swagger-ui",
+      "layout": "BaseLayout",
+      "deepLinking": true,
+      "showExtensions": true,
+      "showCommonExtensions": true,
+      oauth2RedirectUrl: window.location.origin + '/docs/oauth2-redirect',
+          presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset
+          ],
+      })
+      </script>
+      </body>
+      </html>
 
-  # POST /login — Real LangFlow uses OAuth2PasswordRequestForm (form-encoded)
-  - regex: "^/login$"
-    method: POST
-    name: "langflow-login-attempt"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 401
-    handler: '{"detail":"Incorrect username or password"}'
-
-  # /logout
-  - regex: "^/logout$"
+  - regex: "^/openapi\\.json$"
+    method: GET
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"message":"Logout successful"}'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 13. Build / run endpoints
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/v1/build/[0-9a-fA-F-]{36}/flow$"
-    method: POST
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  - regex: "^/api/v1/run/[0-9a-fA-F-]+$"
-    method: POST
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  - regex: "^/api/v1/process/[0-9a-fA-F-]+$"
-    method: POST
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-      - "WWW-Authenticate: Bearer"
-    statusCode: 401
-    handler: '{"detail":"Not authenticated"}'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 14. /docs — Swagger UI (real LangFlow uses default FastAPI Swagger)
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/docs$"
-    headers:
-      - "Content-Type: text/html; charset=utf-8"
-      - "Server: uvicorn"
-    statusCode: 200
-    handler: |
-      <!DOCTYPE html><html><head><link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"><link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png"><title>Langflow - Swagger UI</title></head><body><div id="swagger-ui"></div><script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script><script>const ui=SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui',layout:'BaseLayout',deepLinking:true,showExtensions:true,showCommonExtensions:true,oauth2RedirectUrl:window.location.origin+'/docs/oauth2-redirect',presets:[SwaggerUIBundle.presets.apis,SwaggerUIBundle.SwaggerUIStandalonePreset]})</script></body></html>
+    handler: '{"openapi":"3.1.0","info":{"title":"Langflow","version":"1.2.0","description":"Langflow API"},"paths":{"/health_check":{"get":{"summary":"Health Check","operationId":"health_check_health_check_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/version":{"get":{"summary":"Get Version","operationId":"get_version_api_v1_version_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/config":{"get":{"summary":"Get Config","operationId":"get_config_api_v1_config_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/code":{"post":{"summary":"Post Validate Code","operationId":"post_validate_code_api_v1_validate_code_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/prompt":{"post":{"summary":"Post Validate Prompt","operationId":"post_validate_prompt_api_v1_validate_prompt_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v2/files":{"get":{"summary":"List Files","operationId":"list_files_api_v2_files_get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Upload File","operationId":"upload_file_api_v2_files_post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/monitor/messages":{"get":{"summary":"Get Messages","operationId":"get_messages_api_v1_monitor_messages_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/monitor/builds":{"get":{"summary":"Get Builds","operationId":"get_builds_api_v1_monitor_builds_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/flows/":{"get":{"summary":"Read Flows","operationId":"read_flows_api_v1_flows__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/users/whoami":{"get":{"summary":"Whoami","operationId":"whoami_api_v1_users_whoami_get","responses":{"200":{"description":"Successful Response"}}}},"/login":{"post":{"summary":"Login To Get Access Token","operationId":"login_to_get_access_token_api_v1_login_post","responses":{"200":{"description":"Successful Response"}}}}}}'
 
   - regex: "^/redoc$"
+    method: GET
     headers:
       - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
     statusCode: 200
     handler: |
-      <!DOCTYPE html><html><head><title>Langflow - ReDoc</title><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet"><link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png"></head><body><noscript>ReDoc requires Javascript</noscript><redoc spec-url="/openapi.json"></redoc><script src="https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js"></script></body></html>
+      <!DOCTYPE html>
+      <html>
+      <head>
+      <title>Langflow - ReDoc</title>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+      <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet">
+      </head>
+      <body>
+      <noscript>ReDoc requires Javascript to function. Please enable it to browse the documentation.</noscript>
+      <redoc spec-url="/openapi.json"></redoc>
+      <script src="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js"> </script>
+      </body>
+      </html>
 
   # ───────────────────────────────────────────────────────────────────────
-  # 15. /openapi.json — Real OpenAPI 3.1 schema (scanners parse this to
-  # enumerate every endpoint). We list everything we serve.
+  # SPA catch-all — every UNMATCHED GET returns the real Vite index.html
+  # (200, served as a static file: accept-ranges/etag/last-modified). This is
+  # the single most-probed surface; it must be byte-exact. No __LANGFLOW_CONFIG__.
   # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/openapi\\.json$"
+  - regex: ".*"
+    method: GET
     headers:
-      - "Content-Type: application/json"
+      - "Content-Type: text/html; charset=utf-8"
       - "Server: uvicorn"
-    statusCode: 200
-    handler: '{"openapi":"3.1.0","info":{"title":"Langflow","version":"1.2.0","description":"Langflow API"},"paths":{"/health_check":{"get":{"summary":"Health Check","operationId":"health_check_health_check_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/version":{"get":{"summary":"Get Version","operationId":"get_version_api_v1_version_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/config":{"get":{"summary":"Get Config","operationId":"get_config_api_v1_config_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/all":{"get":{"summary":"Get All","operationId":"get_all_api_v1_all_get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/code":{"post":{"summary":"Post Validate Code","operationId":"post_validate_code_api_v1_validate_code_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/validate/prompt":{"post":{"summary":"Post Validate Prompt","operationId":"post_validate_prompt_api_v1_validate_prompt_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/custom_component":{"post":{"summary":"Custom Component","operationId":"custom_component_api_v1_custom_component_post","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/flows/":{"get":{"summary":"Read Flows","operationId":"read_flows_api_v1_flows__get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Flow","operationId":"create_flow_api_v1_flows__post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/flows/basic_examples/":{"get":{"summary":"Read Basic Examples","operationId":"read_basic_examples_api_v1_flows_basic_examples__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/api_key":{"get":{"summary":"Get Api Keys","operationId":"get_api_keys_api_v1_api_key_get","responses":{"200":{"description":"Successful Response"}}},"post":{"summary":"Create Api Key","operationId":"create_api_key_api_v1_api_key_post","responses":{"201":{"description":"Successful Response"}}}},"/api/v1/store/components/":{"get":{"summary":"List Components","operationId":"list_components_api_v1_store_components__get","responses":{"200":{"description":"Successful Response"}}}},"/api/v1/users/whoami":{"get":{"summary":"Whoami","operationId":"whoami_api_v1_users_whoami_get","responses":{"200":{"description":"Successful Response"}}}},"/login":{"post":{"summary":"Login To Get Access Token","operationId":"login_to_get_access_token_login_post","responses":{"200":{"description":"Successful Response"}}}}}}'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 16. Static / assets — return realistic 404s rather than empty
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/static/"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 404
-    handler: '{"detail":"Not Found"}'
-
-  - regex: "^/assets/"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 404
-    handler: '{"detail":"Not Found"}'
-
-  - regex: "^/favicon\\.ico$"
-    headers:
-      - "Content-Type: image/x-icon"
-      - "Server: uvicorn"
-    statusCode: 204
-    handler: ""
-
-  - regex: "^/robots\\.txt$"
-    headers:
-      - "Content-Type: text/plain"
-      - "Server: uvicorn"
+      - "Accept-Ranges: bytes"
+      - "Last-Modified: Tue, 25 Feb 2025 23:13:05 GMT"
+      - "Etag: \"ec31704bd8672c28281901b505ba0853\""
     statusCode: 200
     handler: |
-      User-agent: *
-      Disallow: /api/
-      Disallow: /flows/
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <base href="/" />
+          <meta charset="UTF-8" />
+          <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <link rel="icon" href="./assets/favicon-new-BaG6bPWd.ico" />
+          <link rel="preconnect" href="https://fonts.googleapis.com" />
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+          <link
+            href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,100..900;1,100..900&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
+            rel="stylesheet"
+          />
+          <title>Langflow</title>
+          <script type="module" crossorigin src="./assets/index-hNpyfBay.js"></script>
+          <link rel="stylesheet" crossorigin href="./assets/index-CwAwSIfd.css">
+        </head>
+        <body id="body" class="dark" style="width: 100%; height: 100%">
+          <noscript>You need to enable JavaScript to run this app.</noscript>
+          <div style="width: 100vw; height: 100vh" id="root"></div>
+        </body>
+      </html>
 
   # ───────────────────────────────────────────────────────────────────────
-  # 17. /api/ catchall — FastAPI canonical "Not Found" (real FastAPI shape)
-  # ───────────────────────────────────────────────────────────────────────
-  - regex: "^/api/"
-    headers:
-      - "Content-Type: application/json"
-      - "Server: uvicorn"
-    statusCode: 404
-    handler: '{"detail":"Not Found"}'
-
-  # ───────────────────────────────────────────────────────────────────────
-  # 18. Final catch-all — match FastAPI 404 shape exactly
+  # Final catch-all — any non-GET method on an unmatched path. The SPA mount
+  # is GET-only, so real FastAPI returns 405 here (NOT a JSON 404).
   # ───────────────────────────────────────────────────────────────────────
   - regex: ".*"
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
-    statusCode: 404
-    handler: '{"detail":"Not Found"}'
+    statusCode: 405
+    handler: '{"detail":"Method Not Allowed"}'
