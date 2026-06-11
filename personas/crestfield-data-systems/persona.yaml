@@ -234,7 +234,7 @@ coherence:
         num: 8086
         host: metrics_influx
         service: "InfluxDB 1.8.10"
-      langflow:         { num: 7860, host: langflow,            service: "LangFlow 1.2.0" }
+      langflow:         { num: 7860, host: langflow,            service: "LangFlow 1.2.4" }
       open_webui:       { num: 8888, host: prod_web,            service: "Open WebUI v0.5.3" }
       ollama:           { num: 11434, host: flagship_worker,    service: "Ollama 0.5.4" }
 

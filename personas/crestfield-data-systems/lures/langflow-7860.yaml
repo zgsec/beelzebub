@@ -50,6 +50,11 @@ apiVersion: "v1"
 protocol: "http"
 address: ":7860"
 description: "{{ persona.coherence.world.company.display_name }} — LangFlow visual builder (data-platform team)"
+# CVE-2025-3248 is the reason this lure exists: the value is the Python RCE payload the
+# attacker POSTs to /api/v1/validate/code. WITHOUT captureRequestBody we hash but never
+# store it — i.e. we lose the exact non-commodity intel (Flodrix etc.). Capture it.
+captureRequestBody: true
+requestBodyMaxBytes: 65536
 captureResponseBody: true
 responseBodyMaxBytes: 65536
 commands:

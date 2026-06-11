@@ -361,7 +361,12 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD}-${MLFLOW_CANARY_AWS_SECRET_CVE_2928_DOWNLOAD}/1/a852a23d52c285f77542e105583eda04/artifacts/model"}'
+    # artifact_uri carries ONLY the bucket path. An AWS SECRET inline in a URI is
+    # categorically wrong (no S3 URI carries auth); removed 2026-06-11. The AKIA key is
+    # the canary (fires on any AWS use). TODO(track): bucket names don't contain AKIAs —
+    # the deeper rework moves the key out of the bucket name into a realistic creds-leak
+    # site (oracle-verify the real MLflow artifact-download shape first).
+    handler: '{"artifact_uri":"s3://{{ persona.coherence.world.org.s3_bucket_prefix }}-mlflow-artifacts-${MLFLOW_CANARY_AWS_KEY_CVE_2928_DOWNLOAD}/1/a852a23d52c285f77542e105583eda04/artifacts/model"}'
 
   # 13. CVE-2024-37058 — path traversal via /get-artifact?path=
   # Real route per mlflow/server/__init__.py:73. Real returns raw artifact
