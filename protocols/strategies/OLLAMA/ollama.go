@@ -240,6 +240,12 @@ func probeLabel(fv FeatureVector) string {
 		return "[probe:yesno]"
 	case ProbeGreeting:
 		return "[probe:greeting]"
+	case ProbeLiveness:
+		return "[probe:liveness]"
+	case ProbeFactual:
+		return "[probe:factual]"
+	case ProbeTranslate:
+		return "[probe:translate]"
 	default:
 		return "[task:non_delivery]"
 	}

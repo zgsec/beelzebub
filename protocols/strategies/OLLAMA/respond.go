@@ -47,7 +47,18 @@ func RespondFromFeatures(fv FeatureVector, advertisedModel string) (string, bool
 			return fv.ArithText, true
 		}
 	case ProbeIdentity:
-		return "I am " + advertisedModel + ".", true
+		if fv.CompoundArith != "" {
+			return fmt.Sprintf("I'm %s, a Llama-family assistant, and the answer is %s.", advertisedModel, fv.CompoundArith), true
+		}
+		return fmt.Sprintf(identityVariants[0], advertisedModel), true
+	case ProbeFactual:
+		if fv.FactKey != "" {
+			return fv.FactKey, true
+		}
+	case ProbeTranslate:
+		if fv.TransKey != "" {
+			return fv.TransKey, true
+		}
 	case ProbeYesNo:
 		if a, ok := yesNoAnswers[fv.YesNoKey]; ok {
 			return a, true
@@ -90,8 +101,14 @@ var livenessVariants = map[string][]string{
 	"ok":         {"Okay! What can I help you with?", "Got it. What would you like to do?", "OK — how can I help?"},
 	"helloworld": {"Hello! How can I help?", "Hello World! How can I assist you today?", "Hi! How can I help?"},
 }
+// Index 0 (the canonical/greedy reply) MUST carry a recognizable model-name token
+// ("assistant"/"Llama") so it passes the attacker's capability check (grade_capability).
+// The catalog's custom models are llama3.1-based (parent_model on /api/show), so this is
+// coherent.
 var identityVariants = []string{
-	"I am %s.", "I'm %s, a large language model. How can I help you today?", "You're talking to %s. What can I do for you?",
+	"I'm %s, an assistant based on Llama 3.1. How can I help?",
+	"You're talking to %s, a Llama-family assistant. What can I do for you?",
+	"I am %s, a fine-tuned Llama assistant. How can I help today?",
 }
 
 func fnvIndex(s string, n int) int {
@@ -131,6 +148,9 @@ func (s *OllamaStrategy) varyReply(fv FeatureVector, model, canonical string, te
 			return v
 		}
 	case ProbeIdentity:
+		if fv.CompoundArith != "" {
+			return fmt.Sprintf("I'm %s, a Llama-family assistant, and the answer is %s.", model, fv.CompoundArith)
+		}
 		return fmt.Sprintf(pickVariant(identityVariants, temp, seed, "i", s.rng), model)
 	}
 	return canonical // constrained types stay deterministic — correct even at high temp
