@@ -75,6 +75,22 @@ import (
 // concurrent use.
 var reRequestJSON = regexp.MustCompile(`\$\{request\.json\.([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
 
+// reRequestJSONStr matches ${request.json_str.<dotted.path>} — the bare-string
+// sibling of reRequestJSON. Where ${request.json.*} emits a full JSON token (a
+// string comes back quoted, e.g. "echo"), ${request.json_str.*} emits the resolved
+// string JSON-escaped but WITHOUT the outer quotes, so a template author writes it
+// inside their own quotes inside a larger string. Same bare-escaped contract as the
+// ${request.multipart.filename_stem} resolver below — it lets a CVE-error lure echo
+// the attacker's value verbatim into a message string the way the real product does:
+//
+//	"msg":"Value error, Command '${request.json_str.command}' is not in ..."
+//
+// renders byte-for-byte as LiteLLM's "Command 'echo' is not in ..." (CVE-2026-42271,
+// invariant for every command including /bin/sh). Any ", \\ or control char in the
+// value is escaped so it can neither break out of the JSON string nor inject markup.
+// Missing keys, non-object intermediate nodes, and non-string values resolve to "".
+var reRequestJSONStr = regexp.MustCompile(`\$\{request\.json_str\.([a-zA-Z_][a-zA-Z0-9_.]*)\}`)
+
 // reMultipartFilename pulls the first filename="..." out of a
 // multipart/form-data request body. The boundary lines carry the
 // filename in the Content-Disposition header, so we can recover it from
@@ -161,6 +177,7 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 
 	newBody := replacer.Replace(body)
 	newBody = applyRequestJSON(newBody, requestBody)
+	newBody = applyRequestJSONStr(newBody, requestBody)
 	newBody = applyMultipart(newBody, requestBody)
 	newBody = applyTime(newBody)
 
@@ -169,7 +186,7 @@ func Apply(body string, headers []string, sessionVars map[string]string, request
 	}
 	newHeaders := make([]string, len(headers))
 	for i, h := range headers {
-		newHeaders[i] = applyTime(applyMultipart(applyRequestJSON(replacer.Replace(h), requestBody), requestBody))
+		newHeaders[i] = applyTime(applyMultipart(applyRequestJSONStr(applyRequestJSON(replacer.Replace(h), requestBody), requestBody), requestBody))
 	}
 	return newBody, newHeaders
 }
@@ -305,5 +322,49 @@ func applyRequestJSON(s string, requestBody []byte) string {
 			return "null"
 		}
 		return string(out)
+	})
+}
+
+// applyRequestJSONStr resolves ${request.json_str.<dotted.path>} placeholders by
+// walking the dotted path into the parsed request body and emitting the resolved
+// STRING value JSON-escaped but WITHOUT the surrounding quotes — so the author wraps
+// it in their own quotes inside a larger JSON string. Non-string / missing / nil
+// values resolve to "" (the placeholder is meaningful only as an interpolated
+// string). No-op (and zero-alloc) when s contains no ${request.json_str.} substring.
+func applyRequestJSONStr(s string, requestBody []byte) string {
+	if !strings.Contains(s, "${request.json_str.") {
+		return s
+	}
+	var parsed map[string]interface{}
+	if len(requestBody) > 0 {
+		_ = json.Unmarshal(requestBody, &parsed) // tolerate parse errors → nil map
+	}
+	return reRequestJSONStr.ReplaceAllStringFunc(s, func(match string) string {
+		m := reRequestJSONStr.FindStringSubmatch(match)
+		if m == nil {
+			return match
+		}
+		path := strings.Split(m[1], ".")
+		var cur interface{} = parsed
+		for _, p := range path {
+			mp, ok := cur.(map[string]interface{})
+			if !ok {
+				return ""
+			}
+			v, exists := mp[p]
+			if !exists {
+				return ""
+			}
+			cur = v
+		}
+		str, ok := cur.(string)
+		if !ok {
+			return "" // only strings interpolate as bare; arrays/numbers/objects → ""
+		}
+		b, err := json.Marshal(str) // "echo"  /  "ev\"il\\x"
+		if err != nil || len(b) < 2 {
+			return ""
+		}
+		return string(b[1 : len(b)-1]) // strip the outer quotes; inner stays JSON-escaped
 	})
 }

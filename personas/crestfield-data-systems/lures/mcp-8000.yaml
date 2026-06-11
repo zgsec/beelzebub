@@ -1237,7 +1237,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 422
-    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, args is required for stdio transport","input":{"transport":"${request.json.transport}","command":"${request.json.command}","args":[]},"ctx":{"error":{}}}]}'
+    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, args is required for stdio transport","input":{"transport":${request.json.transport},"command":${request.json.command},"args":[]},"ctx":{"error":{}}}]}'
 
   # 2. allowlisted command -> 200 generic connect error. The RCE-vector capture seam:
   #    the attacker's interpreter payload (python3 -c "...", node -e "...") is logged.
@@ -1261,7 +1261,11 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 422
-    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, Command ''${request.json.command}'' is not in the allowed commands list for stdio transport. Allowed commands: [''deno'', ''docker'', ''node'', ''npx'', ''python'', ''python3'', ''uvx'']","input":{"transport":"${request.json.transport}","command":"${request.json.command}","args":${request.json.args}},"ctx":{"error":{}}}]}'
+    # Byte-identical to real LiteLLM for ANY command (validation set captured + proven
+    # invariant 2026-06-11). msg echoes the bare command via ${request.json_str.command}
+    # (json-escaped, injection-safe); input echoes the request via ${request.json.*}
+    # (quoted value positions). Golden test: responsesubs_jsonstr_test.go.
+    handler: '{"detail":[{"type":"value_error","loc":["body"],"msg":"Value error, Command ''${request.json_str.command}'' is not in the allowed commands list for stdio transport. Allowed commands: [''deno'', ''docker'', ''node'', ''npx'', ''python'', ''python3'', ''uvx'']","input":{"transport":${request.json.transport},"command":${request.json.command},"args":${request.json.args}},"ctx":{"error":{}}}]}'
 
   # POST /prompts/test — GHSA-xqmj (LiteLLM SSTI in prompts endpoint).
   - regex: "^/prompts/test$"
