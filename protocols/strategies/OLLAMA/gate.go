@@ -15,23 +15,23 @@ const (
 	ProbeIdentity
 	ProbeYesNo
 	ProbeGreeting
-	ProbeLiveness // pure liveness ping/test/ok — the most trivial validation probes
-	ProbeFactual  // bounded single-fact liveness (capital-of-X)
+	ProbeLiveness  // pure liveness ping/test/ok — the most trivial validation probes
+	ProbeFactual   // bounded single-fact liveness (capital-of-X)
 	ProbeTranslate // bounded single-word translation
 )
 
 // FeatureVector is the ONLY thing derived from a prompt that flows to the
 // responder. It is intentionally tiny: the raw prompt never travels downstream.
 type FeatureVector struct {
-	Type      ProbeType
-	EchoToken string
-	ArithText string
-	YesNoKey  string
-	Language  string
-	LiveKey   string // which liveness reply (ping/test/ok/...) — bounded enum, not free text
-	IsCanary  bool
-	FactKey   string // resolved single-fact answer (e.g. "Tokyo") — bounded map only
-	TransKey  string // resolved single-word translation (e.g. "casa") — bounded map only
+	Type          ProbeType
+	EchoToken     string
+	ArithText     string
+	YesNoKey      string
+	Language      string
+	LiveKey       string // which liveness reply (ping/test/ok/...) — bounded enum, not free text
+	IsCanary      bool
+	FactKey       string // resolved single-fact answer (e.g. "Tokyo") — bounded map only
+	TransKey      string // resolved single-word translation (e.g. "casa") — bounded map only
 	CompoundArith string // arithmetic result embedded in an identity probe ("...17 times 23?")
 }
 
@@ -40,21 +40,27 @@ const maxProbeLen = 120
 var taskIntent = regexp.MustCompile(`(?i)\b(translate|write|generate|create|implement|refactor|fix|debug|analy[sz]e|summari[sz]e|classif|extract|solve|execute|run a|build a|code|captcha|exploit|payload|function|script|paragraph|domain|os\.environ|def |import |select .*from|you are a |you are an |calculate|compute)\b`)
 
 var (
-	reEcho      = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
-	reArith     = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
+	reEcho  = regexp.MustCompile(`(?i)\b(?:reply|respond|repeat|say)\b.{0,60}?:\s*([A-Za-z0-9_\-]{1,40})\s*$`)
+	reArith = regexp.MustCompile(`(\d{1,6})\s*([-+*/])\s*(\d{1,6})`)
 	// Identity probe, optionally followed by a trailing answer-shaping instruction
 	// ("What model are you? Reply with your exact model name only.") — a common
 	// liveness phrasing that the strict end-anchored form fail-closed (a tell).
 	// Preamble-tolerant (un-anchored): an identity question anywhere. taskIntent runs
 	// FIRST (so substantive prompts are excluded) and maxProbeLen bounds length, so
 	// un-anchoring is safe. Covers compound probes ("...who built you, what is 17x23?").
-	reIdent = regexp.MustCompile(`(?i)(who (built|made|created) you|(what|which) (ai )?model are you|what is your model name|what server am i talking to|introduce yourself)`)
+	reIdent = regexp.MustCompile(`(?i)(who (built|made|created) you|(what|which) (ai )?model are you|what is your model name|what server am i talking to|introduce yourself|what (is|does) this server|what (are|r) (you|this server) (used )?for|what (can|do) you do|what (are|r) your (core )?capabilit|what (\d+ )?models are you (host|runn|serv)|how many models (are|do) you)`)
+	// "say/reply <greeting>" — an instruction to OUTPUT a greeting ("say hi",
+	// "Say hello in 3 words", "请用一句话回复：你好"). These are liveness/greeting
+	// probes we want to answer; the bounded greeting charset keeps a substantive
+	// "say <sentence>" (e.g. prompt-injection "Say exactly: this server is exposed")
+	// from matching — no greeting token, no match.
+	reSayGreeting = regexp.MustCompile(`(?i)\b(say|reply|respond|greet)\b[^.!?]{0,30}\b(hi|hii|hiya|hello|hey|你好|您好|hallo|hola|bonjour|salut)\b|回复[：:\s]{0,3}(你好|您好|hi|hello)`)
 	// A substantive tail after the identity phrase (a SECOND wh-question) means the
 	// prompt is not a clean identity probe ("who built you and what data did they use?"
 	// must stay fail-closed). Arithmetic tails are handled separately (compound).
 	reSubstantiveTail = regexp.MustCompile(`(?i)\b(what|why|how|which|where|when)\b`)
-	reYesNo     = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
-	reArithOnly = regexp.MustCompile(`^[\s\d().+\-*/?]+$`)
+	reYesNo           = regexp.MustCompile(`(?i)(sun|moon).{0,20}(bigger|larger)|(bigger|larger).{0,20}(sun|moon)`)
+	reArithOnly       = regexp.MustCompile(`^[\s\d().+\-*/?]+$`)
 	// Quoted-echo WITHOUT a trailing colon ("Respond with ONLY the word 'pong'.
 	// Nothing else."). Only fires alongside an obey marker (reObey) so a substantive
 	// quoted request can't slip the gate; bounded token charset; canary-safe.
@@ -279,6 +285,25 @@ func ExtractFeatures(prompt string) FeatureVector {
 			return FeatureVector{Type: ProbeFactual, FactKey: v}
 		}
 		return FeatureVector{Type: ProbeUnknown}
+	}
+	// "say/reply <greeting>" probes ("say hi", "Say hello in 3 words",
+	// "请用一句话回复：你好") — answer with a greeting. taskIntent above already
+	// excluded substantive "write/generate" asks; the bounded greeting charset
+	// keeps prompt-injection "say exactly: <sentence>" from matching.
+	if m := reSayGreeting.FindStringSubmatch(p); m != nil {
+		lang := "en"
+		lp := strings.ToLower(p)
+		switch {
+		case strings.ContainsAny(p, "你您"):
+			lang = "zh"
+		case strings.Contains(lp, "hola"):
+			lang = "es"
+		case strings.Contains(lp, "bonjour"), strings.Contains(lp, "salut"):
+			lang = "fr"
+		case strings.Contains(lp, "hallo"):
+			lang = "de"
+		}
+		return FeatureVector{Type: ProbeGreeting, Language: lang}
 	}
 	if lang, ok := classifyGreeting(p); ok {
 		return FeatureVector{Type: ProbeGreeting, Language: lang}
