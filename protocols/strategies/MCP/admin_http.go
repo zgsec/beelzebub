@@ -3,6 +3,7 @@ package MCP
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -414,9 +415,95 @@ func adminUserNew(ws *WorldState, r *http.Request, body []byte) (string, int) {
 	}), http.StatusOK
 }
 
-// adminCredentials → GET /credentials. Oracle-exact empty envelope. This kills
-// the 404 tell. A FOLLOW-UP canary task populates credentials[] with the bait
-// AWS canary; do NOT add an entry here.
+// maskCredential applies LiteLLM's measured read-masking rule to a sensitive
+// credential value: first2 + literal "****" + last2 (length-independent).
+// Values of length <= 4 can't be masked and pass through verbatim. Canary keys
+// are ASCII, so byte slicing is correct here.
+func maskCredential(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[:2] + "****" + s[len(s)-2:]
+}
+
+// Captured fallback masked values (credentials_populated.json). Used verbatim
+// when the worldSeed AWS canary env is UNSET (dev/test/lab) so the surface is
+// always coherent and tests are deterministic.
+const (
+	fallbackMaskedAWSKey    = "AK****90"
+	fallbackMaskedAWSSecret = "wJ****EY"
+)
+
+// maskedAWSCanary returns the masked display forms of the worldSeed AWS canary
+// (MCP_CANARY_AWS_KEY / MCP_CANARY_AWS_SECRET) — the SAME canary the lure exposes
+// full/unmasked in .env / /proc/environ — so the first2/last2 shown here is
+// coherent with the full key that actually fires. We read the env directly
+// (NOT via defaultMCPCanaryFallbacks, which log.Fatalf's on a missing var); an
+// unset var degrades to the captured literal masked value, never a panic/exit.
+func maskedAWSCanary() (maskedKey, maskedSecret string) {
+	if k := os.Getenv("MCP_CANARY_AWS_KEY"); k != "" {
+		maskedKey = maskCredential(k)
+	} else {
+		maskedKey = fallbackMaskedAWSKey
+	}
+	if s := os.Getenv("MCP_CANARY_AWS_SECRET"); s != "" {
+		maskedSecret = maskCredential(s)
+	} else {
+		maskedSecret = fallbackMaskedAWSSecret
+	}
+	return maskedKey, maskedSecret
+}
+
+// credentialValues / credentialInfo / credentialEntry / credentialsEnvelope are
+// ordered structs (explicit json tags) so the rendered member order matches the
+// captured credentials_populated.json byte-for-byte — a map[string]interface{}
+// would marshal keys sorted alphabetically and reorder the fields.
+type credentialValues struct {
+	AWSRegionName      string `json:"aws_region_name"`
+	AWSAccessKeyID     string `json:"aws_access_key_id"`
+	AWSSecretAccessKey string `json:"aws_secret_access_key"`
+}
+
+type credentialInfo struct {
+	Description       string `json:"description"`
+	CustomLLMProvider string `json:"custom_llm_provider"`
+}
+
+type credentialEntry struct {
+	CredentialName   string           `json:"credential_name"`
+	CredentialValues credentialValues `json:"credential_values"`
+	CredentialInfo   credentialInfo   `json:"credential_info"`
+}
+
+type credentialsEnvelope struct {
+	Success     bool              `json:"success"`
+	Credentials []credentialEntry `json:"credentials"`
+}
+
+// adminCredentials → GET /credentials. Oracle-accurate populated envelope with
+// one MASKED bedrock entry. LiteLLM masks credential_values on read, so a canary
+// AWS key shown here is unusable and can never fire — this surface is for
+// verisimilitude (killing the 404 tell), and its masked first2/last2 are kept
+// coherent with the full worldSeed AWS canary (.env / /proc/environ), which is
+// where the canary actually fires. Always 200 with byte-stable, ordered JSON.
 func adminCredentials(ws *WorldState, r *http.Request, body []byte) (string, int) {
-	return `{"success":true,"credentials":[]}`, http.StatusOK
+	maskedKey, maskedSecret := maskedAWSCanary()
+	env := credentialsEnvelope{
+		Success: true,
+		Credentials: []credentialEntry{
+			{
+				CredentialName: "bedrock-prod-creds",
+				CredentialValues: credentialValues{
+					AWSRegionName:      "us-east-1",
+					AWSAccessKeyID:     maskedKey,
+					AWSSecretAccessKey: maskedSecret,
+				},
+				CredentialInfo: credentialInfo{
+					Description:       "Production Bedrock access for platform-eng",
+					CustomLLMProvider: "bedrock",
+				},
+			},
+		},
+	}
+	return marshal(env), http.StatusOK
 }

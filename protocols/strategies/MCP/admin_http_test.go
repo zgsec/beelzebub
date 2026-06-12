@@ -178,15 +178,85 @@ func TestAdminHTTP_UserInfo_ParamReflectsUpdate(t *testing.T) {
 	}
 }
 
-// TestAdminHTTP_Credentials_OracleExactEmpty locks the exact oracle empty body.
-func TestAdminHTTP_Credentials_OracleExactEmpty(t *testing.T) {
+// credentialMaskRe matches the LiteLLM read-masking shape: first2 + literal
+// "****" + last2 (length-independent). Used to assert the bedrock cred's AWS
+// values are returned MASKED (so a canary key here is unusable / can never fire
+// — the surface is for verisimilitude; the firing copy lives in worldSeed .env).
+var credentialMaskRe = regexp.MustCompile(`^..\*\*\*\*..$`)
+
+// TestAdminHTTP_Credentials_PopulatedMaskedBedrock locks the oracle-accurate
+// populated envelope: one bedrock entry whose sensitive AWS values are masked
+// (first2****last2) and whose non-sensitive fields pass through verbatim.
+func TestAdminHTTP_Credentials_PopulatedMaskedBedrock(t *testing.T) {
 	ws := newAdminWS()
 	respBody, status := adminCredentials(ws, httptest.NewRequest("GET", "/credentials", nil), nil)
 	if status != 200 {
 		t.Fatalf("status: got %d want 200", status)
 	}
-	if respBody != `{"success":true,"credentials":[]}` {
-		t.Errorf("credentials body: got %q want %q", respBody, `{"success":true,"credentials":[]}`)
+	var resp struct {
+		Success     bool `json:"success"`
+		Credentials []struct {
+			CredentialName   string            `json:"credential_name"`
+			CredentialValues map[string]string `json:"credential_values"`
+			CredentialInfo   map[string]string `json:"credential_info"`
+		} `json:"credentials"`
+	}
+	if err := json.Unmarshal([]byte(respBody), &resp); err != nil {
+		t.Fatalf("unmarshal credentials body %q: %v", respBody, err)
+	}
+	if !resp.Success {
+		t.Errorf("success: got %v want true", resp.Success)
+	}
+	if len(resp.Credentials) != 1 {
+		t.Fatalf("credentials len: got %d want 1", len(resp.Credentials))
+	}
+	c := resp.Credentials[0]
+	if c.CredentialName != "bedrock-prod-creds" {
+		t.Errorf("credential_name: got %q want %q", c.CredentialName, "bedrock-prod-creds")
+	}
+	if c.CredentialValues["aws_region_name"] != "us-east-1" {
+		t.Errorf("aws_region_name: got %q want %q (must pass through verbatim)",
+			c.CredentialValues["aws_region_name"], "us-east-1")
+	}
+	if ak := c.CredentialValues["aws_access_key_id"]; !credentialMaskRe.MatchString(ak) {
+		t.Errorf("aws_access_key_id %q does not match mask pattern ^..\\*\\*\\*\\*..$", ak)
+	}
+	if sk := c.CredentialValues["aws_secret_access_key"]; !credentialMaskRe.MatchString(sk) {
+		t.Errorf("aws_secret_access_key %q does not match mask pattern ^..\\*\\*\\*\\*..$", sk)
+	}
+	if c.CredentialInfo["custom_llm_provider"] != "bedrock" {
+		t.Errorf("custom_llm_provider: got %q want %q", c.CredentialInfo["custom_llm_provider"], "bedrock")
+	}
+	if c.CredentialInfo["description"] != "Production Bedrock access for platform-eng" {
+		t.Errorf("description: got %q want verbatim", c.CredentialInfo["description"])
+	}
+}
+
+// TestAdminHTTP_Credentials_Deterministic proves byte-stable output across
+// reads (ordered struct render, no map-iteration nondeterminism).
+func TestAdminHTTP_Credentials_Deterministic(t *testing.T) {
+	ws := newAdminWS()
+	a, _ := adminCredentials(ws, httptest.NewRequest("GET", "/credentials", nil), nil)
+	b, _ := adminCredentials(ws, httptest.NewRequest("GET", "/credentials", nil), nil)
+	if a != b {
+		t.Errorf("credentials output not byte-stable:\n a=%q\n b=%q", a, b)
+	}
+}
+
+// TestMaskCredential covers the measured LiteLLM read-masking rule:
+// first2 + "****" + last2; values of length <= 4 pass through verbatim.
+func TestMaskCredential(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"AKIAEXAMPLE1234567890", "AK****90"},
+		{"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJ****EY"},
+		{"xy", "xy"},     // len <= 4 → verbatim
+		{"abcd", "abcd"}, // len == 4 → verbatim (can't mask)
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := maskCredential(c.in); got != c.want {
+			t.Errorf("maskCredential(%q): got %q want %q", c.in, got, c.want)
+		}
 	}
 }
 
