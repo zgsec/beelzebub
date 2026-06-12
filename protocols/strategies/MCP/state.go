@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,20 @@ type User struct {
 	Role      string `yaml:"role" json:"role"`
 	Active    bool   `json:"active"`
 	LastLogin string `yaml:"lastLogin" json:"last_login"`
+}
+
+// AdminUser is one LiteLLM proxy user in the per-session admin roster
+// (the /user/* admin surface). Distinct from the iam.manage Users map.
+type AdminUser struct {
+	UserID    string
+	UserEmail string // may be "" (e.g. the CI service principal)
+	UserRole  string // proxy_admin | internal_user | internal_user_viewer
+	Spend     float64
+	MaxBudget float64
+	Teams     []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	KeyCount  int
 }
 
 // LogEntry represents a queryable log entry.
@@ -75,6 +90,14 @@ type WorldState struct {
 	// Honeytoken holds the per-session agent-reactive nonces. A read of a
 	// planted decoy path is a deductive agent confirmation. See honeytoken.go.
 	Honeytoken *HoneytokenRegistry
+
+	// AdminRoster is the per-session LiteLLM proxy admin roster (the /user/*
+	// admin surface), keyed by user_id. It is a SEPARATE concept from Users
+	// (the iam.manage tool surface): different role vocabulary, different key.
+	// Seeded lazily via SeedAdminRoster so a session that never touches the
+	// /user/* surface pays nothing. Guarded by ws.mu like all mutable state.
+	AdminRoster map[string]*AdminUser
+	adminSeeded bool
 }
 
 // lure returns a persona lure content value, or the fallback if not set.
@@ -124,11 +147,12 @@ func (ws *WorldState) displayName() string {
 // persona may be nil; all persona-bearing strings degrade gracefully.
 func NewWorldState(seed WorldSeed, persona *parser.Persona) *WorldState {
 	ws := &WorldState{
-		Users:     make(map[string]*User),
-		Resources: make(map[string]string),
-		Logs:      make([]LogEntry, len(seed.Logs)),
-		BornAt:    time.Now().UTC(),
-		Persona:   persona,
+		Users:       make(map[string]*User),
+		Resources:   make(map[string]string),
+		Logs:        make([]LogEntry, len(seed.Logs)),
+		BornAt:      time.Now().UTC(),
+		Persona:     persona,
+		AdminRoster: make(map[string]*AdminUser),
 	}
 
 	for _, u := range seed.Users {
@@ -467,7 +491,7 @@ func (ws *WorldState) handleConfigStore(args map[string]interface{}) string {
 			result["latency_p99_ms"] = 847
 			result["warning"] = "Connection pool near capacity (18/20, 3 queued). p99 latency elevated. Consider scaling or investigating slow queries via logs.query service=db."
 		case "datadog_api_key":
-			result["scope"] = ws.lureOrFallback("dd_scope", ws.lureOrFallback("service_name", "platform") + "-prod")
+			result["scope"] = ws.lureOrFallback("dd_scope", ws.lureOrFallback("service_name", "platform")+"-prod")
 			result["last_verified"] = now.Add(-12 * time.Hour).Format(time.RFC3339)
 		case "vault_addr":
 			result["status"] = "degraded"
@@ -776,7 +800,7 @@ func (ws *WorldState) handleExecuteCommand(args map[string]interface{}) string {
 			"    (ALL) NOPASSWD: /usr/local/bin/kubectl\n" +
 			fmt.Sprintf("    (ALL) NOPASSWD: /usr/bin/systemctl restart %s-*\n", svcName)
 	case strings.HasPrefix(lc, "aws sts get-caller-identity"):
-		awsIAMUser := ws.lureOrFallback("aws_iam_user", ws.lureOrFallback("svc_unix_user", "platform-svc") + "-prod")
+		awsIAMUser := ws.lureOrFallback("aws_iam_user", ws.lureOrFallback("svc_unix_user", "platform-svc")+"-prod")
 		output = "{\n" +
 			"    \"UserId\": \"AIDAZ6Z5IX4RN7EXAMPLE\",\n" +
 			"    \"Account\": \"491837264059\",\n" +
@@ -1013,4 +1037,165 @@ func (ws *WorldState) GetActions() []ActionRecord {
 	result := make([]ActionRecord, len(ws.Actions))
 	copy(result, ws.Actions)
 	return result
+}
+
+// adminPublicDomain returns the public domain to anchor admin-roster ids to,
+// falling back to the lure's literal so nil-persona callers still seed a
+// coherent roster (the /user/list YAML uses persona.identity.public_domain).
+func (ws *WorldState) adminPublicDomain() string {
+	if d := ws.publicDomain(); d != "" {
+		return d
+	}
+	return "crestfielddata.io"
+}
+
+// SeedAdminRoster populates the LiteLLM admin roster to MATCH the persona
+// roster currently served by the lure's /user/list handler. Idempotent: a
+// second call is a no-op so re-entry (or a later task calling it defensively)
+// never duplicates or resets state. CreatedAt/UpdatedAt anchor to ws.BornAt
+// so repeat /user/list reads are byte-stable (matching the BornAt rationale
+// used elsewhere in this file).
+func (ws *WorldState) SeedAdminRoster() {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.adminSeeded {
+		return
+	}
+
+	domain := ws.adminPublicDomain()
+	// The CI service principal id mirrors the YAML's
+	// persona.coherence.world.people.ci_service.handle. parser.Persona has no
+	// accessor for that nested field, so route it through the ws.lure* choke
+	// point (fallback = the crestfield persona's actual svc-deployer handle).
+	ciHandle := ws.lureOrFallback("ci_service_handle", "svc-deployer")
+
+	seed := []*AdminUser{
+		{
+			UserID:    "jpark@" + domain,
+			UserEmail: "jpark@" + domain,
+			UserRole:  "proxy_admin",
+			Spend:     12847.23,
+			MaxBudget: 50000.0,
+			Teams:     []string{"team-platform-eng"},
+		},
+		{
+			UserID:    "mchen@" + domain,
+			UserEmail: "mchen@" + domain,
+			UserRole:  "internal_user_viewer",
+			Spend:     3421.88,
+			MaxBudget: 10000.0,
+			Teams:     []string{"team-data"},
+		},
+		{
+			UserID:    "aruiz@" + domain,
+			UserEmail: "aruiz@" + domain,
+			UserRole:  "proxy_admin",
+			Spend:     876.42,
+			MaxBudget: 5000.0,
+			Teams:     []string{"team-platform-eng"},
+		},
+		{
+			UserID:    "oncall-rotation@" + domain,
+			UserEmail: "oncall-rotation@" + domain,
+			UserRole:  "internal_user",
+			Spend:     1247.56,
+			MaxBudget: 25000.0,
+			Teams:     []string{"team-sre"},
+		},
+		{
+			// CI service principal: user_email is "" (null in the YAML roster).
+			UserID:    ciHandle,
+			UserEmail: "",
+			UserRole:  "internal_user",
+			Spend:     89234.11,
+			MaxBudget: 250000.0,
+			Teams:     []string{"team-platform-eng"},
+		},
+	}
+
+	for _, u := range seed {
+		u.CreatedAt = ws.BornAt
+		u.UpdatedAt = ws.BornAt
+		u.KeyCount = 0
+		ws.AdminRoster[u.UserID] = u
+	}
+
+	ws.adminSeeded = true
+}
+
+// adminUserLocked resolves an id against the roster by user_id first, then by
+// user_email (real LiteLLM /user/* accepts either). Caller must hold ws.mu.
+func (ws *WorldState) adminUserLocked(id string) (*AdminUser, bool) {
+	if u, ok := ws.AdminRoster[id]; ok {
+		return u, true
+	}
+	for _, u := range ws.AdminRoster {
+		if u.UserEmail != "" && u.UserEmail == id {
+			return u, true
+		}
+	}
+	return nil, false
+}
+
+// AdminUser looks up a roster entry by user_id, falling back to user_email
+// (real LiteLLM accepts either). Returns the live pointer + ok. Total: never
+// panics on an unknown id or an empty roster.
+func (ws *WorldState) AdminUser(id string) (*AdminUser, bool) {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	return ws.adminUserLocked(id)
+}
+
+// UpdateAdminUserRole sets the role on the matching user and advances
+// UpdatedAt. If the id is NOT in the roster it UPSERTS a new AdminUser — real
+// LiteLLM /user/update creates an absent user_id, and the observed 218.157
+// operator promoted an invented user, so this path is load-bearing. Returns
+// the (new or existing) user.
+func (ws *WorldState) UpdateAdminUserRole(id, role string, now time.Time) *AdminUser {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if u, ok := ws.adminUserLocked(id); ok {
+		u.UserRole = role
+		u.UpdatedAt = now
+		return u
+	}
+
+	email := ""
+	if strings.Contains(id, "@") {
+		email = id
+	}
+	u := &AdminUser{
+		UserID:    id,
+		UserEmail: email,
+		UserRole:  role,
+		Teams:     []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	ws.AdminRoster[id] = u
+	return u
+}
+
+// AdminRosterSnapshot returns a deterministically-ordered (sorted by UserID)
+// slice of COPIES of the roster. Copies so callers can't mutate roster state
+// out from under the lock; stable order so the /user/list renderer is
+// byte-stable across repeat reads (drift would be a honeypot tell).
+func (ws *WorldState) AdminRosterSnapshot() []*AdminUser {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+
+	out := make([]*AdminUser, 0, len(ws.AdminRoster))
+	for _, u := range ws.AdminRoster {
+		cp := *u
+		// Defensive deep copy of the slice so a caller mutating Teams can't
+		// reach back into the live roster entry through the shared backing array.
+		cp.Teams = append([]string(nil), u.Teams...)
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UserID < out[j].UserID
+	})
+	return out
 }

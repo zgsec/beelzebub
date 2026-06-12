@@ -2,8 +2,11 @@ package MCP
 
 import (
 	"encoding/json"
+	"sort"
 	"testing"
+	"time"
 
+	"github.com/mariocandela/beelzebub/v3/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -274,6 +277,103 @@ func TestExecuteCommandLsSecrets(t *testing.T) {
 	})
 	assert.Contains(t, result, "token")
 	assert.Contains(t, result, "ca.crt")
+}
+
+// testPersona builds a *parser.Persona with a known public domain so admin
+// roster ids (user_id == user_email for humans) are deterministic in assertions.
+func testPersona() *parser.Persona {
+	return &parser.Persona{
+		SchemaVersion: 1,
+		Slug:          "crestfield-data-systems",
+		DisplayName:   "Crestfield Data Systems",
+		Identity: parser.PersonaIdentity{
+			PublicDomain:   "crestfielddata.io",
+			InternalDomain: "int.crestfielddata.io",
+		},
+		LureContent: map[string]string{
+			"ci_service_handle": "svc-deployer",
+		},
+	}
+}
+
+func TestAdminRoster_SeedAndRead(t *testing.T) {
+	ws := NewWorldState(testSeed(), testPersona())
+	ws.SeedAdminRoster()
+
+	jpark, ok := ws.AdminUser("jpark@crestfielddata.io")
+	assert.True(t, ok)
+	assert.Equal(t, "proxy_admin", jpark.UserRole)
+
+	mchen, ok := ws.AdminUser("mchen@crestfielddata.io")
+	assert.True(t, ok)
+	assert.Equal(t, "internal_user_viewer", mchen.UserRole)
+
+	assert.Len(t, ws.AdminRosterSnapshot(), 5)
+
+	// Idempotent: a second seed must not duplicate or reset.
+	ws.SeedAdminRoster()
+	assert.Len(t, ws.AdminRosterSnapshot(), 5)
+}
+
+func TestAdminRoster_UpdateReflectsOnRead(t *testing.T) {
+	ws := NewWorldState(testSeed(), testPersona())
+	ws.SeedAdminRoster()
+
+	when := ws.BornAt.Add(90 * time.Minute)
+	updated := ws.UpdateAdminUserRole("mchen@crestfielddata.io", "proxy_admin", when)
+	assert.NotNil(t, updated)
+	assert.Equal(t, "proxy_admin", updated.UserRole)
+
+	// Core read-back-after-write proof: a later read sees the mutation.
+	mchen, ok := ws.AdminUser("mchen@crestfielddata.io")
+	assert.True(t, ok)
+	assert.Equal(t, "proxy_admin", mchen.UserRole)
+	assert.Equal(t, when, mchen.UpdatedAt)
+}
+
+func TestAdminRoster_UpdateUpsertsUnknownUser(t *testing.T) {
+	ws := NewWorldState(testSeed(), testPersona())
+	ws.SeedAdminRoster()
+
+	when := ws.BornAt.Add(5 * time.Minute)
+	updated := ws.UpdateAdminUserRole("intruder@evil.test", "proxy_admin", when)
+	assert.NotNil(t, updated)
+	assert.Equal(t, "proxy_admin", updated.UserRole)
+	// looks like an email -> UserEmail populated.
+	assert.Equal(t, "intruder@evil.test", updated.UserEmail)
+	assert.Equal(t, when, updated.CreatedAt)
+
+	got, ok := ws.AdminUser("intruder@evil.test")
+	assert.True(t, ok)
+	assert.Equal(t, "proxy_admin", got.UserRole)
+	assert.Len(t, ws.AdminRosterSnapshot(), 6)
+}
+
+func TestAdminRoster_SnapshotIsOrderedAndIsolated(t *testing.T) {
+	ws := NewWorldState(testSeed(), testPersona())
+	ws.SeedAdminRoster()
+
+	snap := ws.AdminRosterSnapshot()
+	ids := make([]string, len(snap))
+	for i, u := range snap {
+		ids[i] = u.UserID
+	}
+	sorted := make([]string, len(ids))
+	copy(sorted, ids)
+	sort.Strings(sorted)
+	assert.Equal(t, sorted, ids, "snapshot must be sorted by UserID")
+
+	// Mutating a returned copy must not change subsequent snapshots.
+	snap[0].UserRole = "tampered"
+	snap2 := ws.AdminRosterSnapshot()
+	assert.NotEqual(t, "tampered", snap2[0].UserRole)
+
+	// Two independent WorldState instances do not share roster state.
+	ws2 := NewWorldState(testSeed(), testPersona())
+	ws2.SeedAdminRoster()
+	ws2.UpdateAdminUserRole("mchen@crestfielddata.io", "proxy_admin", ws2.BornAt)
+	mchen1, _ := ws.AdminUser("mchen@crestfielddata.io")
+	assert.Equal(t, "internal_user_viewer", mchen1.UserRole, "ws roster must be unaffected by ws2 mutation")
 }
 
 func TestPerIPIsolation(t *testing.T) {
