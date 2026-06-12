@@ -128,6 +128,23 @@ func TestAdminHTTP_UserInfo_DefaultProxyAdmin(t *testing.T) {
 	if resp.Keys == nil {
 		t.Errorf("keys envelope key missing/null")
 	}
+	// Oracle fidelity: keys[] must have exactly 2 entries (array-length tell fix).
+	if len(resp.Keys) != 2 {
+		t.Errorf("keys length: got %d want 2", len(resp.Keys))
+	}
+	// Second key must match oracle keys[1]: key_alias="deep", max_budget=999999.
+	if len(resp.Keys) >= 2 {
+		k2, ok := resp.Keys[1].(map[string]interface{})
+		if !ok {
+			t.Fatalf("keys[1]: unexpected type %T", resp.Keys[1])
+		}
+		if k2["key_alias"] != "deep" {
+			t.Errorf("keys[1].key_alias: got %v want \"deep\"", k2["key_alias"])
+		}
+		if k2["max_budget"] != float64(999999) {
+			t.Errorf("keys[1].max_budget: got %v want 999999", k2["max_budget"])
+		}
+	}
 	// user_info.json fidelity: organization_memberships hydrates to [] (not null).
 	if v, ok := resp.UserInfo["organization_memberships"].([]interface{}); !ok || v == nil {
 		t.Errorf("user_info.organization_memberships: got %v want [] (empty array)", resp.UserInfo["organization_memberships"])
