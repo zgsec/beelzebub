@@ -3,6 +3,7 @@ package MCP
 import (
 	"encoding/json"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -374,6 +375,72 @@ func TestAdminRoster_SnapshotIsOrderedAndIsolated(t *testing.T) {
 	ws2.UpdateAdminUserRole("mchen@crestfielddata.io", "proxy_admin", ws2.BornAt)
 	mchen1, _ := ws.AdminUser("mchen@crestfielddata.io")
 	assert.Equal(t, "internal_user_viewer", mchen1.UserRole, "ws roster must be unaffected by ws2 mutation")
+}
+
+// TestAdminRoster_ConcurrentAccessIsRaceFree proves, under -race, that
+// AdminUser, UpdateAdminUserRole, and AdminRosterSnapshot can all run
+// concurrently without data races. 50 goroutines each perform 20 iterations
+// of a mixed read/write/snapshot workload, then we verify the seeded entries
+// still exist.  Exact field values are intentionally NOT asserted under
+// concurrent writes (that would itself be racy); the real check is that
+// `go test -race` reports no race condition.
+func TestAdminRoster_ConcurrentAccessIsRaceFree(t *testing.T) {
+	ws := NewWorldState(testSeed(), testPersona())
+	ws.SeedAdminRoster()
+
+	const goroutines = 50
+	const iterations = 20
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				switch j % 3 {
+				case 0:
+					u, ok := ws.AdminUser("jpark@crestfielddata.io")
+					if ok {
+						// Read a field off the returned copy — exercises the escaped
+						// pointer; the race detector catches if it aliases live map
+						// memory that a concurrent writer touches.
+						_ = u.UserRole
+						_ = u.Teams
+					}
+				case 1:
+					now := time.Now()
+					role := "internal_user"
+					if i%2 == 0 {
+						role = "proxy_admin"
+					}
+					cp := ws.UpdateAdminUserRole("mchen@crestfielddata.io", role, now)
+					if cp != nil {
+						_ = cp.UserRole
+						_ = cp.Teams
+					}
+				case 2:
+					snap := ws.AdminRosterSnapshot()
+					for _, u := range snap {
+						_ = u.UserRole
+						_ = u.Teams
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Seeded entries must still be present and intact.
+	jpark, ok := ws.AdminUser("jpark@crestfielddata.io")
+	assert.True(t, ok)
+	assert.Equal(t, "jpark@crestfielddata.io", jpark.UserID)
+
+	mchen, ok := ws.AdminUser("mchen@crestfielddata.io")
+	assert.True(t, ok)
+	assert.Equal(t, "mchen@crestfielddata.io", mchen.UserID)
 }
 
 func TestPerIPIsolation(t *testing.T) {

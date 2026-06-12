@@ -1139,19 +1139,28 @@ func (ws *WorldState) adminUserLocked(id string) (*AdminUser, bool) {
 }
 
 // AdminUser looks up a roster entry by user_id, falling back to user_email
-// (real LiteLLM accepts either). Returns the live pointer + ok. Total: never
-// panics on an unknown id or an empty roster.
+// (real LiteLLM accepts either). Returns a VALUE COPY so the caller cannot
+// race with concurrent writers after the RLock is released. Teams is
+// deep-copied for the same reason (shared backing array would escape the lock).
 func (ws *WorldState) AdminUser(id string) (*AdminUser, bool) {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
-	return ws.adminUserLocked(id)
+	u, ok := ws.adminUserLocked(id)
+	if !ok {
+		return nil, false
+	}
+	cp := *u
+	cp.Teams = append([]string(nil), u.Teams...)
+	return &cp, true
 }
 
 // UpdateAdminUserRole sets the role on the matching user and advances
 // UpdatedAt. If the id is NOT in the roster it UPSERTS a new AdminUser — real
 // LiteLLM /user/update creates an absent user_id, and the observed 218.157
 // operator promoted an invented user, so this path is load-bearing. Returns
-// the (new or existing) user.
+// a VALUE COPY (Teams deep-copied) so the caller cannot race with concurrent
+// writers after the Lock is released. The live map entry is still mutated
+// under the lock so subsequent reads observe the update.
 func (ws *WorldState) UpdateAdminUserRole(id, role string, now time.Time) *AdminUser {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
@@ -1159,7 +1168,9 @@ func (ws *WorldState) UpdateAdminUserRole(id, role string, now time.Time) *Admin
 	if u, ok := ws.adminUserLocked(id); ok {
 		u.UserRole = role
 		u.UpdatedAt = now
-		return u
+		cp := *u
+		cp.Teams = append([]string(nil), u.Teams...)
+		return &cp
 	}
 
 	email := ""
@@ -1175,7 +1186,9 @@ func (ws *WorldState) UpdateAdminUserRole(id, role string, now time.Time) *Admin
 		UpdatedAt: now,
 	}
 	ws.AdminRoster[id] = u
-	return u
+	cp := *u
+	cp.Teams = append([]string(nil), u.Teams...)
+	return &cp
 }
 
 // AdminRosterSnapshot returns a deterministically-ordered (sorted by UserID)
