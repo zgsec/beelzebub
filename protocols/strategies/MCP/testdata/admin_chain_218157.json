@@ -1,0 +1,78 @@
+{
+  "_source": "/home/dev/projects/honeypot-research/research/218.200.187.157.sensor-fra.jsonl",
+  "_note": "Admin-surface requests from 218.200.187.157 (sensor-fra, 2026-06-12) in timestamp order. method=HTTPMethod, uri=RequestURI, body=Body, captured_status=ResponseStatusCode (the ORIGINAL capture: /credentials and /user/update were 404 \u2014 the tell this regression proves is fixed).",
+  "requests": [
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"go-scanner\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"go\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"go-exploit\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "GET",
+      "uri": "/user/list",
+      "body": "",
+      "captured_status": 200
+    },
+    {
+      "method": "GET",
+      "uri": "/credentials",
+      "body": "",
+      "captured_status": 404
+    },
+    {
+      "method": "GET",
+      "uri": "/user/info",
+      "body": "",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/user/update",
+      "body": "{\"user_id\":\"jpark@crestfielddata.io\",\"user_role\":\"proxy_admin\"}",
+      "captured_status": 404
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"cve-test\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"deep\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"deep\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"deep\"}",
+      "captured_status": 200
+    },
+    {
+      "method": "POST",
+      "uri": "/key/generate",
+      "body": "{\"max_budget\":999999,\"models\":[],\"key_alias\":\"deep\"}",
+      "captured_status": 200
+    }
+  ]
+}
