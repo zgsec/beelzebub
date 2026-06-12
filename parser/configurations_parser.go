@@ -375,6 +375,16 @@ type Command struct {
 	// is added to tracer.Event.Captured under "artifact_sha256".
 	// Requires service-level State.ArtifactPath to be set.
 	ArtifactCapture bool `yaml:"artifactCapture,omitempty" json:",omitempty"`
+
+	// StateHandler (MCP HTTP-fallback only) — names a Go-backed handler that
+	// answers this route from per-session WorldState instead of rendering the
+	// static handler: string. Empty = normal stateless behavior (unchanged).
+	// The dispatcher resolves the name against the MCP strategy's admin-handler
+	// registry; an unknown name falls back to the static handler: render (no
+	// crash). Lets stateful action routes (POST /user/update, GET /credentials,
+	// …) read and mutate the LiteLLM admin roster so a write is visible on a
+	// later read — killing the 404 honeypot tell on the write surface.
+	StateHandler string `yaml:"stateHandler,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot

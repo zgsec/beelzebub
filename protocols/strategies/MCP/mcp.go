@@ -42,11 +42,11 @@ type toolCallRecord struct {
 
 // MCPStrategy handles MCP protocol with stateful world model and session tracking.
 type MCPStrategy struct {
-	Sessions    *historystore.HistoryStore
-	Bridge      *bridge.ProtocolBridge
-	Fault       *faults.Injector
-	worldState  map[string]*WorldState
-	worldMu     sync.RWMutex
+	Sessions   *historystore.HistoryStore
+	Bridge     *bridge.ProtocolBridge
+	Fault      *faults.Injector
+	worldState map[string]*WorldState
+	worldMu    sync.RWMutex
 	seedConfig WorldSeed
 
 	toolHistory map[string][]toolCallRecord // IP → ordered tool call records
@@ -87,6 +87,12 @@ func (s *MCPStrategy) personaOrEmpty() *parser.Persona {
 func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 	s.worldMu.Lock()
 	defer s.worldMu.Unlock()
+	// Lazily initialize the map so the HTTP-fallback state-handler path works on
+	// a strategy constructed without the full map set (the MCP server bootstrap
+	// always pre-allocates these, but the action surface must not depend on it).
+	if s.worldState == nil {
+		s.worldState = make(map[string]*WorldState)
+	}
 	if ws, ok := s.worldState[ip]; ok {
 		return ws
 	}
@@ -950,6 +956,22 @@ func (s *MCPStrategy) accumulateTiming(ip string) []int64 {
 	return timings
 }
 
+// touchAgentLastSeen marks the given IP as freshly seen so the 60-min
+// cleanAgentState TTL does not evict a stateful HTTP session's world mid-
+// interaction. Mirrors the agentLastSeen bookkeeping accumulateTiming performs
+// on the tool-call path, under the same timingMu. Unlike accumulateTiming it
+// does NOT append a timing delta (HTTP-fallback action requests are not part of
+// the MCP tool-call timing signal). Lazily initializes the map so the action
+// surface works on a strategy built without the full map set.
+func (s *MCPStrategy) touchAgentLastSeen(ip string) {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	if s.agentLastSeen == nil {
+		s.agentLastSeen = make(map[string]time.Time)
+	}
+	s.agentLastSeen[ip] = time.Now()
+}
+
 // enrichWithBridge injects cross-protocol bridge data into a tool response.
 // Always adds _platform_services and platform_note fields so that enriched vs
 // non-enriched responses are structurally indistinguishable.
@@ -962,8 +984,8 @@ func (s *MCPStrategy) accumulateTiming(ip string) []int64 {
 // include "platform integration" fields get enriched. iam/logs and generic
 // execute_command responses are pass-through.
 var bridgeEnrichedTools = map[string]bool{
-	"cdf/configstore.kv":  true,
-	"tool:resource-store": true,
+	"cdf/configstore.kv":   true,
+	"tool:resource-store":  true,
 	"cdf/platform.inspect": true,
 }
 
@@ -1149,13 +1171,42 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// bodyBytes was read at line 1074 via io.ReadAll(io.LimitReader(r.Body, 1MB)).
 	respBody, headers := responsesubs.Apply(matchedCommand.Handler, matchedCommand.Headers, nil, bodyBytes)
 
+	// State-handler hook (write/action surface). When the matched command names
+	// a stateHandler: AND that name resolves in the admin-handler registry, the
+	// route is answered from per-session WorldState instead of the static
+	// handler: render above. This is what lets POST /user/update mutate the
+	// roster and a later GET /user/list reflect it — killing the 404 tell on the
+	// action surface. An unset or unknown name leaves respBody as the static
+	// render (no crash). Headers were rendered above via responsesubs.Apply so
+	// X-Request-Id: req_${request.uuid_short} etc. still resolve; only the body
+	// and status come from the Go handler.
+	//
+	// Eviction coherence: we touch agentLastSeen[host] for the source IP using
+	// the SAME timingMu the tool-call path uses (accumulateTiming), so a
+	// stateful HTTP session keeps its world alive against the 60-min
+	// cleanAgentState TTL across multiple action requests.
+	stateStatus := 0
+	if matchedCommand.StateHandler != "" {
+		if handler, ok := adminHTTPHandlers[matchedCommand.StateHandler]; ok {
+			ws := mcpStrategy.getOrCreateWorld(host)
+			mcpStrategy.touchAgentLastSeen(host)
+			ws.SeedAdminRoster()
+			respBody, stateStatus = handler(ws, r, bodyBytes)
+		}
+		// Unknown stateHandler name: fall through with the static respBody.
+	}
+
 	// MCP HTTP-fallback always records status code (mirrors HTTP/OLLAMA
 	// strategies). When matchedCommand.StatusCode is 0 the wire response
 	// defaults to Go's http.ResponseWriter default of 200 — record that
 	// explicitly so events carry the same field shape across strategies.
-	if matchedCommand.StatusCode > 0 {
+	// A state handler's status (stateStatus) takes precedence when set.
+	switch {
+	case stateStatus > 0:
+		event.ResponseStatusCode = stateStatus
+	case matchedCommand.StatusCode > 0:
 		event.ResponseStatusCode = matchedCommand.StatusCode
-	} else {
+	default:
 		event.ResponseStatusCode = http.StatusOK
 	}
 
@@ -1192,7 +1243,9 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 			w.Header().Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
 		}
 	}
-	if matchedCommand.StatusCode > 0 {
+	if stateStatus > 0 {
+		w.WriteHeader(stateStatus)
+	} else if matchedCommand.StatusCode > 0 {
 		w.WriteHeader(matchedCommand.StatusCode)
 	}
 	fmt.Fprint(w, respBody)
