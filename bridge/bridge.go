@@ -1,9 +1,18 @@
 package bridge
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
 	"sync"
 	"time"
 )
+
+// episodeTTL bounds an actor episode: an IP idle longer than this starts a fresh
+// episode (new ActorID), giving campaign separation across revisits. Matches the
+// 60-minute bridge Clean window wired in builder so episode state and bridge
+// state age out together.
+const episodeTTL = 60 * time.Minute
 
 // maxCredsPerIP caps the per-IP credential history. Without this cap, an
 // attacker pounding a single IP with credential-shaped payloads (e.g.
@@ -29,12 +38,21 @@ type Credential struct {
 	FoundAt time.Time
 }
 
+// actorEpisode tracks one cross-protocol activity window for an IP. While the
+// IP keeps showing up within episodeTTL the id is stable; a gap longer than the
+// TTL ends the episode and the next event mints a new one.
+type actorEpisode struct {
+	id       string
+	lastSeen time.Time
+}
+
 // ProtocolBridge enables cross-protocol state sharing.
 // Credentials or flags set from one protocol handler are visible to others.
 type ProtocolBridge struct {
 	mu              sync.RWMutex
 	discoveredCreds map[string][]Credential         // IP → credentials (capped at maxCredsPerIP, FIFO-evicted)
 	sessionFlags    map[string]map[string]time.Time // IP → flag → when set (v8: timestamp for gap computation)
+	episodes        map[string]*actorEpisode        // IP → current actor episode (ActorID source)
 }
 
 // NewBridge creates an initialized ProtocolBridge.
@@ -42,7 +60,37 @@ func NewBridge() *ProtocolBridge {
 	return &ProtocolBridge{
 		discoveredCreds: make(map[string][]Credential),
 		sessionFlags:    make(map[string]map[string]time.Time),
+		episodes:        make(map[string]*actorEpisode),
 	}
+}
+
+// ActorID returns the cross-protocol actor-episode id for ip at event time now.
+// All protocols share this bridge, so events from the same IP within an active
+// window get the same id (genuine cross-protocol linkage). A gap longer than
+// episodeTTL since the IP was last seen mints a new episode id, so a later
+// revisit is recorded as a distinct campaign rather than fused with the first.
+//
+// This replaces the IP-hash CorrelationID for actor correlation. It is still
+// IP-scoped (we only observe the IP), so distinct actors behind one NAT share an
+// id — an inherent limit of IP-only observation, not a regression.
+func (pb *ProtocolBridge) ActorID(ip string, now time.Time) string {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	ep := pb.episodes[ip]
+	if ep == nil || now.Sub(ep.lastSeen) > episodeTTL {
+		ep = &actorEpisode{id: mintActorID(ip, now)}
+		pb.episodes[ip] = ep
+	}
+	ep.lastSeen = now
+	return ep.id
+}
+
+// mintActorID derives an opaque episode id from the IP and the episode's start
+// time. Hashing keeps the raw IP out of the id (OPSEC); including the timestamp
+// makes a fresh episode for the same IP collision-free against the prior one.
+func mintActorID(ip string, t time.Time) string {
+	h := sha256.Sum256([]byte(ip + "|" + strconv.FormatInt(t.UnixNano(), 10)))
+	return hex.EncodeToString(h[:8])
 }
 
 // RecordDiscovery records that an IP discovered a credential via a protocol.
@@ -158,12 +206,16 @@ func (pb *ProtocolBridge) Clean(maxAge time.Duration) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
-	// Build the union of IPs across both maps so we don't miss flag-only IPs.
-	ips := make(map[string]struct{}, len(pb.discoveredCreds)+len(pb.sessionFlags))
+	// Build the union of IPs across all maps so we don't miss flag-only or
+	// episode-only IPs.
+	ips := make(map[string]struct{}, len(pb.discoveredCreds)+len(pb.sessionFlags)+len(pb.episodes))
 	for ip := range pb.discoveredCreds {
 		ips[ip] = struct{}{}
 	}
 	for ip := range pb.sessionFlags {
+		ips[ip] = struct{}{}
+	}
+	for ip := range pb.episodes {
 		ips[ip] = struct{}{}
 	}
 
@@ -177,9 +229,13 @@ func (pb *ProtocolBridge) Clean(maxAge time.Duration) {
 				latest = t
 			}
 		}
+		if ep := pb.episodes[ip]; ep != nil && ep.lastSeen.After(latest) {
+			latest = ep.lastSeen
+		}
 		if latest.IsZero() || latest.Before(cutoff) {
 			delete(pb.discoveredCreds, ip)
 			delete(pb.sessionFlags, ip)
+			delete(pb.episodes, ip)
 		}
 	}
 }

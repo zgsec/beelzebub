@@ -51,9 +51,18 @@ type Event struct {
 	Handler         string
 
 	// Session correlation
-	SessionKey    string `json:"SessionKey,omitempty"`
-	Sequence      int    `json:"Sequence,omitempty"`
+	SessionKey string `json:"SessionKey,omitempty"`
+	Sequence   int    `json:"Sequence,omitempty"`
+	// CorrelationID is a deterministic IP hash. DEPRECATED for cross-protocol
+	// actor linking — it cannot distinguish actors behind one IP (NAT) or
+	// separate campaigns from the same IP over time. Use ActorID instead; this
+	// field is retained only for back-compat with pre-cutover consumers.
 	CorrelationID string `json:"CorrelationID,omitempty"`
+	// ActorID is the bridge-minted cross-protocol actor-episode key: stable for
+	// one actor across protocols within an activity window, and rolled to a new
+	// value after an idle gap (campaign separation). Populated by the registered
+	// actor resolver in TraceEvent. Empty on stock (non-fork) sensors.
+	ActorID string `json:"ActorID,omitempty"`
 
 	// MCP-specific
 	ToolName      string `json:"ToolName,omitempty"`
@@ -312,10 +321,34 @@ func (tracer *tracer) GetStrategy() Strategy {
 	return tracer.strategy
 }
 
-// CorrelationIDFromIP returns a deterministic short hash of an IP for cross-protocol linking.
+// CorrelationIDFromIP returns a deterministic short hash of an IP.
+//
+// DEPRECATED for actor correlation: it is a pure function of the IP, so it
+// cannot separate distinct actors behind one IP (NAT) or distinct campaigns
+// from the same IP over time. Use the bridge-minted ActorID (see ActorResolver)
+// for genuine cross-protocol linkage. Retained only to keep the legacy
+// CorrelationID field populated for pre-cutover consumers.
 func CorrelationIDFromIP(ip string) string {
 	h := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(h[:8])
+}
+
+// ActorResolver maps a source IP (at a given event time) to a cross-protocol
+// actor-episode id. The bridge implements this; the tracer stays decoupled from
+// the bridge package via this function type.
+type ActorResolver func(ip string, t time.Time) string
+
+var (
+	actorResolverMu sync.RWMutex
+	actorResolver   ActorResolver
+)
+
+// SetActorResolver registers (or clears, with nil) the resolver TraceEvent uses
+// to populate Event.ActorID. Wired by builder to the shared ProtocolBridge.
+func SetActorResolver(r ActorResolver) {
+	actorResolverMu.Lock()
+	defer actorResolverMu.Unlock()
+	actorResolver = r
 }
 
 // ExtractPort returns the port portion of a listen address.
@@ -329,11 +362,24 @@ func ExtractPort(addr string) string {
 }
 
 func (tracer *tracer) TraceEvent(event Event) {
-	event.DateTime = time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC()
+	event.DateTime = now.Format(time.RFC3339Nano)
 
-	// Auto-populate CorrelationID from SourceIp if not already set
+	// Auto-populate CorrelationID from SourceIp if not already set (legacy).
 	if event.CorrelationID == "" && event.SourceIp != "" {
 		event.CorrelationID = CorrelationIDFromIP(event.SourceIp)
+	}
+
+	// Auto-populate the cross-protocol ActorID from the registered resolver
+	// (the shared bridge) if not already set. Mirrors CorrelationID; no-op when
+	// no resolver is wired (e.g. stock sensors, unit tests).
+	if event.ActorID == "" && event.SourceIp != "" {
+		actorResolverMu.RLock()
+		r := actorResolver
+		actorResolverMu.RUnlock()
+		if r != nil {
+			event.ActorID = r(event.SourceIp, now)
+		}
 	}
 
 	// Compute inter-event timing if session key is set

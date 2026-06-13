@@ -146,6 +146,12 @@ Honeypot Framework, happy hacking!`)
 	// Init shared cross-protocol bridge
 	protocolBridge := bridge.NewBridge()
 
+	// Wire the bridge as the tracer's actor resolver so every event gets a
+	// genuine cross-protocol ActorID (replacing the IP-hash CorrelationID for
+	// correlation). Package-level setter — safe before the tracer singleton or
+	// any handler exists; it is read per-event at trace time.
+	tracer.SetActorResolver(protocolBridge.ActorID)
+
 	// Periodically prune stale bridge state. Without this, discoveredCreds and
 	// sessionFlags grow unboundedly — the bug Track 5 surfaced. 5-minute tick
 	// + 60-minute TTL matches the cleanup cadence used by HTTP / TCP / TELNET
