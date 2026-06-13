@@ -52,13 +52,14 @@ func TestComputeJA4H_FoxIOReferenceAlgorithm(t *testing.T) {
 	}
 }
 
-// No cookies → parts c and d are sha_encode([]) = sha256("")[:12], per FoxIO.
+// No cookies → parts c and d are "000000000000" — FoxIO to_ja4h uses an
+// explicit '0'*12 guard, NOT sha_encode([]). (Confirmed by the differential
+// oracle against the real to_ja4h.)
 func TestComputeJA4H_FoxIONoCookies(t *testing.T) {
 	r, _ := http.NewRequest("GET", "http://x/", nil)
 	r.Proto = "HTTP/1.1"
 	parts := strings.Split(ComputeJA4H(r, []string{"host", "user-agent"}), "_")
-	empty := foxioSha() // sha256("")[:12]
-	if parts[2] != empty || parts[3] != empty {
-		t.Errorf("no-cookie parts c/d: want %s, got c=%s d=%s", empty, parts[2], parts[3])
+	if parts[2] != "000000000000" || parts[3] != "000000000000" {
+		t.Errorf("no-cookie parts c/d: want 000000000000, got c=%s d=%s", parts[2], parts[3])
 	}
 }

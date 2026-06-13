@@ -1,0 +1,277 @@
+[
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "user-agent",
+        "accept",
+        "accept-encoding",
+        "connection"
+      ]
+    },
+    "expected": "ge11nn050000_cac2c496544b_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "user-agent",
+        "accept"
+      ],
+      "accept_language": "en-US,en;q=0.9"
+    },
+    "expected": "ge11nn03enus_042112399351_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "POST",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "content-type",
+        "accept-language",
+        "cookie"
+      ],
+      "accept_language": "en-US,en;q=0.9",
+      "cookie": "b_cookie=2; a_cookie=1"
+    },
+    "expected": "po11cn03enus_50c139ca3d34_5e6968dc14d9_a9e1d2cca8aa"
+  },
+  {
+    "input": {
+      "method": "POST",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "cookie"
+      ],
+      "cookie": "session=abc123"
+    },
+    "expected": "po11cn010000_4740ae6347b0_3f3af1ecebbd_300fe344bb87"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "referer",
+        "user-agent"
+      ]
+    },
+    "expected": "ge11nr020000_3ed38b250d3d_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/2",
+      "headers": [
+        "host",
+        "user-agent"
+      ]
+    },
+    "expected": "ge20nn020000_3ed38b250d3d_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.0",
+      "headers": [
+        "host",
+        "user-agent"
+      ]
+    },
+    "expected": "ge10nn020000_3ed38b250d3d_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "DELETE",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host"
+      ]
+    },
+    "expected": "de11nn010000_4740ae6347b0_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "PATCH",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "content-type"
+      ]
+    },
+    "expected": "pa11nn020000_ea3653ce65eb_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "PUT",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "cookie"
+      ],
+      "cookie": "z=26; m=13; a=1"
+    },
+    "expected": "pu11cn010000_4740ae6347b0_963497052340_a2ce337fa82a"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host"
+      ],
+      "accept_language": "fr-CH, fr;q=0.9"
+    },
+    "expected": "ge11nn01frch_4740ae6347b0_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        ":method",
+        ":path",
+        "host",
+        "user-agent"
+      ]
+    },
+    "expected": "ge11nn020000_3ed38b250d3d_000000000000_000000000000"
+  },
+  {
+    "input": {
+      "method": "GET",
+      "version": "HTTP/1.1",
+      "headers": [
+        "host",
+        "x-h0",
+        "x-h1",
+        "x-h2",
+        "x-h3",
+        "x-h4",
+        "x-h5",
+        "x-h6",
+        "x-h7",
+        "x-h8",
+        "x-h9",
+        "x-h10",
+        "x-h11",
+        "x-h12",
+        "x-h13",
+        "x-h14",
+        "x-h15",
+        "x-h16",
+        "x-h17",
+        "x-h18",
+        "x-h19",
+        "x-h20",
+        "x-h21",
+        "x-h22",
+        "x-h23",
+        "x-h24",
+        "x-h25",
+        "x-h26",
+        "x-h27",
+        "x-h28",
+        "x-h29",
+        "x-h30",
+        "x-h31",
+        "x-h32",
+        "x-h33",
+        "x-h34",
+        "x-h35",
+        "x-h36",
+        "x-h37",
+        "x-h38",
+        "x-h39",
+        "x-h40",
+        "x-h41",
+        "x-h42",
+        "x-h43",
+        "x-h44",
+        "x-h45",
+        "x-h46",
+        "x-h47",
+        "x-h48",
+        "x-h49",
+        "x-h50",
+        "x-h51",
+        "x-h52",
+        "x-h53",
+        "x-h54",
+        "x-h55",
+        "x-h56",
+        "x-h57",
+        "x-h58",
+        "x-h59",
+        "x-h60",
+        "x-h61",
+        "x-h62",
+        "x-h63",
+        "x-h64",
+        "x-h65",
+        "x-h66",
+        "x-h67",
+        "x-h68",
+        "x-h69",
+        "x-h70",
+        "x-h71",
+        "x-h72",
+        "x-h73",
+        "x-h74",
+        "x-h75",
+        "x-h76",
+        "x-h77",
+        "x-h78",
+        "x-h79",
+        "x-h80",
+        "x-h81",
+        "x-h82",
+        "x-h83",
+        "x-h84",
+        "x-h85",
+        "x-h86",
+        "x-h87",
+        "x-h88",
+        "x-h89",
+        "x-h90",
+        "x-h91",
+        "x-h92",
+        "x-h93",
+        "x-h94",
+        "x-h95",
+        "x-h96",
+        "x-h97",
+        "x-h98",
+        "x-h99",
+        "x-h100",
+        "x-h101",
+        "x-h102",
+        "x-h103",
+        "x-h104",
+        "x-h105",
+        "x-h106",
+        "x-h107",
+        "x-h108",
+        "x-h109",
+        "x-h110",
+        "x-h111",
+        "x-h112",
+        "x-h113",
+        "x-h114",
+        "x-h115",
+        "x-h116",
+        "x-h117",
+        "x-h118",
+        "x-h119"
+      ]
+    },
+    "expected": "ge11nn990000_9c8e3daa18bd_000000000000_000000000000"
+  }
+]
