@@ -413,6 +413,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			sessionKey := "MCP" + host
 			eventID := uuid.New().String()
 
+			// JA4H fingerprint stashed in ctx by the HTTP/SSE context func.
+			// Read once so both the faulted and normal event paths emit it.
+			ja4h, _ := ctx.Value(ja4hCtxKey{}).(string)
+			ja4hSorted, _ := ctx.Value(ja4hSortedCtxKey{}).(bool)
+			headerOrder, _ := ctx.Value(headerOrderCtxKey{}).(string)
+
 			// Session tracking
 			if !mcpStrategy.Sessions.HasKey(sessionKey) {
 				mcpStrategy.Sessions.SetSessionID(sessionKey, eventID)
@@ -474,6 +480,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						CommandOutput:   faultResp,
 						SessionKey:      sessionKey,
 						Sequence:        seq,
+						JA4H:            ja4h,
+						JA4HSorted:      ja4hSorted,
+						HeaderOrder:     headerOrder,
 						ToolName:        request.Params.Name,
 						ToolArguments:   argsStr,
 						IsRetry:         isRetry,
@@ -565,11 +574,6 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				noveltyVerdict = mcpStrategy.recordNoveltyTool(host, request.Params.Name)
 			}
 
-			// JA4H fingerprint computed in WithHTTPContextFunc and stashed in ctx.
-			ja4h, _ := ctx.Value(ja4hCtxKey{}).(string)
-			ja4hSorted, _ := ctx.Value(ja4hSortedCtxKey{}).(bool)
-			headerOrder, _ := ctx.Value(headerOrderCtxKey{}).(string)
-
 			tr.TraceEvent(tracer.Event{
 				Msg:              "MCP tool invocation",
 				Protocol:         tracer.MCP.String(),
@@ -645,7 +649,18 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	sseHandler := server.NewSSEServer(
 		mcpServer,
 		server.WithSSEContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+			ctx = context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
+			// JA4H for the SSE transport too (legacy MCP clients). Mirrors the
+			// streamable-HTTP context func; the shared tool handler emits it.
+			if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+				wireOrder := tracer.ParseHeaderOrder(tc.RawBytes())
+				ja4h, sorted := tracer.ComputeJA4HWithMeta(r, wireOrder)
+				ctx = context.WithValue(ctx, ja4hCtxKey{}, ja4h)
+				ctx = context.WithValue(ctx, ja4hSortedCtxKey{}, sorted)
+				ctx = context.WithValue(ctx, headerOrderCtxKey{}, strings.Join(wireOrder, ","))
+				tc.Rearm()
+			}
+			return ctx
 		}),
 	)
 
@@ -1145,6 +1160,14 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// Trace as HTTP event with full request metadata
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
 	destPort := tracer.ExtractPort(servConf.Address)
+	// JA4H for the HTTP-fallback path (was previously dropped on this route).
+	var fbWireOrder []string
+	if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		fbWireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+		tc.Rearm()
+	}
+	fbJA4H, fbJA4HSorted := tracer.ComputeJA4HWithMeta(r, fbWireOrder)
+
 	event := tracer.Event{
 		Msg:             "HTTP request on MCP port",
 		RequestURI:      r.RequestURI,
@@ -1165,6 +1188,9 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 		ServiceType:     servConf.ServiceType,
 		Handler:         matchedCommand.Name,
 		ServicePort:     destPort,
+		JA4H:            fbJA4H,
+		JA4HSorted:      fbJA4HSorted,
+		HeaderOrder:     strings.Join(fbWireOrder, ","),
 	}
 	// Opt-in dedicated RequestBody capture (mirrors HTTP/OLLAMA strategies).
 	if servConf.CaptureRequestBody {
