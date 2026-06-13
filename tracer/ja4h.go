@@ -37,24 +37,23 @@ func ComputeJA4H(r *http.Request, wireOrder []string) string {
 	// --- Part b: truncated SHA256 of header names (wire order or sorted) ---
 	partB := truncHash(strings.Join(filtered, ","))
 
-	// --- Part c: truncated SHA256 of header values in same order ---
-	values := make([]string, 0, len(filtered))
-	for _, name := range filtered {
-		// http.Header stores canonical form; look up case-insensitively
-		values = append(values, strings.Join(r.Header.Values(http.CanonicalHeaderKey(name)), ","))
+	// --- Parts c/d: cookies, sorted by name (FoxIO JA4H spec) ---
+	// c = sha256 of sorted cookie NAMES; d = sha256 of cookie "name=value"
+	// pairs in that same name-sorted order. Per FoxIO python/ja4h.py +
+	// common.py: sha_encode joins with "," and truncates sha256 to 12 hex; an
+	// EMPTY list hashes the empty string (-> e3b0c44298fc), NOT twelve zeros.
+	// (Earlier this fork hashed header VALUES into part c, which never matched
+	// the FoxIO corpus — see ja4h_oracle_test.go.)
+	cookies := r.Cookies()
+	sort.Slice(cookies, func(i, j int) bool { return cookies[i].Name < cookies[j].Name })
+	names := make([]string, len(cookies))
+	pairs := make([]string, len(cookies))
+	for i, c := range cookies {
+		names[i] = c.Name
+		pairs[i] = c.Name + "=" + c.Value
 	}
-	partC := truncHash(strings.Join(values, ","))
-
-	// --- Part d: truncated SHA256 of sorted cookie key=value pairs ---
-	partD := "000000000000"
-	if cookies := r.Cookies(); len(cookies) > 0 {
-		pairs := make([]string, 0, len(cookies))
-		for _, c := range cookies {
-			pairs = append(pairs, c.Name+"="+c.Value)
-		}
-		sort.Strings(pairs)
-		partD = truncHash(strings.Join(pairs, ","))
-	}
+	partC := truncHash(strings.Join(names, ","))
+	partD := truncHash(strings.Join(pairs, ","))
 
 	return partA + "_" + partB + "_" + partC + "_" + partD
 }

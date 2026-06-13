@@ -23,8 +23,11 @@ func TestComputeJA4H_SortedFallback(t *testing.T) {
 	if !strings.HasPrefix(parts[0], "ge11nn04") {
 		t.Errorf("expected part_a prefix ge11nn04, got %s", parts[0])
 	}
-	if parts[3] != "000000000000" {
-		t.Errorf("expected empty cookie hash, got %s", parts[3])
+	// No cookies → parts c and d are sha_encode([]) = sha256("")[:12], the FoxIO
+	// empty-list value (NOT twelve zeros).
+	const emptyHash = "e3b0c44298fc"
+	if parts[2] != emptyHash || parts[3] != emptyHash {
+		t.Errorf("expected empty cookie-name/value hashes %s, got c=%s d=%s", emptyHash, parts[2], parts[3])
 	}
 	t.Logf("JA4H (sorted): %s", ja4h)
 }
@@ -79,8 +82,11 @@ func TestComputeJA4H_WithCookies(t *testing.T) {
 	if !strings.HasSuffix(a, "enus") {
 		t.Errorf("expected lang enus, got %s", a[8:])
 	}
-	if parts[3] == "000000000000" {
-		t.Error("expected non-empty cookie hash")
+	// Cookie present → parts c (cookie names) and d (name=value) are real
+	// hashes, distinct from the empty-list value.
+	const emptyHash = "e3b0c44298fc"
+	if parts[2] == emptyHash || parts[3] == emptyHash {
+		t.Errorf("expected non-empty cookie name/value hashes, got c=%s d=%s", parts[2], parts[3])
 	}
 	t.Logf("JA4H: %s", ja4h)
 }
