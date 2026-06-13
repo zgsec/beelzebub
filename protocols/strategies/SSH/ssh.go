@@ -99,7 +99,12 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			IdleTimeout: time.Duration(servConf.DeadlineTimeoutSeconds) * time.Second,
 			Version:     servConf.ServerVersion,
 			ConnCallback: func(ctx ssh.Context, conn net.Conn) net.Conn {
-				tc := tracer.NewTeeConn(conn, 8192, tracer.SSHStopFunc)
+				// 65536 (was 8192) so a large KEXINIT — e.g. post-quantum hybrid
+				// KEX with long algorithm lists — is fully captured rather than
+				// truncated to an empty HASSH. Matches ComputeHASSH's 35000-byte
+				// packet ceiling with headroom; capture stops at KEXINIT end
+				// anyway, so the cap only bounds the pathological case.
+				tc := tracer.NewTeeConn(conn, 65536, tracer.SSHStopFunc)
 				ctx.SetValue(tracer.TeeConnKey, tc)
 				return tc
 			},
@@ -215,24 +220,24 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 
 				tr.TraceEvent(tracer.Event{
-					Msg:         "New SSH Terminal Session",
-					Protocol:    tracer.SSH.String(),
-					RemoteAddr:  sess.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					Status:      tracer.Start.String(),
-					ID:          uuidSession.String(),
-					Environ:     strings.Join(sess.Environ(), ","),
-					User:        sess.User(),
-					Description: servConf.Description,
-					ServiceType: servConf.ServiceType,
-					SessionKey:  sessionKey,
-					HASSH:            hasshFromContext(sess.Context()),
-					HASSHAlgorithms:  hasshAlgorithmsFromContext(sess.Context()),
-					ServicePort:      destPort,
-					PTYTerm:          ptyTerm,
-					PTYWidth:         ptyWidth,
-					PTYHeight:        ptyHeight,
+					Msg:             "New SSH Terminal Session",
+					Protocol:        tracer.SSH.String(),
+					RemoteAddr:      sess.RemoteAddr().String(),
+					SourceIp:        host,
+					SourcePort:      port,
+					Status:          tracer.Start.String(),
+					ID:              uuidSession.String(),
+					Environ:         strings.Join(sess.Environ(), ","),
+					User:            sess.User(),
+					Description:     servConf.Description,
+					ServiceType:     servConf.ServiceType,
+					SessionKey:      sessionKey,
+					HASSH:           hasshFromContext(sess.Context()),
+					HASSHAlgorithms: hasshAlgorithmsFromContext(sess.Context()),
+					ServicePort:     destPort,
+					PTYTerm:         ptyTerm,
+					PTYWidth:        ptyWidth,
+					PTYHeight:       ptyHeight,
 				})
 
 				// Record SSH authentication in bridge
@@ -368,11 +373,15 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 				fingerprint := fingerprintKey(key)
 				tr.TraceEvent(tracer.Event{
-					Msg:               "SSH Public Key Offered",
-					Protocol:          tracer.SSH.String(),
-					Status:            tracer.Stateless.String(),
-					User:              ctx.User(),
-					Client:            ctx.ClientVersion(),
+					Msg:      "SSH Public Key Offered",
+					Protocol: tracer.SSH.String(),
+					Status:   tracer.Stateless.String(),
+					User:     ctx.User(),
+					Client:   ctx.ClientVersion(),
+					// SessionKey so this event joins the session timeline (and gets
+					// InterEventMs/Sequence) — bots that offer a key then disconnect
+					// after rejection would otherwise be untethered.
+					SessionKey:        "SSH" + host + ctx.User(),
 					RemoteAddr:        ctx.RemoteAddr().String(),
 					SourceIp:          host,
 					SourcePort:        port,
@@ -382,7 +391,14 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					Command:           key.Type() + " " + fingerprint, // backward compat
 					SSHKeyType:        key.Type(),
 					SSHKeyFingerprint: fingerprint,
-					ServicePort:       destPort,
+					// HASSH here too: a pubkey-probe-only session (offer key,
+					// rejected, disconnect — common bot behavior) never reaches
+					// PasswordHandler/Handler, so without this its HASSH is lost.
+					// hasshFromContext is cached/idempotent; KEXINIT is complete by
+					// auth time.
+					HASSH:           hasshFromContext(ctx),
+					HASSHAlgorithms: hasshAlgorithmsFromContext(ctx),
+					ServicePort:     destPort,
 				})
 				return false // always reject, fall through to password auth
 			},
