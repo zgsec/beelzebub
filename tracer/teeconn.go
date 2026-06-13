@@ -78,6 +78,10 @@ type TeeConn struct {
 	done     bool
 	complete bool // true if stopFn triggered (vs maxCap truncation)
 	stopFn   StopFunc
+	// stopFactory, when set (by TeeListener), lets Rearm mint a fresh stop
+	// function for the next preamble. Required for stateful stop functions
+	// like HTTPStopFunc whose captured offset must reset between requests.
+	stopFactory StopFuncFactory
 }
 
 // NewTeeConn wraps a connection for raw byte capture.
@@ -127,6 +131,25 @@ func (c *TeeConn) Release() {
 	c.done = true
 }
 
+// Rearm resets the capture buffer and stop-func state so the next Read()
+// captures a fresh preamble. Used for HTTP keep-alive: the same TeeConn serves
+// every request on a persistent connection, so each request needs its own
+// header-order capture. Without this, requests after the first reuse a stale
+// (released) buffer and the JA4H falls back to non-spec sorted order.
+//
+// A fresh stop function is minted from stopFactory when present; HTTPStopFunc
+// is stateful (tracks an offset across Read calls) and MUST be reset, or the
+// stale offset would point past the new buffer and capture would run to maxCap.
+// Stateless stop functions (SSHStopFunc) need no factory and are reused as-is.
+func (c *TeeConn) Rearm() {
+	c.buf = make([]byte, 0, 1024)
+	c.done = false
+	c.complete = false
+	if c.stopFactory != nil {
+		c.stopFn = c.stopFactory()
+	}
+}
+
 // StopFuncFactory creates a new StopFunc per connection. Required for stateful
 // stop functions like HTTPStopFunc that track position across Read() calls.
 // Stateless stop functions (like SSHStopFunc) can use StopFuncLiteral.
@@ -150,5 +173,7 @@ func (l *TeeListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return conn, err
 	}
-	return NewTeeConn(conn, l.MaxCapture, l.NewStopFn()), nil
+	tc := NewTeeConn(conn, l.MaxCapture, l.NewStopFn())
+	tc.stopFactory = l.NewStopFn // enables Rearm() for keep-alive re-capture
+	return tc, nil
 }

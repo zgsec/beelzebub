@@ -662,12 +662,16 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 	}
 	verdict := agentdetect.IncrementalClassify(sig)
 
-	// Extract wire-order headers from TeeConn captured bytes
+	// Extract wire-order headers from TeeConn captured bytes, then rearm for the
+	// NEXT request on this keep-alive connection. Rearm — not Release — keeps
+	// requests 2+ in spec wire order; Release would force them onto the
+	// non-comparable sorted fallback (see HTTP strategy for the same fix).
 	var wireOrder []string
 	if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
 		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
-		tc.Release()
+		tc.Rearm()
 	}
+	ja4h, ja4hSorted := tracer.ComputeJA4HWithMeta(r, wireOrder)
 
 	var respBytes int64
 	if len(responseBytes) > 0 {
@@ -704,7 +708,8 @@ func (s *OllamaStrategy) traceEvent(r *http.Request, tr tracer.Tracer, servConf 
 		AgentCategory:    verdict.Category,
 		AgentSignals:     verdict.SignalsString(),
 		ResponseBytes:    respBytes,
-		JA4H:             tracer.ComputeJA4H(r, wireOrder),
+		JA4H:             ja4h,
+		JA4HSorted:       ja4hSorted,
 		HeaderOrder:      strings.Join(wireOrder, ","),
 		ServicePort:      destPort,
 	}

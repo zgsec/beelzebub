@@ -59,6 +59,15 @@ func ComputeJA4H(r *http.Request, wireOrder []string) string {
 	return partA + "_" + partB + "_" + partC + "_" + partD
 }
 
+// ComputeJA4HWithMeta computes the JA4H hash and reports whether it used the
+// sorted-header fallback (true) instead of spec wire order (false). The sorted
+// path runs exactly when wireOrder is nil (see filterHeaders); a sorted hash is
+// deterministic but NOT comparable to wire-order JA4H from other corpora, so
+// callers persist this flag to keep the two families distinguishable downstream.
+func ComputeJA4HWithMeta(r *http.Request, wireOrder []string) (hash string, sorted bool) {
+	return ComputeJA4H(r, wireOrder), wireOrder == nil
+}
+
 // ParseHeaderOrder extracts HTTP header names in wire order from raw request bytes.
 // Returns nil if the header section is incomplete.
 func ParseHeaderOrder(raw []byte) []string {

@@ -92,7 +92,12 @@ type Event struct {
 	// Network fingerprints
 	JA4H        string `json:"JA4H,omitempty"`
 	HeaderOrder string `json:"HeaderOrder,omitempty"` // wire-order header names, comma-separated
-	HASSH       string `json:"HASSH,omitempty"`
+	// JA4HSorted is true when JA4H was computed from sorted header names
+	// (raw wire order unavailable, e.g. capture truncated). Such a hash is
+	// NOT comparable to spec wire-order JA4H — downstream pivots must exclude
+	// sorted hashes rather than silently mixing the two families.
+	JA4HSorted bool   `json:"JA4HSorted,omitempty"`
+	HASSH      string `json:"HASSH,omitempty"`
 
 	// v8: Service port extracted from listener address.
 	ServicePort string `json:"ServicePort,omitempty"`

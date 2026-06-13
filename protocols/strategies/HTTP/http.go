@@ -484,7 +484,11 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			host = request.RemoteAddr
 		}
 
-		sctx.sess = sctx.cookieStore.Create(host, request.Header.Get("X-JA4H"), captured)
+		// Record the SERVER-COMPUTED JA4H, never the attacker-supplied X-JA4H
+		// request header (forgeable; would poison forensic correlation). The
+		// deferred traceRequest owns the TeeConn lifecycle (Rearm), so this
+		// only reads the captured bytes — it must not release them.
+		sctx.sess = sctx.cookieStore.Create(host, ja4hFromRequest(request), captured)
 
 		// Inject Set-Cookie into the response headers so setResponseHeaders picks it up.
 		// Path=/ is required so clients (curl, browsers) send the cookie to all
@@ -613,6 +617,19 @@ func classifyForgedCookie(value string) string {
 	return ""
 }
 
+// ja4hFromRequest computes the JA4H fingerprint for a request, using wire-order
+// header names from the TeeConn capture when available. It only reads the
+// captured bytes — it does NOT rearm/release the TeeConn, because the deferred
+// traceRequest owns that lifecycle. Falls back to sorted order when no capture
+// is present (e.g. unit tests, or capture truncated).
+func ja4hFromRequest(request *http.Request) string {
+	var wireOrder []string
+	if tc, ok := request.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
+		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
+	}
+	return tracer.ComputeJA4H(request, wireOrder)
+}
+
 func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command,
 	HoneypotDescription, HoneypotServiceType, body string,
 	ns *noveltydetect.FingerprintStore,
@@ -677,12 +694,17 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		noveltyVerdict = noveltydetect.IncrementalScore(novSig)
 	}
 
-	// Extract wire-order headers from TeeConn captured bytes, then release buffer
+	// Extract wire-order headers from TeeConn captured bytes, then rearm the
+	// buffer for the NEXT request on this (keep-alive) connection. Rearm — not
+	// Release — is what keeps requests 2+ on a persistent connection in spec
+	// wire order; Release would null the buffer and force every subsequent
+	// request onto the non-comparable sorted fallback.
 	var wireOrder []string
 	if tc, ok := request.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
 		wireOrder = tracer.ParseHeaderOrder(tc.RawBytes())
-		tc.Release()
+		tc.Rearm()
 	}
+	ja4h, ja4hSorted := tracer.ComputeJA4HWithMeta(request, wireOrder)
 
 	// Override SessionKey for stateful services: cookie[:16] enables cross-event
 	// correlation across the cookie-session lifetime. Stateless services keep
@@ -718,7 +740,8 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		NoveltyScore:    noveltyVerdict.Score,
 		NoveltyCategory: noveltyVerdict.Category,
 		NoveltySignals:  noveltyVerdict.SignalsString(),
-		JA4H:            tracer.ComputeJA4H(request, wireOrder),
+		JA4H:            ja4h,
+		JA4HSorted:      ja4hSorted,
 		HeaderOrder:     strings.Join(wireOrder, ","),
 		// Command mirrors the pattern used by SSH/MCP/TELNET handlers: a
 		// short human-readable form of what the attacker sent. Downstream
