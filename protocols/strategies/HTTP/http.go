@@ -41,8 +41,16 @@ type httpSessionState struct {
 var (
 	httpSessions    sync.Map // IP → *httpSessionState
 	httpCleanupOnce sync.Once
-	httpJA4Cache    sync.Map // remoteAddr → JA4 string (per-TLS-connection, cleared on disconnect)
+	httpJA4Cache    sync.Map // remoteAddr → tlsFingerprints (per-TLS-connection)
 )
+
+// tlsFingerprints holds the TLS ClientHello fingerprints computed once per
+// handshake in GetConfigForClient and looked up at trace time. Kept in one
+// cache entry (vs a second map) so JA3 adds no extra leak surface.
+type tlsFingerprints struct {
+	ja4 string
+	ja3 string
+}
 
 // startHTTPSessionCleanup launches a goroutine that prunes stale sessions every 5 minutes.
 //
@@ -323,9 +331,12 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			// when tracing the request.
 			srv.TLSConfig = &tls.Config{
 				GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-					ja4 := tracer.ComputeJA4FromClientHello(hello)
-					if ja4 != "" {
-						httpJA4Cache.Store(hello.Conn.RemoteAddr().String(), ja4)
+					fp := tlsFingerprints{
+						ja4: tracer.ComputeJA4FromClientHello(hello),
+						ja3: tracer.ComputeJA3FromClientHello(hello),
+					}
+					if fp.ja4 != "" || fp.ja3 != "" {
+						httpJA4Cache.Store(hello.Conn.RemoteAddr().String(), fp)
 					}
 					return nil, nil // use default config
 				},
@@ -643,10 +654,11 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 	if laddr, ok := request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
 		destPort = tracer.ExtractPort(laddr.String())
 	}
-	// v8: JA4 TLS fingerprint from GetConfigForClient cache
-	var ja4 string
+	// v8: JA4/JA3 TLS fingerprints from GetConfigForClient cache
+	var ja4, ja3 string
 	if v, ok := httpJA4Cache.Load(request.RemoteAddr); ok {
-		ja4 = v.(string)
+		fp := v.(tlsFingerprints)
+		ja4, ja3 = fp.ja4, fp.ja3
 	}
 	sessionKey := "HTTP" + host
 
@@ -753,6 +765,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		ServicePort:        destPort,
 		ResponseStatusCode: responseStatusCode,
 		JA4:                ja4,
+		JA3:                ja3,
 		// v8 Phase 0: response-side capture.
 		// ResponseBytes is the byte count, ALWAYS set (cheap, useful for everyone).
 		// ResponseTimeMs is the handler duration, ALWAYS set.

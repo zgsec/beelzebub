@@ -130,6 +130,9 @@ type Event struct {
 
 	// v8: JA4 TLS ClientHello fingerprint.
 	JA4 string `json:"JA4,omitempty"`
+	// JA3 TLS ClientHello fingerprint (classic Salesforce). Emitted alongside
+	// JA4 for cross-corpus lookup (Shodan/GreyNoise/VT index JA3 heavily).
+	JA3 string `json:"JA3,omitempty"`
 
 	// v8: Telnet subnegotiation data from IAC SB...SE blocks.
 	// NAWS = terminal dimensions, TTYPE = terminal software, TSPEED = connection speed.
@@ -299,7 +302,9 @@ func GetInstance(defaultStrategy Strategy) *tracer {
 				go func(i int) {
 					log.Debug("Trace worker: ", i)
 					for event := range singleton.eventsChan {
-						singleton.strategy(event)
+						// Read the strategy under its mutex; SetStrategy may
+						// swap it concurrently (data race on the raw field).
+						singleton.GetStrategy()(event)
 					}
 				}(i)
 			}
@@ -349,6 +354,18 @@ func SetActorResolver(r ActorResolver) {
 	actorResolverMu.Lock()
 	defer actorResolverMu.Unlock()
 	actorResolver = r
+}
+
+// CleanTimingCache evicts inter-event-timing entries idle longer than maxAge
+// from the singleton's cache. Without periodic cleaning the per-session-key map
+// grows unboundedly AND a returning IP's InterEventMs is computed against a
+// weeks-old "last event," yielding garbage deltas that pollute timing-based
+// agent scoring. Wired to a lifecycle cleaner in builder. No-op before the
+// singleton exists.
+func CleanTimingCache(maxAge time.Duration) {
+	if singleton != nil && singleton.timingCache != nil {
+		singleton.timingCache.Clean(maxAge)
+	}
 }
 
 // ExtractPort returns the port portion of a listen address.

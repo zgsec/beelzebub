@@ -1,11 +1,13 @@
 package tracer
 
 import (
+	"crypto/md5"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -94,6 +96,83 @@ func ComputeJA4FromClientHello(hello *tls.ClientHelloInfo) string {
 	return fmt.Sprintf("t%s%s%02d%02d%s_%s_%s",
 		version, sni, numCiphers, numExts, alpn,
 		cipherHash, extHash)
+}
+
+// ComputeJA3FromClientHello computes the classic JA3 (Salesforce) fingerprint
+// from Go's parsed tls.ClientHelloInfo. JA3 is the most widely indexed TLS
+// fingerprint (Shodan / GreyNoise / VirusTotal), so it gives direct attacker-
+// tool lookup that JA4 alone does not.
+//
+// JA3 = md5("version,ciphers,extensions,curves,pointformats") where each list
+// is '-'-joined DECIMAL values in WIRE ORDER with GREASE removed. We reconstruct
+// the ClientHello legacy_version as min(highest supported, 0x0303): per RFC 8446
+// a TLS 1.3 ClientHello pins legacy_version to 0x0303 (771), so this matches the
+// canonical JA3 hash and stays cross-corpus comparable.
+//
+// Spec: https://github.com/salesforce/ja3
+func ComputeJA3FromClientHello(hello *tls.ClientHelloInfo) string {
+	if hello == nil {
+		return ""
+	}
+	sum := md5.Sum([]byte(ja3String(hello)))
+	return hex.EncodeToString(sum[:])
+}
+
+// ja3String builds the canonical pre-hash JA3 string. Split out from the MD5 so
+// the exact wire format is unit-testable against hand-computed vectors.
+func ja3String(hello *tls.ClientHelloInfo) string {
+	version := ja3LegacyVersion(hello.SupportedVersions)
+	ciphers := ja3JoinUint16(filterGREASE16(hello.CipherSuites))
+	exts := ja3JoinUint16(filterGREASE16(hello.Extensions))
+	curves := ja3JoinCurves(hello.SupportedCurves)
+	points := ja3JoinUint8(hello.SupportedPoints)
+	return strings.Join([]string{strconv.Itoa(version), ciphers, exts, curves, points}, ",")
+}
+
+// ja3LegacyVersion returns the ClientHello legacy_version as a decimal: the
+// highest non-GREASE supported version, capped at 0x0303 (TLS 1.3 pins legacy
+// to 0x0303). Returns 0 if no non-GREASE version is present.
+func ja3LegacyVersion(supported []uint16) int {
+	highest := 0
+	for _, v := range supported {
+		if isGREASE16(v) {
+			continue
+		}
+		if int(v) > highest {
+			highest = int(v)
+		}
+	}
+	if highest > 0x0303 {
+		highest = 0x0303
+	}
+	return highest
+}
+
+// ja3JoinUint16 joins values as '-'-separated decimals in WIRE ORDER (no sort).
+func ja3JoinUint16(vals []uint16) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = strconv.Itoa(int(v))
+	}
+	return strings.Join(parts, "-")
+}
+
+func ja3JoinCurves(vals []tls.CurveID) string {
+	out := make([]uint16, 0, len(vals))
+	for _, v := range vals {
+		if !isGREASE16(uint16(v)) {
+			out = append(out, uint16(v))
+		}
+	}
+	return ja3JoinUint16(out)
+}
+
+func ja3JoinUint8(vals []uint8) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = strconv.Itoa(int(v))
+	}
+	return strings.Join(parts, "-")
 }
 
 // --- Internal helpers (JA4-specific, avoid name collision with ja4h.go) ---

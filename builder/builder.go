@@ -162,6 +162,13 @@ Honeypot Framework, happy hacking!`)
 		protocolBridge.Clean(60 * time.Minute)
 	})
 
+	// Prune stale inter-event timing entries on the same cadence. Without this
+	// the tracer's per-session-key timing map grows unboundedly and returning
+	// IPs get nonsensical (weeks-long) InterEventMs deltas.
+	go lifecycle.Cleaner(context.Background(), 5*time.Minute, "timing.clean", func() {
+		tracer.CleanTimingCache(60 * time.Minute)
+	})
+
 	// Init Protocol strategies
 	secureShellStrategy := &SSH.SSHStrategy{Bridge: protocolBridge}
 	hypertextTransferProtocolStrategy := &HTTP.HTTPStrategy{Bridge: protocolBridge}

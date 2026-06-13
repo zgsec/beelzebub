@@ -30,7 +30,9 @@ func TestTraceEvent(t *testing.T) {
 
 	tracer := GetInstance(mockStrategy)
 
-	tracer.strategy = mockStrategy
+	// Use SetStrategy (mutex-guarded) rather than a raw field write — workers
+	// read the strategy under the same lock, so a raw write here races them.
+	tracer.SetStrategy(mockStrategy)
 
 	wg.Add(1)
 	tracer.TraceEvent(Event{

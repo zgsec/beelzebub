@@ -127,6 +127,27 @@ type OllamaSession struct {
 	ModelSwitches     int       // number of distinct models requested at time of change
 }
 
+// evictIdleSessions drops per-IP Ollama sessions idle longer than maxAge.
+// Idleness keys on LastSeen (updated every request), not FirstSeen — otherwise a
+// continuously-active session older than maxAge would be wiped mid-stream,
+// resetting its LLMjack counters and behavioral signals. A never-traced session
+// (zero LastSeen) falls back to FirstSeen.
+func (s *OllamaStrategy) evictIdleSessions(maxAge time.Duration, now time.Time) {
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	for ip, sess := range s.ipSessions {
+		sess.mu.Lock()
+		ref := sess.LastSeen
+		if ref.IsZero() {
+			ref = sess.FirstSeen
+		}
+		sess.mu.Unlock()
+		if now.Sub(ref) > maxAge {
+			delete(s.ipSessions, ip)
+		}
+	}
+}
+
 func (s *OllamaStrategy) getOrCreateSession(ip string) *OllamaSession {
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
@@ -369,16 +390,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 	// previous no-shutdown behavior; when the strategy gains a lifecycle
 	// context, this is the seam to thread it through.
 	go lifecycle.Cleaner(context.Background(), 5*time.Minute, "ollama.session.cleanup", func() {
-		s.sessionsMu.Lock()
-		defer s.sessionsMu.Unlock()
-		for ip, sess := range s.ipSessions {
-			sess.mu.Lock()
-			age := time.Since(sess.FirstSeen)
-			sess.mu.Unlock()
-			if age > time.Hour {
-				delete(s.ipSessions, ip)
-			}
-		}
+		s.evictIdleSessions(time.Hour, time.Now())
 	})
 
 	mux := http.NewServeMux()

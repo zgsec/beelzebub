@@ -31,6 +31,7 @@ import (
 
 type remoteAddrCtxKey struct{}
 type ja4hCtxKey struct{}
+type ja4hSortedCtxKey struct{}
 type headerOrderCtxKey struct{}
 
 // toolCallRecord stores the output of a previous tool call for chain detection.
@@ -564,6 +565,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				noveltyVerdict = mcpStrategy.recordNoveltyTool(host, request.Params.Name)
 			}
 
+			// JA4H fingerprint computed in WithHTTPContextFunc and stashed in ctx.
+			ja4h, _ := ctx.Value(ja4hCtxKey{}).(string)
+			ja4hSorted, _ := ctx.Value(ja4hSortedCtxKey{}).(bool)
+			headerOrder, _ := ctx.Value(headerOrderCtxKey{}).(string)
+
 			tr.TraceEvent(tracer.Event{
 				Msg:              "MCP tool invocation",
 				Protocol:         tracer.MCP.String(),
@@ -578,6 +584,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				CommandOutput:    response,
 				SessionKey:       sessionKey,
 				Sequence:         seq,
+				JA4H:             ja4h,
+				JA4HSorted:       ja4hSorted,
+				HeaderOrder:      headerOrder,
 				ToolName:         request.Params.Name,
 				ToolArguments:    argsStr,
 				IsRetry:          isRetry,
@@ -613,12 +622,16 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		server.WithSessionIdManager(&bareUUIDSessionIdManager{}),
 		server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			ctx = context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
-			// Compute JA4H from wire-order headers if TeeConn is available
+			// Compute JA4H from wire-order headers if TeeConn is available, and
+			// stash it in ctx for the tool handler to emit. Rearm (not Release)
+			// so a keep-alive connection's next request re-captures cleanly.
 			if tc, ok := r.Context().Value(tracer.TeeConnKey).(*tracer.TeeConn); ok {
 				wireOrder := tracer.ParseHeaderOrder(tc.RawBytes())
-				ctx = context.WithValue(ctx, ja4hCtxKey{}, tracer.ComputeJA4H(r, wireOrder))
+				ja4h, sorted := tracer.ComputeJA4HWithMeta(r, wireOrder)
+				ctx = context.WithValue(ctx, ja4hCtxKey{}, ja4h)
+				ctx = context.WithValue(ctx, ja4hSortedCtxKey{}, sorted)
 				ctx = context.WithValue(ctx, headerOrderCtxKey{}, strings.Join(wireOrder, ","))
-				tc.Release()
+				tc.Rearm()
 			}
 			return ctx
 		}),
@@ -851,60 +864,68 @@ func (s *MCPStrategy) recordToolCall(ip, toolName, output string) {
 func (s *MCPStrategy) cleanAgentState() {
 	for {
 		time.Sleep(5 * time.Minute)
-		cutoff := time.Now().Add(-60 * time.Minute)
-
-		// Collect stale IPs under timing read lock
-		s.timingMu.RLock()
-		var staleIPs []string
-		for ip, last := range s.agentLastSeen {
-			if last.Before(cutoff) {
-				staleIPs = append(staleIPs, ip)
-			}
+		s.evictStale(time.Now().Add(-60 * time.Minute))
+		if s.noveltyStore != nil {
+			s.noveltyStore.Clean(time.Duration(s.noveltyWindowDays) * 24 * time.Hour)
 		}
-		s.timingMu.RUnlock()
+	}
+}
 
-		if len(staleIPs) == 0 {
-			// Still clean novelty store even if no stale IPs
-			if s.noveltyStore != nil {
-				maxAge := time.Duration(s.noveltyWindowDays) * 24 * time.Hour
-				s.noveltyStore.Clean(maxAge)
-			}
-			continue
+// evictStale removes all per-IP agent/world/history state for IPs whose last
+// activity is before cutoff.
+//
+// It snapshots candidates under the read lock, then RE-CHECKS each under the
+// write lock before deleting. Without the re-check, an IP that issues a tool
+// call between the snapshot and the delete would still be evicted — silently
+// resetting its WorldState (fresh seed/honeytoken contradicting earlier
+// responses) and its NextSequence counter mid-session. agentLastSeen is the
+// authority for staleness; only IPs still stale at delete time are evicted from
+// the other maps.
+func (s *MCPStrategy) evictStale(cutoff time.Time) {
+	s.timingMu.RLock()
+	var stale []string
+	for ip, last := range s.agentLastSeen {
+		if last.Before(cutoff) {
+			stale = append(stale, ip)
 		}
+	}
+	s.timingMu.RUnlock()
+	if len(stale) == 0 {
+		return
+	}
 
-		// Delete from each map under its own write lock
-		s.timingMu.Lock()
-		for _, ip := range staleIPs {
+	var evicted []string
+	s.timingMu.Lock()
+	for _, ip := range stale {
+		if last, ok := s.agentLastSeen[ip]; ok && last.Before(cutoff) {
 			delete(s.agentTimings, ip)
 			delete(s.agentLastSeen, ip)
+			evicted = append(evicted, ip)
 		}
-		s.timingMu.Unlock()
+	}
+	s.timingMu.Unlock()
+	if len(evicted) == 0 {
+		return
+	}
 
-		s.historyMu.Lock()
-		for _, ip := range staleIPs {
-			delete(s.toolHistory, ip)
-		}
-		s.historyMu.Unlock()
+	s.historyMu.Lock()
+	for _, ip := range evicted {
+		delete(s.toolHistory, ip)
+	}
+	s.historyMu.Unlock()
 
-		s.worldMu.Lock()
-		for _, ip := range staleIPs {
-			delete(s.worldState, ip)
-		}
-		s.worldMu.Unlock()
+	s.worldMu.Lock()
+	for _, ip := range evicted {
+		delete(s.worldState, ip)
+	}
+	s.worldMu.Unlock()
 
-		if s.noveltyToolSeqs != nil {
-			s.noveltyMu.Lock()
-			for _, ip := range staleIPs {
-				delete(s.noveltyToolSeqs, ip)
-			}
-			s.noveltyMu.Unlock()
+	if s.noveltyToolSeqs != nil {
+		s.noveltyMu.Lock()
+		for _, ip := range evicted {
+			delete(s.noveltyToolSeqs, ip)
 		}
-
-		// Clean novelty store if enabled
-		if s.noveltyStore != nil {
-			maxAge := time.Duration(s.noveltyWindowDays) * 24 * time.Hour
-			s.noveltyStore.Clean(maxAge)
-		}
+		s.noveltyMu.Unlock()
 	}
 }
 
