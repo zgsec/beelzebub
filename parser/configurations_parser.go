@@ -393,6 +393,12 @@ type Command struct {
 	Stimulus       string `yaml:"stimulus,omitempty" json:",omitempty"`
 	StimulusBody   string `yaml:"stimulusBody,omitempty" json:",omitempty"`
 	StimulusStatus int    `yaml:"stimulusStatus,omitempty" json:",omitempty"`
+	// ComplianceHeader (active-instrument): names the request header whose
+	// non-empty presence means the attacker "complied" with a gated stimulus
+	// (e.g. the audit handshake -> finalize). Empty = an "always-on" stimulus
+	// (treatment always sees the variant; no finalize). YAML-driven so a new AI
+	// lure adds a stimulus with ZERO Go.
+	ComplianceHeader string `yaml:"complianceHeader,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot

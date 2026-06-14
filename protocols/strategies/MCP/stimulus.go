@@ -33,21 +33,20 @@ func decideOverride(variant string, complied bool) bool {
 	return variant == variantTreatment && !complied
 }
 
-// compliancePredicates maps a stimulus id to its "has the attacker complied?"
-// check. Registry so future stimuli (B/D) slot in. Unknown id => treated as
-// complied (fail-safe: never deviate for a stimulus we don't understand).
-var compliancePredicates = map[string]func(*http.Request) bool{
-	"audit_handshake_v1": func(r *http.Request) bool {
-		return strings.TrimSpace(r.Header.Get("X-Audit-Context")) != ""
-	},
-}
-
-func complied(stimulusID string, r *http.Request) bool {
-	pred, ok := compliancePredicates[stimulusID]
-	if !ok {
-		return true // unknown stimulus -> behave as holdout (no override)
+// complied reports whether the attacker satisfied a header-gated stimulus.
+// YAML-driven: ComplianceHeader names the request header whose non-empty
+// presence means "complied" (finalize). A stimulus with no ComplianceHeader is
+// "always-on" — complied is always false (treatment always sees the variant).
+// Pure-YAML: a new AI lure adds a stimulus with zero Go.
+//
+// SECURITY: the header VALUE here is attacker-controlled and may contain
+// prompt-injection payloads. It is captured as intel only — it must NEVER be
+// fed to an LLM unsanitized by any downstream consumer.
+func complied(cmd parser.Command, r *http.Request) bool {
+	if cmd.ComplianceHeader == "" {
+		return false
 	}
-	return pred(r)
+	return strings.TrimSpace(r.Header.Get(cmd.ComplianceHeader)) != ""
 }
 
 // applyStimulus tags the event with the stimulus id + cohort (for BOTH cohorts,
@@ -65,7 +64,7 @@ func applyStimulus(cmd parser.Command, r *http.Request, ip string, event *tracer
 	variant := splitVariant(ip, cmd.Stimulus)
 	event.StimulusID = cmd.Stimulus
 	event.StimulusVariant = variant
-	if decideOverride(variant, complied(cmd.Stimulus, r)) {
+	if decideOverride(variant, complied(cmd, r)) && cmd.StimulusBody != "" && cmd.StimulusStatus >= 100 {
 		return cmd.StimulusStatus, true
 	}
 	return 0, false

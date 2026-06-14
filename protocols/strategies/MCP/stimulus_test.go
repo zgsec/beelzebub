@@ -89,12 +89,19 @@ const auditID = "audit_handshake_v1"
 // pickIP returns a real IP that buckets to the wanted variant for auditID.
 func pickIP(t *testing.T, want string) string {
 	t.Helper()
+	return pickIPForStimulus(t, want, auditID)
+}
+
+// pickIPForStimulus returns a real IP that buckets to the wanted variant for
+// the given stimulusID. Use this when the test stimulus differs from auditID.
+func pickIPForStimulus(t *testing.T, want, stimulusID string) string {
+	t.Helper()
 	for _, ip := range loadRealIPs(t) {
-		if splitVariant(ip, auditID) == want {
+		if splitVariant(ip, stimulusID) == want {
 			return ip
 		}
 	}
-	t.Fatalf("no real IP buckets to %s", want)
+	t.Fatalf("no real IP buckets to %s for stimulus %s", want, stimulusID)
 	return ""
 }
 
@@ -103,9 +110,10 @@ const realKeygenBody = `{"duration":"30d","models":[],"max_budget":null}`
 
 func keygenCmd() parser.Command {
 	return parser.Command{
-		Stimulus:       auditID,
-		StimulusStatus: 202,
-		StimulusBody:   `{"status":"pending_audit"}`,
+		Stimulus:         auditID,
+		StimulusStatus:   202,
+		StimulusBody:     `{"status":"pending_audit"}`,
+		ComplianceHeader: "X-Audit-Context",
 	}
 }
 
@@ -155,5 +163,70 @@ func TestApplyStimulus_NoStimulus_NoTagNoOverride(t *testing.T) {
 	status, override := applyStimulus(parser.Command{}, r, "1.2.3.4", &ev)
 	if override || status != 0 || ev.StimulusID != "" {
 		t.Errorf("no-stimulus command must be inert: status=%d override=%v id=%q", status, override, ev.StimulusID)
+	}
+}
+
+// An "always-on" stimulus (no ComplianceHeader): treatment ALWAYS sees the
+// variant, even when a header is present (no finalize). This is the B/parser-probe shape.
+func TestApplyStimulus_AlwaysOn_NoComplianceHeader_AlwaysOverridesTreatment(t *testing.T) {
+	const stimID = "malformed_json_v1"
+	cmd := parser.Command{Stimulus: stimID, StimulusStatus: 200, StimulusBody: `{bad json`}
+	ip := pickIPForStimulus(t, variantTreatment, stimID)
+	r := httptest.NewRequest("GET", "/model/info", nil)
+	r.Header.Set("X-Audit-Context", "ignored for always-on")
+	var ev tracer.Event
+	status, override := applyStimulus(cmd, r, ip, &ev)
+	if !override || status != 200 {
+		t.Errorf("always-on treatment: override=%v status=%d, want true/200", override, status)
+	}
+}
+
+// Pure-YAML spin-up: a brand-new lure/stimulus with NO Go registration works,
+// gated purely by its YAML complianceHeader.
+func TestApplyStimulus_NewLure_PureYAML_HeaderGated(t *testing.T) {
+	const stimID = "new_lure_v1"
+	cmd := parser.Command{Stimulus: stimID, StimulusStatus: 418, StimulusBody: `{"x":1}`, ComplianceHeader: "X-New-Lure"}
+	ip := pickIPForStimulus(t, variantTreatment, stimID)
+	// no header -> override
+	r1 := httptest.NewRequest("POST", "/p", nil)
+	var ev1 tracer.Event
+	if _, ov := applyStimulus(cmd, r1, ip, &ev1); !ov {
+		t.Error("new-lure treatment without header should override (no Go needed)")
+	}
+	// header present -> finalize (no override)
+	r2 := httptest.NewRequest("POST", "/p", nil)
+	r2.Header.Set("X-New-Lure", "context")
+	var ev2 tracer.Event
+	if _, ov := applyStimulus(cmd, r2, ip, &ev2); ov {
+		t.Error("new-lure treatment WITH header should finalize (no override)")
+	}
+}
+
+// Fail-safe: a misconfigured stimulus (status 0 / empty body) never deviates.
+func TestApplyStimulus_MisconfiguredStatus_NeverOverrides(t *testing.T) {
+	ip := pickIP(t, variantTreatment)
+	r := httptest.NewRequest("POST", "/key/generate", nil)
+	for _, cmd := range []parser.Command{
+		{Stimulus: auditID, StimulusStatus: 0, StimulusBody: `{"x":1}`, ComplianceHeader: "X-Audit-Context"},  // status 0
+		{Stimulus: auditID, StimulusStatus: 202, StimulusBody: "", ComplianceHeader: "X-Audit-Context"},       // empty body
+	} {
+		var ev tracer.Event
+		if _, ov := applyStimulus(cmd, r, ip, &ev); ov {
+			t.Errorf("misconfigured stimulus (%+v) must not override", cmd)
+		}
+		if ev.StimulusID != auditID { // but it IS still tagged
+			t.Errorf("misconfigured stimulus should still tag the event")
+		}
+	}
+}
+
+// Whitespace-only compliance header counts as NOT complied (override).
+func TestApplyStimulus_WhitespaceHeader_NotComplied(t *testing.T) {
+	ip := pickIP(t, variantTreatment)
+	r := httptest.NewRequest("POST", "/key/generate", nil)
+	r.Header.Set("X-Audit-Context", "   ")
+	var ev tracer.Event
+	if _, ov := applyStimulus(keygenCmd(), r, ip, &ev); !ov {
+		t.Error("whitespace-only X-Audit-Context must count as not-complied (override)")
 	}
 }
