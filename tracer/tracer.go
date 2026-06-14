@@ -203,6 +203,12 @@ type Event struct {
 	// Nil for non-multipart traffic and for protocols other than HTTP
 	// (Slice B Q2: MCP/OLLAMA/openai never carry multipart in practice).
 	RequestBodyParts []MultipartPart `json:"RequestBodyParts,omitempty"`
+
+	// Stimulus battery (active-instrument): which stimulus was presented on
+	// this event and which cohort the source IP fell in. Empty for untagged
+	// events. Flow through to the collector + ingest via generic JSON marshal.
+	StimulusID      string `json:"StimulusID,omitempty"`
+	StimulusVariant string `json:"StimulusVariant,omitempty"`
 }
 
 type (
