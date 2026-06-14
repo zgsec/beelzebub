@@ -385,6 +385,14 @@ type Command struct {
 	// …) read and mutate the LiteLLM admin roster so a write is visible on a
 	// later read — killing the 404 honeypot tell on the write surface.
 	StateHandler string `yaml:"stateHandler,omitempty" json:",omitempty"`
+
+	// Stimulus (active-instrument): names a stimulus to apply to this command.
+	// When set, the strategy tags the event and, for the treatment cohort that
+	// has not complied, serves StimulusBody with StimulusStatus instead of the
+	// normal handler. Empty = no stimulus (unchanged behavior).
+	Stimulus       string `yaml:"stimulus,omitempty" json:",omitempty"`
+	StimulusBody   string `yaml:"stimulusBody,omitempty" json:",omitempty"`
+	StimulusStatus int    `yaml:"stimulusStatus,omitempty" json:",omitempty"`
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot
