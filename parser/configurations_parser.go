@@ -390,6 +390,9 @@ type Command struct {
 	// When set, the strategy tags the event and, for the treatment cohort that
 	// has not complied, serves StimulusBody with StimulusStatus instead of the
 	// normal handler. Empty = no stimulus (unchanged behavior).
+	// NOTE: the stimulus fields are evaluated ONLY by the MCP strategy's
+	// HTTP-fallback path (the port-8000 admin surface). A stimulus on a command
+	// served by the HTTP/OLLAMA/SSH/TCP strategies is currently silently ignored.
 	Stimulus       string `yaml:"stimulus,omitempty" json:",omitempty"`
 	StimulusBody   string `yaml:"stimulusBody,omitempty" json:",omitempty"`
 	StimulusStatus int    `yaml:"stimulusStatus,omitempty" json:",omitempty"`
@@ -518,6 +521,18 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 // CompileCommandRegex is the method that compiles the regular expression for each configured Command.
 func (c *BeelzebubServiceConfiguration) CompileCommandRegex() error {
 	for i, command := range c.Commands {
+		// Layered-defense guard: a command that sets BOTH stateHandler and stimulus
+		// is a dangerous misconfiguration. The stateHandler would mutate WorldState
+		// but its response would then be silently overwritten by the stimulus
+		// override, making state changes invisible. Fail fast at config-load so
+		// operators catch this before it reaches the wire.
+		if command.StateHandler != "" && command.Stimulus != "" {
+			name := command.Name
+			if name == "" {
+				name = command.RegexStr
+			}
+			return fmt.Errorf("command %q: stateHandler and stimulus are mutually exclusive (stimulus would erase the stateHandler response)", name)
+		}
 		if command.RegexStr != "" {
 			rex, err := regexp.Compile(command.RegexStr)
 			if err != nil {

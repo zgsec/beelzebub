@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/tracer"
 )
 
 func keygenServConf() parser.BeelzebubServiceConfiguration {
@@ -70,5 +71,26 @@ func TestWiring_TreatmentWithHeader_Finalizes200(t *testing.T) {
 	w, _ := driveKeygen(t, pickIP(t, variantTreatment), true)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "sk-litellm-abc") {
 		t.Errorf("treatment+header: status=%d body=%s, want 200 + key (finalize)", w.Code, w.Body.String())
+	}
+}
+
+// TestWiring_StimulusBody_CapturedAndHashed is a regression lock: it verifies
+// that the stimulus body override (which happens BEFORE the capture block in
+// handleHTTPFallback) is what gets persisted to ResponseBody and hashed into
+// ResponseBodySha256. A future refactor that moves the capture above the
+// stimulus override would break attribution — this test catches that.
+func TestWiring_StimulusBody_CapturedAndHashed(t *testing.T) {
+	conf := keygenServConf()
+	conf.CaptureResponseBody = true
+	r := httptest.NewRequest("POST", "/key/generate", strings.NewReader(`{"duration":"30d"}`))
+	r.RemoteAddr = pickIP(t, variantTreatment) + ":40000" // treatment -> 202 stimulus body
+	w := httptest.NewRecorder()
+	tr := &captureTracer{}
+	(&MCPStrategy{}).handleHTTPFallback(w, r, conf, tr)
+	if !strings.Contains(tr.last.ResponseBody, "pending_audit") {
+		t.Errorf("captured ResponseBody should hold the stimulus body, got %q", tr.last.ResponseBody)
+	}
+	if tr.last.ResponseBodySha256 != tracer.Sha256HexString(tr.last.ResponseBody) {
+		t.Errorf("ResponseBodySha256 must hash the served stimulus body")
 	}
 }
