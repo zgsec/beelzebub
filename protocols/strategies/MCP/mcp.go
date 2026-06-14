@@ -1243,6 +1243,18 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 		// Unknown stateHandler name: fall through with the static respBody.
 	}
 
+	// Stimulus hook (generic, Command-keyed). Tags the event for BOTH cohorts
+	// (holdout is a recorded control) and, for treatment that hasn't complied,
+	// overrides the response with the stimulus body/status. Coherence headers
+	// (Server: uvicorn, …) come from matchedCommand.Headers, already rendered
+	// above, so the override stays wire-coherent. applyStimulus is panic-safe.
+	if matchedCommand.Stimulus != "" {
+		if stimStatus, override := applyStimulus(matchedCommand, r, host, &event); override {
+			respBody, _ = responsesubs.Apply(matchedCommand.StimulusBody, matchedCommand.Headers, nil, bodyBytes)
+			stateStatus = stimStatus
+		}
+	}
+
 	// MCP HTTP-fallback always records status code (mirrors HTTP/OLLAMA
 	// strategies). When matchedCommand.StatusCode is 0 the wire response
 	// defaults to Go's http.ResponseWriter default of 200 — record that
