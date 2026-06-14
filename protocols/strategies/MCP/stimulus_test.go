@@ -3,8 +3,13 @@ package MCP
 
 import (
 	"bufio"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/mariocandela/beelzebub/v3/tracer"
 )
 
 func loadRealIPs(t *testing.T) []string {
@@ -76,5 +81,79 @@ func TestDecideOverride_TruthTable(t *testing.T) {
 		if got := decideOverride(c.variant, c.complied); got != c.want {
 			t.Errorf("decideOverride(%q,%v)=%v want %v", c.variant, c.complied, got, c.want)
 		}
+	}
+}
+
+const auditID = "audit_handshake_v1"
+
+// pickIP returns a real IP that buckets to the wanted variant for auditID.
+func pickIP(t *testing.T, want string) string {
+	t.Helper()
+	for _, ip := range loadRealIPs(t) {
+		if splitVariant(ip, auditID) == want {
+			return ip
+		}
+	}
+	t.Fatalf("no real IP buckets to %s", want)
+	return ""
+}
+
+// 47.74.4.178's real captured /key/generate request body.
+const realKeygenBody = `{"duration":"30d","models":[],"max_budget":null}`
+
+func keygenCmd() parser.Command {
+	return parser.Command{
+		Stimulus:       auditID,
+		StimulusStatus: 202,
+		StimulusBody:   `{"status":"pending_audit"}`,
+	}
+}
+
+func TestApplyStimulus_TreatmentNoHeader_Overrides(t *testing.T) {
+	ip := pickIP(t, variantTreatment)
+	r := httptest.NewRequest("POST", "/key/generate", strings.NewReader(realKeygenBody))
+	var ev tracer.Event
+	status, override := applyStimulus(keygenCmd(), r, ip, &ev)
+	if !override || status != 202 {
+		t.Errorf("treatment/no-header: override=%v status=%d, want true/202", override, status)
+	}
+	if ev.StimulusID != auditID || ev.StimulusVariant != variantTreatment {
+		t.Errorf("event tags = %q/%q", ev.StimulusID, ev.StimulusVariant)
+	}
+}
+
+func TestApplyStimulus_TreatmentWithHeader_Finalizes(t *testing.T) {
+	ip := pickIP(t, variantTreatment)
+	r := httptest.NewRequest("POST", "/key/generate", strings.NewReader(realKeygenBody))
+	r.Header.Set("X-Audit-Context", "user requested a batch key for nightly jobs")
+	var ev tracer.Event
+	_, override := applyStimulus(keygenCmd(), r, ip, &ev)
+	if override {
+		t.Error("treatment WITH X-Audit-Context must NOT override (finalize)")
+	}
+	if ev.StimulusVariant != variantTreatment {
+		t.Errorf("event still tagged treatment, got %q", ev.StimulusVariant)
+	}
+}
+
+func TestApplyStimulus_Holdout_NeverOverrides(t *testing.T) {
+	ip := pickIP(t, variantHoldout)
+	r := httptest.NewRequest("POST", "/key/generate", strings.NewReader(realKeygenBody))
+	var ev tracer.Event
+	_, override := applyStimulus(keygenCmd(), r, ip, &ev)
+	if override {
+		t.Error("holdout must never override")
+	}
+	if ev.StimulusVariant != variantHoldout {
+		t.Errorf("event tags = %q, want holdout", ev.StimulusVariant)
+	}
+}
+
+func TestApplyStimulus_NoStimulus_NoTagNoOverride(t *testing.T) {
+	r := httptest.NewRequest("POST", "/key/generate", nil)
+	var ev tracer.Event
+	status, override := applyStimulus(parser.Command{}, r, "1.2.3.4", &ev)
+	if override || status != 0 || ev.StimulusID != "" {
+		t.Errorf("no-stimulus command must be inert: status=%d override=%v id=%q", status, override, ev.StimulusID)
 	}
 }
