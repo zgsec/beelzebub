@@ -156,19 +156,16 @@ func defaultMCPCanaryFallbacks() map[string]string {
 				"re-run ops/render-services.sh before docker compose up.", missing)
 		}
 		canaryFallbacksCache = map[string]string{
-			// EMAIL placeholders in the fallback cache are intentionally left
-			// empty here; they are filled per-strategy by substituteMCPCanaries
-			// which has access to the strategy's persona. This avoids the
-			// package-level singleton having persona state.
-			"CANARYTOKEN_EMAIL_1":     "",
-			"CANARYTOKEN_EMAIL_2":     "",
-			"CANARYTOKEN_AWS_KEY":     os.Getenv("MCP_CANARY_AWS_KEY"),
-			"CANARYTOKEN_AWS_SECRET":  os.Getenv("MCP_CANARY_AWS_SECRET"),
-			"CANARYTOKEN_DB_PASS":     os.Getenv("MCP_CANARY_DB_PASS"),
-			"CANARYTOKEN_DNS_URL":     os.Getenv("MCP_CANARY_DNS"),
-			"CANARYTOKEN_WEB_URL":     os.Getenv("MCP_CANARY_WEB_URL"),
-			"CANARYTOKEN_DD_KEY":      os.Getenv("MCP_CANARY_DD_KEY"),
-			"CANARYTOKEN_VAULT_TOKEN": os.Getenv("MCP_CANARY_VAULT_TOKEN"),
+			// Only the persona-derived EMAIL placeholders are substituted by this
+			// Go path (filled per-strategy below in substituteMCPCanaries). Every
+			// other MCP canary (AWS keys, DB/DNS/WEB/DD/VAULT) is embedded in the
+			// lure YAML as ${MCP_CANARY_*} and resolved at deploy time by
+			// ops/render-services.sh envsubst — NOT here. (Verified 2026-06-15: no
+			// persona uses the bare CANARYTOKEN_AWS/DB/DNS/WEB/DD/VAULT forms; the
+			// previous cache entries for them were vestigial no-ops.) The required[]
+			// presence check above still guards that those env vars are configured.
+			"CANARYTOKEN_EMAIL_1": "",
+			"CANARYTOKEN_EMAIL_2": "",
 		}
 	})
 	return canaryFallbacksCache
