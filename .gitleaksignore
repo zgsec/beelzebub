@@ -119,3 +119,12 @@ personas/crestfield-data-systems/persona.yaml:generic-api-key:307
 # served to the LLM-driven shell emulator on the wire. NOT real secrets.
 personas/crestfield-data-systems/lures/ssh-2222.yaml:generic-api-key:102
 personas/crestfield-data-systems/lures/ssh-2222.yaml:generic-api-key:267
+
+# REDACTED-tell removal 2026-06-15 — crestfield LiteLLM MCP credential surfaces.
+# Replaced the literal "REDACTED" (a fabrication fingerprint — real LiteLLM never
+# emits it) with oracle-shaped fake values: 64-hex token hashes on /key/info and
+# /spend/logs, and a format-real pk-lf/sk-lf langfuse key pair. All fabricated
+# deception artifacts, NOT real secrets. Line numbers shift if the file is edited.
+personas/crestfield-data-systems/lures/mcp-8000.yaml:generic-api-key:888
+personas/crestfield-data-systems/lures/mcp-8000.yaml:generic-api-key:1033
+personas/crestfield-data-systems/lures/mcp-8000.yaml:generic-api-key:1203
