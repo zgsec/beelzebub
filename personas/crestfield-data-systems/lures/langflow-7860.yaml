@@ -245,11 +245,14 @@ commands:
     handler: '{"detail":[{"type":"missing","loc":["query","flow_id"],"msg":"Field required","input":null}]}'
 
   # ───────────────────────────────────────────────────────────────────────
-  # Flows — GET /api/v1/flows/ returns the user's flows (200 in auto-login).
-  # T3 watermark: a Crestfield prod Postgres DSN hardcoded inline in a
-  # SecretStrInput node template — the "careless devops pasted the prod DSN
-  # instead of using the secret store" misconfiguration. Harvestable on the
-  # attacker's flow-enumeration path.
+  # Flows — GET /api/v1/flows/ (200 in auto-login). Two planted secrets:
+  #   • PostgresVectorStore.connection_string — prod DSN WATERMARK (passive
+  #     track; does NOT fire). Coherence prop only — never counted as signal.
+  #   • AmazonBedrockModel.aws_access_key_id/_secret — real Canarytokens AWS
+  #     key (${LANGFLOW_CANARY_AWS_KEY/_SECRET}); FIRES on attacker cred-use =
+  #     Rung-4. "careless devops pasted the key into the component" misconfig
+  #     (load_from_db:false → leaks verbatim on GET, oracle-confirmed). Cross-
+  #     coherent with the LiteLLM bedrock-claude model.
   # ───────────────────────────────────────────────────────────────────────
   - regex: "^/api/v1/flows/?$"
     method: GET
@@ -258,7 +261,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '[{"id":"f1e2d3c4-b5a6-4798-8a0b-1c2d3e4f5a6b","name":"{{ persona.coherence.world.product.service_name }}-prod-etl-pg-to-vector","description":"Nightly loader: pull customer rows from prod Postgres into the RAG store. Pin to {{ persona.coherence.world.product.platform_version }}.","icon":"Database","icon_bg_color":"#1c7ed6","gradient":"2","data":{"nodes":[{"id":"PostgresVectorStore-cdf01","type":"genericNode","position":{"x":140,"y":96},"measured":{"width":320,"height":420},"data":{"type":"PostgresVectorStore","node":{"display_name":"Postgres Vector Store","description":"Load embeddings into the prod pgvector store.","base_classes":["Data"],"template":{"connection_string":{"_input_type":"SecretStrInput","type":"str","password":true,"required":true,"show":true,"name":"connection_string","display_name":"PG Connection String","value":"postgresql://{{ persona.coherence.world.product.service_name }}_app:{{ persona.coherence.world.watermark_passwords.langflow }}@db-primary.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.coherence.world.product.service_name }}_prod","load_from_db":false,"advanced":false,"info":"Primary Postgres DSN for the prod loader."}}}}}],"edges":[]},"is_component":false,"updated_at":"2026-05-28T09:14:22.481037","webhook":false,"endpoint_name":null,"tags":[],"locked":false,"user_id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84","folder_id":"a0b1c2d3-e4f5-4061-8273-9a8b7c6d5e4f"}]'
+    handler: '[{"id":"f1e2d3c4-b5a6-4798-8a0b-1c2d3e4f5a6b","name":"{{ persona.coherence.world.product.service_name }}-prod-etl-pg-to-vector","description":"Nightly loader: pull customer rows from prod Postgres into the RAG store. Pin to {{ persona.coherence.world.product.platform_version }}.","icon":"Database","icon_bg_color":"#1c7ed6","gradient":"2","data":{"nodes":[{"id":"PostgresVectorStore-cdf01","type":"genericNode","position":{"x":140,"y":96},"measured":{"width":320,"height":420},"data":{"type":"PostgresVectorStore","node":{"display_name":"Postgres Vector Store","description":"Load embeddings into the prod pgvector store.","base_classes":["Data"],"template":{"connection_string":{"_input_type":"SecretStrInput","type":"str","password":true,"required":true,"show":true,"name":"connection_string","display_name":"PG Connection String","value":"postgresql://{{ persona.coherence.world.product.service_name }}_app:{{ persona.coherence.world.watermark_passwords.langflow }}@db-primary.{{ persona.coherence.world.company.internal_domain }}:5432/{{ persona.coherence.world.product.service_name }}_prod","load_from_db":false,"advanced":false,"info":"Primary Postgres DSN for the prod loader."}}}}},{"id":"AmazonBedrockModel-cnr01","type":"genericNode","position":{"x":520,"y":96},"measured":{"width":320,"height":460},"data":{"type":"AmazonBedrockModel","id":"AmazonBedrockModel-cnr01","node":{"display_name":"Amazon Bedrock","description":"Generate text using Amazon Bedrock LLMs.","base_classes":["LanguageModel","Message"],"template":{"model_id":{"_input_type":"DropdownInput","type":"str","name":"model_id","display_name":"Model ID","value":"anthropic.claude-3-sonnet-20240229-v1:0","advanced":false},"aws_access_key_id":{"_input_type":"SecretStrInput","type":"str","password":true,"name":"aws_access_key_id","display_name":"AWS Access Key ID","value":"${LANGFLOW_CANARY_AWS_KEY}","load_from_db":false,"advanced":false},"aws_secret_access_key":{"_input_type":"SecretStrInput","type":"str","password":true,"name":"aws_secret_access_key","display_name":"AWS Secret Access Key","value":"${LANGFLOW_CANARY_AWS_SECRET}","load_from_db":false,"advanced":false},"region_name":{"_input_type":"DropdownInput","type":"str","name":"region_name","display_name":"Region Name","value":"us-east-1"}}}}}],"edges":[]},"is_component":false,"updated_at":"2026-05-28T09:14:22.481037","webhook":false,"endpoint_name":null,"tags":[],"locked":false,"user_id":"b7e4c1a2-9f30-4d51-8c6e-2a1f0b3d5e84","folder_id":"a0b1c2d3-e4f5-4061-8273-9a8b7c6d5e4f"}]'
 
   - regex: "^/api/v1/flows/basic_examples/?$"
     method: GET
