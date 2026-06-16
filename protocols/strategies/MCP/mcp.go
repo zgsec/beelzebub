@@ -505,13 +505,15 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			// Determine response
 			var response string
 			var delayFaultType string
+			var injectedDelayMs int64
 
 			// Accumulate timing for agent classification
 			timings := mcpStrategy.accumulateTiming(host)
 
 			// Check fault injection first
 			if mcpStrategy.Fault != nil {
-				faultResp, faultType, faulted := mcpStrategy.Fault.ApplyWithSequence(seq)
+				faultResp, faultType, faulted, faultDelayMs := mcpStrategy.Fault.ApplyWithSequence(seq)
+				injectedDelayMs = faultDelayMs
 				if faulted {
 					// Classify even faulted events
 					faultSig := agentdetect.Signal{
@@ -554,6 +556,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						IsRetry:         isRetry,
 						RetryOf:         retryOf,
 						FaultInjected:   faultType,
+						InjectedDelayMs: injectedDelayMs,
 						AgentScore:      faultVerdict.Score,
 						AgentCategory:   faultVerdict.Category,
 						AgentSignals:    faultVerdict.SignalsString(),
@@ -663,6 +666,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				RetryOf:          retryOf,
 				CrossProtocolRef: crossRef,
 				FaultInjected:    delayFaultType,
+				InjectedDelayMs:  injectedDelayMs,
 				ToolChainDepth:   chainDepth,
 				ToolDependency:   chainDeps,
 				AgentScore:       verdict.Score,
