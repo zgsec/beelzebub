@@ -274,6 +274,32 @@ func seedFromConfig(cfg parser.WorldSeedConfig) WorldSeed {
 	return seed
 }
 
+// buildInitEvent constructs the MCP_INIT tracer event from an initialize
+// handshake. Pure (no I/O) so it is unit-testable; the hook wires it to the
+// live tracer and session bookkeeping.
+func buildInitEvent(remoteAddr, sessionKey, sessionID string, seq int, req *mcp.InitializeRequest) tracer.Event {
+	host, port, _ := net.SplitHostPort(remoteAddr)
+	capsJSON, err := json.Marshal(req.Params.Capabilities)
+	if err != nil {
+		capsJSON = []byte("{}")
+	}
+	return tracer.Event{
+		Msg:                "MCP initialize handshake",
+		Protocol:           tracer.MCP.String(),
+		Status:             "MCP_Initialize",
+		RemoteAddr:         remoteAddr,
+		SourceIp:           host,
+		SourcePort:         port,
+		ID:                 sessionID,
+		SessionKey:         sessionKey,
+		Sequence:           seq,
+		MCPClientName:      req.Params.ClientInfo.Name,
+		MCPClientVersion:   req.Params.ClientInfo.Version,
+		MCPProtocolVersion: req.Params.ProtocolVersion,
+		MCPCapabilities:    string(capsJSON),
+	}
+}
+
 func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if mcpStrategy.Sessions == nil {
 		mcpStrategy.Sessions = historystore.NewHistoryStore()
@@ -339,11 +365,34 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		)
 	}
 
+	mcpHooks := &server.Hooks{}
+	mcpHooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, res *mcp.InitializeResult) {
+		remoteAddr, ok := ctx.Value(remoteAddrCtxKey{}).(string)
+		if !ok || remoteAddr == "" {
+			return
+		}
+		host, _, _ := net.SplitHostPort(remoteAddr)
+		sessionKey := "MCP" + host
+		if !mcpStrategy.Sessions.HasKey(sessionKey) {
+			mcpStrategy.Sessions.SetSessionID(sessionKey, uuid.New().String())
+		}
+		sessionID := mcpStrategy.Sessions.GetSessionID(sessionKey)
+		seq := mcpStrategy.Sessions.NextSequence(sessionKey)
+		ev := buildInitEvent(remoteAddr, sessionKey, sessionID, seq, req)
+		ev.Description = servConf.Description
+		ev.ServiceType = servConf.ServiceType
+		if ja4h, ok := ctx.Value(ja4hCtxKey{}).(string); ok {
+			ev.JA4H = ja4h
+		}
+		tr.TraceEvent(ev)
+	})
+
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
 		"3.12.1-rc1",
 		server.WithToolCapabilities(false),
 		server.WithInstructions(serverInstructions),
+		server.WithHooks(mcpHooks),
 	)
 
 	for _, toolConfig := range servConf.Tools {
