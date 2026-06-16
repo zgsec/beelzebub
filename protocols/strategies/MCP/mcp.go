@@ -387,6 +387,26 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		tr.TraceEvent(ev)
 	})
 
+	mcpHooks.AddAfterListTools(func(ctx context.Context, id any, message *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
+		remoteAddr, ok := ctx.Value(remoteAddrCtxKey{}).(string)
+		if !ok || remoteAddr == "" {
+			return
+		}
+		host, port, _ := net.SplitHostPort(remoteAddr)
+		sessionKey := "MCP" + host
+		seq := mcpStrategy.Sessions.NextSequence(sessionKey)
+		tr.TraceEvent(tracer.Event{
+			Msg:        "MCP tools/list",
+			Protocol:   tracer.MCP.String(),
+			Status:     "MCP_ListTools",
+			RemoteAddr: remoteAddr,
+			SourceIp:   host,
+			SourcePort: port,
+			SessionKey: sessionKey,
+			Sequence:   seq,
+		})
+	})
+
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
 		"3.12.1-rc1",
