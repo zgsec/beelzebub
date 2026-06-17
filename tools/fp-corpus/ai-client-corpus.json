@@ -1,47 +1,152 @@
 {
-  "schema": "ai-client-fingerprint/v1",
+  "schema": "ai-client-fingerprint/v2",
   "captured": "2026-06-17",
-  "method": "real SDK -> local Go sink (tracer.ComputeJA4H + ParseHeaderOrder = the deployed JA4H)",
-  "note": "JA4H is per-request-shape. MCP layer is null here (HTTP-only clients); MCP clients add the mcp{} block.",
+  "method": "real SDK (GET + POST natural endpoints) -> local Go sink using the DEPLOYED tracer.ComputeJA4H",
+  "layers": [
+    "http multi-shape (per-request JA4H family + endpoint-INVARIANT stable signature + value-intel)",
+    "mcp (clientInfo + protocolVersion + capabilities + rpc framing + handshake sequence)"
+  ],
+  "note": "stable_signature.invariant_headers = header names present across ALL request shapes = the endpoint-independent attribution key. ja4h_family = every per-shape JA4H (for request-level matching).",
   "clients": [
     {
-      "client": "Anthropic/Python",
+      "client": "aiohttp",
+      "tree": {
+        "runtime": "cpython",
+        "base_stack": "aiohttp",
+        "sdk": "raw-aiohttp"
+      },
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn040000_c3abebcf3d28_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept",
+            "accept-encoding",
+            "user-agent"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn060000_72c5441b461e_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept",
+            "accept-encoding",
+            "user-agent",
+            "content-length",
+            "content-type"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "Python/3.12 aiohttp/3.14.1",
+        "invariant_headers": [
+          "accept",
+          "accept-encoding",
+          "host",
+          "user-agent"
+        ],
+        "value_intel": {
+          "Accept": "*/*",
+          "Accept-Encoding": "gzip, deflate",
+          "User-Agent": "Python/3.12 aiohttp/3.14.1"
+        },
+        "ja4h_family": [
+          "ge11nn040000_c3abebcf3d28_000000000000_000000000000",
+          "po11nn060000_72c5441b461e_000000000000_000000000000"
+        ]
+      },
+      "mcp": null,
+      "grades": {
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
+        "value_intel": "declared",
+        "ua": "declared"
+      }
+    },
+    {
+      "client": "anthropic-python",
       "tree": {
         "runtime": "cpython",
         "base_stack": "httpx",
         "sdk": "anthropic-python"
       },
-      "request_shape": "POST /v1/messages",
-      "http": {
-        "ja4h": "po11nn190000_2b2297fcc85f_000000000000_000000000000",
-        "ja4h_r": "po11nn190000_host,accept-encoding,connection,x-stainless-timeout,accept,content-type,user-agent,x-stainless-lang,x-stainless-package-version,x-stainless-os,x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,x-api-key,x-stainless-async,anthropic-version,x-stainless-retry-count,x-stainless-read-timeout,content-length",
-        "header_order": [
-          "host",
-          "accept-encoding",
-          "connection",
-          "x-stainless-timeout",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn170000_4e0530b18990_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "x-stainless-timeout",
+            "accept",
+            "user-agent",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "x-api-key",
+            "x-stainless-async",
+            "anthropic-version",
+            "x-stainless-retry-count",
+            "x-stainless-read-timeout"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/messages",
+          "ja4h": "po11nn190000_2b2297fcc85f_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "x-stainless-timeout",
+            "accept",
+            "content-type",
+            "user-agent",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "x-api-key",
+            "x-stainless-async",
+            "anthropic-version",
+            "x-stainless-retry-count",
+            "x-stainless-read-timeout",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "Anthropic/Python 0.109.2",
+        "invariant_headers": [
           "accept",
-          "content-type",
+          "accept-encoding",
+          "anthropic-version",
+          "connection",
+          "host",
           "user-agent",
-          "x-stainless-lang",
-          "x-stainless-package-version",
-          "x-stainless-os",
+          "x-api-key",
           "x-stainless-arch",
+          "x-stainless-async",
+          "x-stainless-lang",
+          "x-stainless-os",
+          "x-stainless-package-version",
+          "x-stainless-read-timeout",
+          "x-stainless-retry-count",
           "x-stainless-runtime",
           "x-stainless-runtime-version",
-          "x-api-key",
-          "x-stainless-async",
-          "anthropic-version",
-          "x-stainless-retry-count",
-          "x-stainless-read-timeout",
-          "content-length"
+          "x-stainless-timeout"
         ],
         "value_intel": {
           "Accept": "application/json",
           "Accept-Encoding": "gzip, deflate",
-          "Anthropic-Version": "2023-06-01",
           "Connection": "keep-alive",
-          "Content-Type": "application/json",
           "User-Agent": "Anthropic/Python 0.109.2",
           "X-Stainless-Arch": "x64",
           "X-Stainless-Async": "false",
@@ -54,161 +159,129 @@
           "X-Stainless-Runtime-Version": "3.12.3",
           "X-Stainless-Timeout": "600"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn170000_4e0530b18990_000000000000_000000000000",
+          "po11nn190000_2b2297fcc85f_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
     },
     {
-      "client": "OpenAI/JS",
+      "client": "axios-node",
       "tree": {
         "runtime": "node",
-        "base_stack": "undici-fetch",
-        "sdk": "openai-node"
+        "base_stack": "node-http+follow-redirects",
+        "sdk": "axios"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn17*000_3b898880e705_000000000000_000000000000",
-        "ja4h_r": "po11nn17*000_host,connection,accept,user-agent,x-stainless-retry-count,x-stainless-lang,x-stainless-package-version,x-stainless-os,x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,authorization,content-type,accept-language,sec-fetch-mode,accept-encoding,content-length",
-        "header_order": [
-          "host",
-          "connection",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn050000_fd72ab1ac915_000000000000_000000000000",
+          "header_order": [
+            "accept",
+            "user-agent",
+            "accept-encoding",
+            "host",
+            "connection"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn070000_e1a915bb1238_000000000000_000000000000",
+          "header_order": [
+            "accept",
+            "content-type",
+            "user-agent",
+            "content-length",
+            "accept-encoding",
+            "host",
+            "connection"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "axios/1.18.0",
+        "invariant_headers": [
           "accept",
-          "user-agent",
-          "x-stainless-retry-count",
-          "x-stainless-lang",
-          "x-stainless-package-version",
-          "x-stainless-os",
-          "x-stainless-arch",
-          "x-stainless-runtime",
-          "x-stainless-runtime-version",
-          "authorization",
-          "content-type",
-          "accept-language",
-          "sec-fetch-mode",
           "accept-encoding",
-          "content-length"
+          "connection",
+          "host",
+          "user-agent"
         ],
         "value_intel": {
-          "Accept": "application/json",
-          "Accept-Encoding": "gzip, deflate",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Encoding": "gzip, compress, deflate, br",
           "Connection": "keep-alive",
-          "Content-Type": "application/json",
-          "User-Agent": "OpenAI/JS 6.43.0",
-          "X-Stainless-Arch": "x64",
-          "X-Stainless-Lang": "js",
-          "X-Stainless-Os": "Linux",
-          "X-Stainless-Package-Version": "6.43.0",
-          "X-Stainless-Retry-Count": "0",
-          "X-Stainless-Runtime": "node",
-          "X-Stainless-Runtime-Version": "v25.6.1"
+          "User-Agent": "axios/1.18.0"
         },
-        "accept_language": "*",
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn050000_fd72ab1ac915_000000000000_000000000000",
+          "po11nn070000_e1a915bb1238_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
     },
     {
-      "client": "OpenAI/Python",
+      "client": "go-net-http",
       "tree": {
-        "runtime": "cpython",
-        "base_stack": "httpx",
-        "sdk": "openai-python"
+        "runtime": "go",
+        "base_stack": "net/http",
+        "sdk": "raw-go"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn170000_d480d637c357_000000000000_000000000000",
-        "ja4h_r": "po11nn170000_host,accept-encoding,connection,authorization,accept,content-type,user-agent,x-stainless-lang,x-stainless-package-version,x-stainless-os,x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,x-stainless-async,x-stainless-retry-count,x-stainless-read-timeout,content-length",
-        "header_order": [
-          "host",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn030000_0db47b7d240d_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "user-agent",
+            "accept-encoding"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn050000_b4ba55311b46_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "user-agent",
+            "content-length",
+            "content-type",
+            "accept-encoding"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "Go-http-client/1.1",
+        "invariant_headers": [
           "accept-encoding",
-          "connection",
-          "authorization",
-          "accept",
-          "content-type",
-          "user-agent",
-          "x-stainless-lang",
-          "x-stainless-package-version",
-          "x-stainless-os",
-          "x-stainless-arch",
-          "x-stainless-runtime",
-          "x-stainless-runtime-version",
-          "x-stainless-async",
-          "x-stainless-retry-count",
-          "x-stainless-read-timeout",
-          "content-length"
+          "host",
+          "user-agent"
         ],
         "value_intel": {
-          "Accept": "application/json",
-          "Accept-Encoding": "gzip, deflate",
-          "Connection": "keep-alive",
-          "Content-Type": "application/json",
-          "User-Agent": "OpenAI/Python 2.42.0",
-          "X-Stainless-Arch": "x64",
-          "X-Stainless-Async": "false",
-          "X-Stainless-Lang": "python",
-          "X-Stainless-Os": "Linux",
-          "X-Stainless-Package-Version": "2.42.0",
-          "X-Stainless-Read-Timeout": "600",
-          "X-Stainless-Retry-Count": "0",
-          "X-Stainless-Runtime": "CPython",
-          "X-Stainless-Runtime-Version": "3.12.3"
+          "Accept-Encoding": "gzip",
+          "User-Agent": "Go-http-client/1.1"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn030000_0db47b7d240d_000000000000_000000000000",
+          "po11nn050000_b4ba55311b46_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
-        "value_intel": "declared",
-        "ua": "declared"
-      }
-    },
-    {
-      "client": "aiohttp",
-      "tree": {
-        "runtime": "cpython",
-        "base_stack": "aiohttp",
-        "sdk": "raw-aiohttp"
-      },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn060000_72c5441b461e_000000000000_000000000000",
-        "ja4h_r": "po11nn060000_host,accept,accept-encoding,user-agent,content-length,content-type",
-        "header_order": [
-          "host",
-          "accept",
-          "accept-encoding",
-          "user-agent",
-          "content-length",
-          "content-type"
-        ],
-        "value_intel": {
-          "Accept": "*/*",
-          "Accept-Encoding": "gzip, deflate",
-          "Content-Type": "application/json",
-          "User-Agent": "Python/3.12 aiohttp/3.14.1"
-        },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
-      },
-      "mcp": null,
-      "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -220,11 +293,26 @@
         "base_stack": "undici-fetch",
         "sdk": "mcp-sdk-node"
       },
-      "request_shape": "POST /mcp (initialize)",
-      "http": {
-        "ja4h": "po11nn09*000_8537c0154ff6_000000000000_000000000000",
-        "ja4h_r": "po11nn09*000_host,connection,content-type,accept,accept-language,sec-fetch-mode,user-agent,accept-encoding,content-length",
-        "header_order": [
+      "shapes": [
+        {
+          "request_shape": "POST /mcp (initialize)",
+          "ja4h": "po11nn09*000_8537c0154ff6_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "content-type",
+            "accept",
+            "accept-language",
+            "sec-fetch-mode",
+            "user-agent",
+            "accept-encoding",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "node",
+        "invariant_headers": [
           "host",
           "connection",
           "content-type",
@@ -235,16 +323,10 @@
           "accept-encoding",
           "content-length"
         ],
-        "value_intel": {
-          "Accept": "application/json, text/event-stream",
-          "Accept-Encoding": "gzip, deflate",
-          "Accept-Language": "*",
-          "Connection": "keep-alive",
-          "Content-Type": "application/json",
-          "Sec-Fetch-Mode": "cors",
-          "User-Agent": "node"
-        },
-        "http_version": "HTTP/1.1"
+        "value_intel": {},
+        "ja4h_family": [
+          "po11nn09*000_8537c0154ff6_000000000000_000000000000"
+        ]
       },
       "mcp": {
         "client_info": {
@@ -269,10 +351,7 @@
         ]
       },
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
-        "value_intel": "declared",
-        "ua": "declared",
+        "invariant_headers": "structural",
         "mcp_capabilities": "structural",
         "mcp_protocol_version": "generational",
         "mcp_client_info": "declared"
@@ -285,11 +364,24 @@
         "base_stack": "httpx",
         "sdk": "mcp-sdk-python"
       },
-      "request_shape": "POST /mcp (initialize)",
-      "http": {
-        "ja4h": "po11nn070000_87ff41af6287_000000000000_000000000000",
-        "ja4h_r": "po11nn070000_host,accept-encoding,connection,user-agent,accept,content-type,content-length",
-        "header_order": [
+      "shapes": [
+        {
+          "request_shape": "POST /mcp (initialize)",
+          "ja4h": "po11nn070000_87ff41af6287_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "user-agent",
+            "accept",
+            "content-type",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "python-httpx/0.28.1",
+        "invariant_headers": [
           "host",
           "accept-encoding",
           "connection",
@@ -298,14 +390,10 @@
           "content-type",
           "content-length"
         ],
-        "value_intel": {
-          "Accept": "application/json, text/event-stream",
-          "Accept-Encoding": "gzip, deflate",
-          "Connection": "keep-alive",
-          "Content-Type": "application/json",
-          "User-Agent": "python-httpx/0.28.1"
-        },
-        "http_version": "HTTP/1.1"
+        "value_intel": {},
+        "ja4h_family": [
+          "po11nn070000_87ff41af6287_000000000000_000000000000"
+        ]
       },
       "mcp": {
         "client_info": {
@@ -329,10 +417,7 @@
         ]
       },
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
-        "value_intel": "declared",
-        "ua": "declared",
+        "invariant_headers": "structural",
         "mcp_capabilities": "structural",
         "mcp_protocol_version": "generational",
         "mcp_client_info": "declared"
@@ -345,35 +430,64 @@
         "base_stack": "undici-fetch",
         "sdk": "raw-fetch"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn09*000_8537c0154ff6_000000000000_000000000000",
-        "ja4h_r": "po11nn09*000_host,connection,content-type,accept,accept-language,sec-fetch-mode,user-agent,accept-encoding,content-length",
-        "header_order": [
-          "host",
-          "connection",
-          "content-type",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn07*000_4ae0f4a72b53_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "accept",
+            "accept-language",
+            "sec-fetch-mode",
+            "user-agent",
+            "accept-encoding"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn09*000_8537c0154ff6_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "content-type",
+            "accept",
+            "accept-language",
+            "sec-fetch-mode",
+            "user-agent",
+            "accept-encoding",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "node",
+        "invariant_headers": [
           "accept",
-          "accept-language",
-          "sec-fetch-mode",
-          "user-agent",
           "accept-encoding",
-          "content-length"
+          "accept-language",
+          "connection",
+          "host",
+          "sec-fetch-mode",
+          "user-agent"
         ],
         "value_intel": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip, deflate",
+          "Accept-Language": "*",
           "Connection": "keep-alive",
-          "Content-Type": "application/json",
+          "Sec-Fetch-Mode": "cors",
           "User-Agent": "node"
         },
-        "accept_language": "*",
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn07*000_4ae0f4a72b53_000000000000_000000000000",
+          "po11nn09*000_8537c0154ff6_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -385,27 +499,44 @@
         "base_stack": "undici",
         "sdk": "raw-undici"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn040000_93c1978c4cbd_000000000000_000000000000",
-        "ja4h_r": "po11nn040000_host,connection,content-type,content-length",
-        "header_order": [
-          "host",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn020000_f24fcf356134_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn040000_93c1978c4cbd_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "content-type",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "",
+        "invariant_headers": [
           "connection",
-          "content-type",
-          "content-length"
+          "host"
         ],
         "value_intel": {
-          "Connection": "keep-alive",
-          "Content-Type": "application/json"
+          "Connection": "keep-alive"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn020000_f24fcf356134_000000000000_000000000000",
+          "po11nn040000_93c1978c4cbd_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -417,35 +548,67 @@
         "base_stack": "undici-fetch",
         "sdk": "ollama-js"
       },
-      "request_shape": "POST /api/chat",
-      "http": {
-        "ja4h": "po11nn09*000_e94cfa29ca77_000000000000_000000000000",
-        "ja4h_r": "po11nn09*000_host,connection,content-type,accept,user-agent,accept-language,sec-fetch-mode,accept-encoding,content-length",
-        "header_order": [
-          "host",
+      "shapes": [
+        {
+          "request_shape": "GET /api/tags",
+          "ja4h": "ge11nn08*000_fc44942554ad_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "content-type",
+            "accept",
+            "user-agent",
+            "accept-language",
+            "sec-fetch-mode",
+            "accept-encoding"
+          ]
+        },
+        {
+          "request_shape": "POST /api/chat",
+          "ja4h": "po11nn09*000_e94cfa29ca77_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "content-type",
+            "accept",
+            "user-agent",
+            "accept-language",
+            "sec-fetch-mode",
+            "accept-encoding",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "ollama-js/0.6.3 (x64 linux Node.js/v25.6.1)",
+        "invariant_headers": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
           "connection",
           "content-type",
-          "accept",
-          "user-agent",
-          "accept-language",
+          "host",
           "sec-fetch-mode",
-          "accept-encoding",
-          "content-length"
+          "user-agent"
         ],
         "value_intel": {
           "Accept": "application/json",
           "Accept-Encoding": "gzip, deflate",
+          "Accept-Language": "*",
           "Connection": "keep-alive",
           "Content-Type": "application/json",
+          "Sec-Fetch-Mode": "cors",
           "User-Agent": "ollama-js/0.6.3 (x64 linux Node.js/v25.6.1)"
         },
-        "accept_language": "*",
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn08*000_fc44942554ad_000000000000_000000000000",
+          "po11nn09*000_e94cfa29ca77_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -457,18 +620,42 @@
         "base_stack": "httpx",
         "sdk": "ollama-python"
       },
-      "request_shape": "POST /api/chat",
-      "http": {
-        "ja4h": "po11nn070000_61888d3ed179_000000000000_000000000000",
-        "ja4h_r": "po11nn070000_host,accept-encoding,connection,content-type,accept,user-agent,content-length",
-        "header_order": [
-          "host",
+      "shapes": [
+        {
+          "request_shape": "GET /api/tags",
+          "ja4h": "ge11nn060000_f915a53f97f1_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "content-type",
+            "accept",
+            "user-agent"
+          ]
+        },
+        {
+          "request_shape": "POST /api/chat",
+          "ja4h": "po11nn070000_61888d3ed179_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "content-type",
+            "accept",
+            "user-agent",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "ollama-python/0.6.2 (x86_64 linux) Python/3.12.3",
+        "invariant_headers": [
+          "accept",
           "accept-encoding",
           "connection",
           "content-type",
-          "accept",
-          "user-agent",
-          "content-length"
+          "host",
+          "user-agent"
         ],
         "value_intel": {
           "Accept": "application/json",
@@ -477,13 +664,215 @@
           "Content-Type": "application/json",
           "User-Agent": "ollama-python/0.6.2 (x86_64 linux) Python/3.12.3"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn060000_f915a53f97f1_000000000000_000000000000",
+          "po11nn070000_61888d3ed179_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
+        "value_intel": "declared",
+        "ua": "declared"
+      }
+    },
+    {
+      "client": "openai-node",
+      "tree": {
+        "runtime": "node",
+        "base_stack": "undici-fetch",
+        "sdk": "openai-node"
+      },
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn15*000_48d3ca4d1b1d_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "accept",
+            "user-agent",
+            "x-stainless-retry-count",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "authorization",
+            "accept-language",
+            "sec-fetch-mode",
+            "accept-encoding"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn17*000_3b898880e705_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "connection",
+            "accept",
+            "user-agent",
+            "x-stainless-retry-count",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "authorization",
+            "content-type",
+            "accept-language",
+            "sec-fetch-mode",
+            "accept-encoding",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "OpenAI/JS 6.43.0",
+        "invariant_headers": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
+          "authorization",
+          "connection",
+          "host",
+          "sec-fetch-mode",
+          "user-agent",
+          "x-stainless-arch",
+          "x-stainless-lang",
+          "x-stainless-os",
+          "x-stainless-package-version",
+          "x-stainless-retry-count",
+          "x-stainless-runtime",
+          "x-stainless-runtime-version"
+        ],
+        "value_intel": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate",
+          "Accept-Language": "*",
+          "Connection": "keep-alive",
+          "Sec-Fetch-Mode": "cors",
+          "User-Agent": "OpenAI/JS 6.43.0",
+          "X-Stainless-Arch": "x64",
+          "X-Stainless-Lang": "js",
+          "X-Stainless-Os": "Linux",
+          "X-Stainless-Package-Version": "6.43.0",
+          "X-Stainless-Retry-Count": "0",
+          "X-Stainless-Runtime": "node",
+          "X-Stainless-Runtime-Version": "v25.6.1"
+        },
+        "ja4h_family": [
+          "ge11nn15*000_48d3ca4d1b1d_000000000000_000000000000",
+          "po11nn17*000_3b898880e705_000000000000_000000000000"
+        ]
+      },
+      "mcp": null,
+      "grades": {
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
+        "value_intel": "declared",
+        "ua": "declared"
+      }
+    },
+    {
+      "client": "openai-python",
+      "tree": {
+        "runtime": "cpython",
+        "base_stack": "httpx",
+        "sdk": "openai-python"
+      },
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn150000_3144ac885d33_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "authorization",
+            "accept",
+            "user-agent",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "x-stainless-async",
+            "x-stainless-retry-count",
+            "x-stainless-read-timeout"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn170000_d480d637c357_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept-encoding",
+            "connection",
+            "authorization",
+            "accept",
+            "content-type",
+            "user-agent",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "x-stainless-async",
+            "x-stainless-retry-count",
+            "x-stainless-read-timeout",
+            "content-length"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "OpenAI/Python 2.42.0",
+        "invariant_headers": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "connection",
+          "host",
+          "user-agent",
+          "x-stainless-arch",
+          "x-stainless-async",
+          "x-stainless-lang",
+          "x-stainless-os",
+          "x-stainless-package-version",
+          "x-stainless-read-timeout",
+          "x-stainless-retry-count",
+          "x-stainless-runtime",
+          "x-stainless-runtime-version"
+        ],
+        "value_intel": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip, deflate",
+          "Connection": "keep-alive",
+          "User-Agent": "OpenAI/Python 2.42.0",
+          "X-Stainless-Arch": "x64",
+          "X-Stainless-Async": "false",
+          "X-Stainless-Lang": "python",
+          "X-Stainless-Os": "Linux",
+          "X-Stainless-Package-Version": "2.42.0",
+          "X-Stainless-Read-Timeout": "600",
+          "X-Stainless-Retry-Count": "0",
+          "X-Stainless-Runtime": "CPython",
+          "X-Stainless-Runtime-Version": "3.12.3"
+        },
+        "ja4h_family": [
+          "ge11nn150000_3144ac885d33_000000000000_000000000000",
+          "po11nn170000_d480d637c357_000000000000_000000000000"
+        ]
+      },
+      "mcp": null,
+      "grades": {
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -495,34 +884,59 @@
         "base_stack": "httpx",
         "sdk": "raw-httpx"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn080000_8b8fa7ba0644_000000000000_000000000000",
-        "ja4h_r": "po11nn080000_host,accept,accept-encoding,connection,user-agent,authorization,content-length,content-type",
-        "header_order": [
-          "host",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn060000_3c80971cd72f_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept",
+            "accept-encoding",
+            "connection",
+            "user-agent",
+            "authorization"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn080000_8b8fa7ba0644_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "accept",
+            "accept-encoding",
+            "connection",
+            "user-agent",
+            "authorization",
+            "content-length",
+            "content-type"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "python-httpx/0.28.1",
+        "invariant_headers": [
           "accept",
           "accept-encoding",
-          "connection",
-          "user-agent",
           "authorization",
-          "content-length",
-          "content-type"
+          "connection",
+          "host",
+          "user-agent"
         ],
         "value_intel": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip, deflate",
           "Connection": "keep-alive",
-          "Content-Type": "application/json",
           "User-Agent": "python-httpx/0.28.1"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn060000_3c80971cd72f_000000000000_000000000000",
+          "po11nn080000_8b8fa7ba0644_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
@@ -534,41 +948,59 @@
         "base_stack": "urllib3",
         "sdk": "raw-requests"
       },
-      "request_shape": "POST /v1/chat/completions",
-      "http": {
-        "ja4h": "po11nn080000_97623a17679f_000000000000_000000000000",
-        "ja4h_r": "po11nn080000_host,user-agent,accept-encoding,accept,connection,authorization,content-length,content-type",
-        "header_order": [
-          "host",
-          "user-agent",
-          "accept-encoding",
+      "shapes": [
+        {
+          "request_shape": "GET /v1/models",
+          "ja4h": "ge11nn050000_2d30dc89d981_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "user-agent",
+            "accept-encoding",
+            "accept",
+            "connection"
+          ]
+        },
+        {
+          "request_shape": "POST /v1/chat/completions",
+          "ja4h": "po11nn070000_7a7c5172e3ad_000000000000_000000000000",
+          "header_order": [
+            "host",
+            "user-agent",
+            "accept-encoding",
+            "accept",
+            "connection",
+            "content-length",
+            "content-type"
+          ]
+        }
+      ],
+      "stable_signature": {
+        "ua": "python-requests/2.34.2",
+        "invariant_headers": [
           "accept",
+          "accept-encoding",
           "connection",
-          "authorization",
-          "content-length",
-          "content-type"
+          "host",
+          "user-agent"
         ],
         "value_intel": {
           "Accept": "*/*",
           "Accept-Encoding": "gzip, deflate",
           "Connection": "keep-alive",
-          "Content-Type": "application/json",
           "User-Agent": "python-requests/2.34.2"
         },
-        "accept_language": null,
-        "http_version": "HTTP/1.1"
+        "ja4h_family": [
+          "ge11nn050000_2d30dc89d981_000000000000_000000000000",
+          "po11nn070000_7a7c5172e3ad_000000000000_000000000000"
+        ]
       },
       "mcp": null,
       "grades": {
-        "ja4h": "structural",
-        "header_order": "structural",
+        "invariant_headers": "structural",
+        "ja4h_family": "structural",
         "value_intel": "declared",
         "ua": "declared"
       }
     }
-  ],
-  "layers": [
-    "http (JA4H + UA + header values)",
-    "mcp (clientInfo + protocolVersion + capabilities + rpc framing + handshake sequence)"
   ]
 }
