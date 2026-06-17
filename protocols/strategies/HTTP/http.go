@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/artifactstore"
 	"github.com/mariocandela/beelzebub/v3/bridge"
@@ -333,6 +335,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			// the TLS layer; parse it directly and fall back to the stdlib struct
 			// path if the raw bytes are unavailable.
 			srv.TLSConfig = &tls.Config{
+				NextProtos: []string{"h2", "http/1.1"},
 				GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 					fp := tlsFingerprints{
 						ja4: tracer.ComputeJA4FromClientHello(hello),
@@ -352,6 +355,20 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 						httpJA4Cache.Store(hello.Conn.RemoteAddr().String(), fp)
 					}
 					return nil, nil // use default config
+				},
+			}
+			// HTTP/2 decrypted-layer fingerprinting: Go's net/http2 server hides the
+			// opening frames, so override the h2 ALPN hook to wrap the DECRYPTED conn
+			// in a TeeConn and run ServeConn ourselves. akamaiFromRequest then reads
+			// the Akamai fingerprint from the captured first flight. We preserve the
+			// local-addr context value so destination-port extraction still works.
+			h2srv := &http2.Server{}
+			srv.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){
+				"h2": func(s *http.Server, c *tls.Conn, h http.Handler) {
+					tee := tracer.NewTeeConn(c, 16384, tracer.HTTP2StopFunc)
+					ctx := context.WithValue(context.Background(), tracer.HTTP2TeeConnKey, tee)
+					ctx = context.WithValue(ctx, http.LocalAddrContextKey, c.LocalAddr())
+					h2srv.ServeConn(tee, &http2.ServeConnOpts{BaseConfig: s, Handler: h, Context: ctx})
 				},
 			}
 			err = srv.ServeTLS(tracer.NewTeeListener(ln, 65536, tracer.HTTPStopFunc), servConf.TLSCertPath, servConf.TLSKeyPath)
@@ -654,6 +671,18 @@ func ja4hFromRequest(request *http.Request) string {
 	return tracer.ComputeJA4H(request, wireOrder)
 }
 
+// akamaiFromRequest computes the HTTP/2 Akamai fingerprint from the decrypted-
+// layer TeeConn captured during the h2 opening flight (HTTP2TeeConnKey, set by
+// the h2 ALPN hook). Empty for HTTP/1.1, or if the capture is unavailable.
+func akamaiFromRequest(request *http.Request) string {
+	if tc, ok := request.Context().Value(tracer.HTTP2TeeConnKey).(*tracer.TeeConn); ok {
+		if fp, err := tracer.ParseHTTP2Fingerprint(tc.RawBytes()); err == nil {
+			return fp.Akamai()
+		}
+	}
+	return ""
+}
+
 func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command,
 	HoneypotDescription, HoneypotServiceType, body string,
 	ns *noveltydetect.FingerprintStore,
@@ -673,6 +702,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		fp := v.(tlsFingerprints)
 		ja4, ja3 = fp.ja4, fp.ja3
 	}
+	akamai := akamaiFromRequest(request)
 	sessionKey := "HTTP" + host
 
 	// Get or create per-IP session state for agent detection
@@ -779,6 +809,7 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		ResponseStatusCode: responseStatusCode,
 		JA4:                ja4,
 		JA3:                ja3,
+		HTTP2:              akamai,
 		// v8 Phase 0: response-side capture.
 		// ResponseBytes is the byte count, ALWAYS set (cheap, useful for everyone).
 		// ResponseTimeMs is the handler duration, ALWAYS set.

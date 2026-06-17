@@ -1,6 +1,7 @@
 package tracer
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 )
@@ -10,6 +11,30 @@ type contextKey struct{ name string }
 
 // TeeConnKey is the context key for retrieving the *TeeConn from a request or session context.
 var TeeConnKey = &contextKey{"tee-conn"}
+
+// HTTP2TeeConnKey is the context key for the DECRYPTED-layer h2 TeeConn (above
+// TLS), used to fingerprint the HTTP/2 opening frames. Distinct from TeeConnKey,
+// which is the below-TLS tee (TLS ClientHello / plaintext HTTP).
+var HTTP2TeeConnKey = &contextKey{"http2-tee-conn"}
+
+// HTTP2StopFunc stops capture once the client's opening HTTP/2 flight is fully
+// buffered — the connection preface plus frames up to and including the first
+// complete HEADERS frame. That's everything the Akamai fingerprint needs, so we
+// avoid buffering the rest of a (potentially long-lived, multiplexed) connection.
+func HTTP2StopFunc(buf []byte) bool {
+	pre := len(http2Preface)
+	if len(buf) < pre+9 || !bytes.HasPrefix(buf, http2Preface) {
+		return false
+	}
+	for p := pre; p+9 <= len(buf); {
+		length := int(buf[p])<<16 | int(buf[p+1])<<8 | int(buf[p+2])
+		if buf[p+3] == 0x01 { // HEADERS — stop once its full payload is buffered
+			return p+9+length <= len(buf)
+		}
+		p += 9 + length
+	}
+	return false
+}
 
 // StopFunc inspects captured bytes and returns true when capture should stop.
 // Called after each Read() with the full accumulated buffer.

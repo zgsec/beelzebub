@@ -142,6 +142,10 @@ type Event struct {
 	// JA3 TLS ClientHello fingerprint (classic Salesforce). Emitted alongside
 	// JA4 for cross-corpus lookup (Shodan/GreyNoise/VT index JA3 heavily).
 	JA3 string `json:"JA3,omitempty"`
+	// HTTP2 is the Akamai HTTP/2 fingerprint (SETTINGS|WINDOW_UPDATE|PRIORITY|
+	// pseudo-header-order), parsed from the decrypted opening frames. Empty for
+	// HTTP/1.1 connections.
+	HTTP2 string `json:"HTTP2,omitempty"`
 
 	// v8: Telnet subnegotiation data from IAC SB...SE blocks.
 	// NAWS = terminal dimensions, TTYPE = terminal software, TSPEED = connection speed.
