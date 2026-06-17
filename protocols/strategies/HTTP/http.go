@@ -325,15 +325,28 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		}
 		var err error
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			// v8: JA4 TLS ClientHello fingerprinting via GetConfigForClient.
-			// Go's stdlib parses the ClientHello and gives us the fields directly —
-			// no raw byte capture needed. We store the JA4 per-IP for lookup
-			// when tracing the request.
+			// JA4/JA3 TLS ClientHello fingerprinting via GetConfigForClient.
+			// Prefer the canonical RAW-bytes parse: Go's tls.ClientHelloInfo does
+			// not expose the wire legacy_version (it reconstructs it from
+			// supported_versions), so its JA3 can be non-cross-comparable with
+			// Shodan/GreyNoise/VT. The TeeConn captured the raw ClientHello below
+			// the TLS layer; parse it directly and fall back to the stdlib struct
+			// path if the raw bytes are unavailable.
 			srv.TLSConfig = &tls.Config{
 				GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 					fp := tlsFingerprints{
 						ja4: tracer.ComputeJA4FromClientHello(hello),
 						ja3: tracer.ComputeJA3FromClientHello(hello),
+					}
+					if tc, ok := hello.Conn.(*tracer.TeeConn); ok {
+						if ch, perr := tracer.ParseClientHello(tc.RawBytes()); perr == nil {
+							if j := ch.JA3Hash(); j != "" {
+								fp.ja3 = j
+							}
+							if j := ch.JA4(); j != "" {
+								fp.ja4 = j
+							}
+						}
 					}
 					if fp.ja4 != "" || fp.ja3 != "" {
 						httpJA4Cache.Store(hello.Conn.RemoteAddr().String(), fp)

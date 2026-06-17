@@ -173,6 +173,24 @@ func TestParseClientHello_MatchesSalesforceJA3Oracle(t *testing.T) {
 	}
 }
 
+// TestParseClientHello_JA3Hash_SalesforceOracle checks the MD5 helper against the
+// canonical Salesforce ja3 README hash (the value Shodan/GreyNoise/VT index).
+func TestParseClientHello_JA3Hash_SalesforceOracle(t *testing.T) {
+	raw := buildClientHello(
+		0x0301,
+		[]uint16{47, 53, 5, 10, 49161, 49162, 49171, 49172, 50, 56, 19, 4},
+		[]chExtension{serverNameExt("example.com"), supportedGroupsExt(23, 24, 25), ecPointFormatsExt(0)},
+	)
+	ch, err := ParseClientHello(raw)
+	if err != nil {
+		t.Fatalf("ParseClientHello: %v", err)
+	}
+	const want = "ada70206e40642a3e4461f35503241d5" // Salesforce ja3 README
+	if got := ch.JA3Hash(); got != want {
+		t.Fatalf("JA3 hash vs Salesforce oracle:\n  got  %s\n  want %s", got, want)
+	}
+}
+
 // TestParseClientHello_StripsGREASE verifies GREASE cipher and extension values
 // are removed from the JA3 (spec: ignore GREASE everywhere).
 func TestParseClientHello_StripsGREASE(t *testing.T) {

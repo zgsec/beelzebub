@@ -1,8 +1,10 @@
 package tracer
 
 import (
+	"crypto/md5"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"strconv"
 	"strings"
@@ -236,4 +238,11 @@ func (ch *RawClientHello) JA4() string {
 		SupportedProtos:   ch.ALPNProtocols,
 		ServerName:        ch.ServerName,
 	})
+}
+
+// JA3Hash returns the MD5 of the canonical JA3 string — the value indexed by
+// Shodan / GreyNoise / VirusTotal.
+func (ch *RawClientHello) JA3Hash() string {
+	sum := md5.Sum([]byte(ch.JA3()))
+	return hex.EncodeToString(sum[:])
 }
