@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestReplay218157 is the regression that locks in the LiteLLM-admin-lure fix
-// for the 218.200.187.157 capture (sensor-fra, 2026-06-12). In the ORIGINAL
+// TestReplayAdminChain is the regression that locks in the LiteLLM-admin-lure fix
+// for the captured admin-surface session (prod sensor, 2026-06). In the ORIGINAL
 // capture the operator's read-surface requests returned 200 but the two ACTION
 // requests — GET /credentials and POST /user/update — returned 404. That
 // read-200/write-404 asymmetry is the honeypot tell: it forfeited the capture
@@ -49,7 +49,7 @@ import (
 // Corpus sourcing: the request method/uri/body are read from
 // testdata/admin_chain_218157.json, which is a verbatim projection of the
 // admin-surface requests in
-// honeypot-research/research/218.200.187.157.sensor-fra.jsonl (fields
+// the source capture jsonl (operator-private, off-repo) (fields
 // HTTPMethod→method, RequestURI→uri, Body→body, ResponseStatusCode→
 // captured_status). The method field is present and unambiguous in the jsonl
 // (HTTPMethod), so it is sourced directly — not hardcoded per path. The
@@ -185,14 +185,14 @@ func loadReplayCorpus(t *testing.T) replayCorpus {
 // hits the SAME per-IP WorldState (one stateful session).
 func replayOne(s *MCPStrategy, servConf parser.BeelzebubServiceConfiguration, method, uri, body string) (int, string) {
 	var r = httptest.NewRequest(method, uri, strings.NewReader(body))
-	r.RemoteAddr = "218.200.187.157:46926" // the operator's actual src — one session
+	r.RemoteAddr = "198.51.100.157:46926" // the operator's actual src — one session
 	w := httptest.NewRecorder()
 	tr := &captureTracer{}
 	s.handleHTTPFallback(w, r, servConf, tr)
 	return tr.last.ResponseStatusCode, w.Body.String()
 }
 
-func TestReplay218157(t *testing.T) {
+func TestReplayAdminChain(t *testing.T) {
 	servConf := replayAdminServConf()
 	corpus := loadReplayCorpus(t)
 

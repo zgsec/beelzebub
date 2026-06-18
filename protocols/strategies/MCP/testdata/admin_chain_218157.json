@@ -1,6 +1,6 @@
 {
-  "_source": "/home/dev/projects/honeypot-research/research/218.200.187.157.sensor-fra.jsonl",
-  "_note": "Admin-surface requests from 218.200.187.157 (sensor-fra, 2026-06-12) in timestamp order. method=HTTPMethod, uri=RequestURI, body=Body, captured_status=ResponseStatusCode (the ORIGINAL capture: /credentials and /user/update were 404 \u2014 the tell this regression proves is fixed).",
+  "_source": "operator-private capture (off-repo)",
+  "_note": "Admin-surface requests from the captured session (prod sensor, 2026-06) in timestamp order. method=HTTPMethod, uri=RequestURI, body=Body, captured_status=ResponseStatusCode (the ORIGINAL capture: /credentials and /user/update were 404 \u2014 the tell this regression proves is fixed).",
   "requests": [
     {
       "method": "POST",

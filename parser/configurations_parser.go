@@ -495,7 +495,7 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
 		// Without the env var, beelzebub's runtime substitution leaves the
 		// literal placeholder in served responses — a deception break that's
-		// trivial to fingerprint. See lessons from sensor-fra 2026-05-23 where
+		// trivial to fingerprint. See lessons from a prod sensor 2026-05-23 where
 		// ${HTTP_CANARY_WEB_BUG} was being served literally for days.
 		warnMissingEnvVars(filePath, buf)
 
