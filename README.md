@@ -1,6 +1,8 @@
 # Beelzebub — AI Agent Research Fork
 
-> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — 49 commits, ~16,900 lines of Go across 10 new packages. Transforms Beelzebub from a traditional honeypot into a research platform for studying AI agent behavior in adversarial environments.
+> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — adds ~12k lines of Go across a set of new packages (run `go list ./...` for the current list). Transforms Beelzebub from a traditional honeypot into a research platform for studying AI agent behavior in adversarial environments.
+
+This README documents the fork as a Go project; for the exact fork point against upstream, run `git describe --tags` (currently based on a `v3.6.x` upstream tag).
 
 All additions are backward-compatible. Existing configurations work unchanged — every new feature is opt-in via YAML config.
 
@@ -10,14 +12,18 @@ The upstream project is a solid multi-protocol honeypot with LLM-powered respons
 
 ### New Packages
 
-| Package | Key File | What It Does |
-|---|---|---|
-| `agentdetect` | `detector.go` | Real-time agent/bot/human classification. Scores sessions 0-100 using 7 behavioral signals. |
-| `bridge` | `bridge.go` | Cross-protocol credential tracking. When an agent finds AWS keys via MCP, the SSH handler knows. |
-| `faults` | `faults.go` | Per-service fault injection (configurable error rates, delays, jitter) to study agent retry behavior. |
-| `noveltydetect` | `scorer.go`, `store.go` | Fingerprint store + novelty scoring. Tracks commands, credentials, paths, tool sequences, user agents across all sessions. |
-| `historystore` | `history_store.go` | Per-session message history with sequence tracking, retry detection via 16-slot ring buffer. |
-| `shellemulator` | `emulator.go` | 55+ command shell emulator with per-session filesystem overlay, pipe chains, canary token lures. |
+| Package | What It Does |
+|---|---|
+| `agentdetect` | Real-time agent/bot/human classification. Scores sessions 0-100 from behavioral signals (see [Agent Detection](#agent-detection)). |
+| `bridge` | Cross-protocol credential tracking. When an agent finds AWS keys via MCP, the SSH handler knows. |
+| `faults` | Per-service fault injection (configurable error rates, delays, jitter) to study agent retry behavior. |
+| `noveltydetect` | Fingerprint store + novelty scoring. Tracks commands, credentials, paths, tool sequences, and user agents across all sessions. |
+| `historystore` | Per-session message history with sequence tracking and retry detection (ring buffer of recent commands). |
+| `artifactstore` | Per-session artifact ledger — records files, credentials, and tool outputs an actor touched. |
+| `lifecycle` | Session lifecycle bookkeeping shared across protocol handlers. |
+| `tracer/` | Event tracing extended with network fingerprinting (JA4H, HASSH), wire capture (TeeConn), and inter-event timing. |
+| `protocols/strategies/SSH/shellemulator/` | Persona-driven LLM shell — builds a system context from a persona seed, with per-session filesystem overlay and canary-token lures. |
+| `tools/` (`fpsink`, `mcpsink`, `recon-probe`, `honeytoken-harness`) | Go test/inspection utilities — fingerprint sink, MCP sink, recon probe, canary-token harness. |
 
 ### Enhanced Modules
 
@@ -71,16 +77,18 @@ The `agentdetect` package classifies sessions in real-time using behavioral sign
 | Signal | Points | What It Detects |
 |---|---|---|
 | MCP handshake (`initialize`) | +40 | Strong agent indicator — humans don't send MCP protocol handshakes |
-| Mechanical timing (mean < 2s, stddev < 500ms) | +25 | Machine-speed, low-variance inter-event timing |
+| Mechanical timing | up to +25 | Graded on a robust coefficient of variation over inter-event timings (needs >= 3 samples); maxes out at machine-periodic cadence |
 | AI discovery probe (`/.well-known/mcp.json`, `/llms.txt`) | +20 | Agent-specific endpoint reconnaissance |
-| Tool chain depth >= 3 | +20 | Sequential tool calls indicating workflow execution |
+| Tool chain depth >= 3 | +12 to +20 | Sequential tool calls indicating workflow execution; saturates with depth |
 | Cross-protocol pivot (< 60s gap) | +15 | Lateral movement across SSH/HTTP/MCP |
 | Identical retries | +15 | Agents retry the same command on failure |
 | Command corrections | -20 | Humans correct typos — agents don't |
 
-**Categories**: `agent` (>= 60), `bot` (30-59), `human` (< 30), `unknown` (insufficient data)
+Score is clamped to 0-100.
 
-Both full-session (`Classify`) and per-event (`IncrementalClassify`) scoring are supported. Per-event scoring converges as more signals arrive during a session.
+**Categories**: `agent` (>= 60), `bot` (30-59), `human` (< 30, only with >= 3 timing samples), `unknown` (insufficient data)
+
+Both full-session (`Classify`) and per-event (`IncrementalClassify`) scoring are supported and share one accumulator so the two can't drift. Per-event scoring converges as more signals arrive during a session.
 
 ---
 
@@ -117,20 +125,13 @@ Tool calls mutate this state. `iam.manage` can list, deactivate, or modify users
 
 ## Shell Emulator
 
-The SSH protocol handler includes a high-fidelity shell emulator (`shellemulator/`) with 55+ commands:
+The SSH protocol handler includes a persona-driven shell emulator (`protocols/strategies/SSH/shellemulator/`). Rather than hard-coding individual command handlers, it builds a system context from a persona seed (hostname, OS/kernel, process table, listeners, env vars, seeded lure files, user table) and hands each command to an LLM shell that responds in character. This keeps the surface consistent and far harder to enumerate than a fixed command list.
 
-**Identity/System**: `whoami`, `id`, `hostname`, `uname`, `uptime`, `w`, `who`, `last`, `date`
-**Filesystem**: `pwd`, `cd`, `ls`, `cat`, `find`, `file`, `df`, `mount`, `du`, `stat`, `wc`, `head`, `tail`, `rm`, `mkdir`, `touch`, `cp`
-**Network**: `ifconfig`, `ip`, `netstat`, `ss`, `ping`, `dig`, `nslookup`
-**Process**: `ps`, `free`, `top`, `docker`, `systemctl`, `service`, `lsof`, `kill`
-**Credential lures**: `env`, `printenv`, `history`, `set`
-**Utility**: `echo`, `which`, `type`, `grep`, `export`, `alias`
+**Persona context**: `BuildPromptContext` serializes the persona's system identity, running processes, listening ports, environment, lure files, and users into the LLM system prompt, so responses to `whoami`, `ps`, `netstat`, `cat`, `env`, etc. stay internally consistent for the session.
 
-**Session state**: Per-connection filesystem overlay (files written/deleted persist within session), working directory tracking, PID offsets.
+**Session state**: Per-connection filesystem overlay (`FileOverlay` / `DirOverlay` / `Deleted`) so files an actor writes or deletes persist within the session, plus a per-session command counter.
 
-**Command chaining**: Supports `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 | cmd2`, subshell expansion `$(cmd)`, and redirects `>` / `>>`.
-
-**Canary tokens**: Environment variables (`AWS_ACCESS_KEY_ID`, `DB_PASSWORD`, etc.) are seeded from per-sensor env vars. Commands like `env`, `cat .bash_history`, and `cat /var/log/syslog` return these tokens. When an agent exfiltrates and uses them externally, the canary fires.
+**Canary tokens**: Lure files and environment values are seeded into the persona. Commands that surface them (e.g. `env`, reading a shell history or log file) return canary-bearing content. When an agent exfiltrates and uses those tokens externally, the canary fires.
 
 **Jitter**: Configurable per-category response delays to defeat timing-based honeypot detection:
 ```yaml
@@ -457,41 +458,44 @@ make test.dependencies.down
 
 ## Project Structure
 
+Run `go list ./...` for the authoritative package list and `git describe --tags` for the fork point. Tree below shows the load-bearing directories.
+
 ```
 beelzebub/
 ├── main.go                           # Entry point (flags, parser, builder, run)
 ├── agentdetect/                      # Agent classification engine
 ├── bridge/                           # Cross-protocol credential tracking
 ├── builder/                          # Builder pattern for service init
-├── configurations/
-│   ├── beelzebub.yaml                # Core config
-│   ├── services/                     # Production service configs
-│   ├── prod-configs/                 # Per-sensor overrides
-│   └── test-services/                # Test configs
-├── faults/                           # Fault injection (errors, delays, jitter)
+├── artifactstore/                    # Per-session artifact ledger
 ├── historystore/                     # Per-session history + retry detection
+├── lifecycle/                        # Session lifecycle bookkeeping
 ├── noveltydetect/                    # Fingerprint store + novelty scoring
+├── faults/                           # Fault injection (errors, delays, jitter)
+├── internal/cache/                   # Internal caching primitives
 ├── parser/                           # YAML configuration parser
 ├── plugins/                          # LLM providers (OpenAI, Ollama)
 ├── protocols/
 │   ├── protocol_manager.go           # Strategy pattern dispatcher
 │   └── strategies/
 │       ├── HTTP/                     # HTTP honeypot
-│       ├── MCP/                      # Stateful MCP honeypot
-│       │   ├── mcp.go                # Protocol handler + agent detection
-│       │   └── state.go              # Per-IP world model
+│       ├── MCP/                      # Stateful MCP honeypot (handler + per-IP world model)
 │       ├── SSH/
-│       │   ├── ssh.go                # SSH handler
-│       │   └── shellemulator/        # 55+ command shell emulator
+│       │   └── shellemulator/        # Persona-driven LLM shell + session overlay
 │       ├── TCP/                      # Banner + interactive TCP
 │       ├── TELNET/                   # TELNET with IAC negotiation
-│       └── OLLAMA/                   # Ollama/OpenAI API honeypot
-├── tracer/
-│   ├── tracer.go                     # Event tracing (5 async workers)
-│   ├── timing.go                     # Inter-event timing cache
-│   ├── ja4h.go                       # JA4H HTTP fingerprinting
-│   ├── hassh.go                      # HASSH SSH fingerprinting
-│   └── teeconn.go                    # Wire-capture net.Conn wrapper
+│       ├── OLLAMA/                   # Ollama/OpenAI API honeypot
+│       └── responsesubs/             # Response token substitution
+├── tracer/                           # Event tracing + JA4H/HASSH/TeeConn + timing
+├── configurations/
+│   ├── beelzebub.yaml                # Core config
+│   ├── services/                     # Service configs (10 YAMLs)
+│   ├── prod-configs/                 # Per-deployment overlays
+│   └── test-services/                # Test configs
+├── personas/                         # Persona bundles (lures, nodes, templates, corpora)
+├── bzb/                              # Python persona-deployment CLI (renderer + deploy)
+├── tools/                            # Go + Python tooling (fingerprint/MCP sinks,
+│                                     #   recon probe, canary harness, lure_lint, capture)
+├── integration_test/                 # docker-compose E2E harness
 ├── Dockerfile                        # Multi-stage scratch image
 ├── docker-compose.yml
 ├── Makefile

@@ -11,9 +11,9 @@ Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. T
 - **Fault injection** (`faults/`): grace-period-gated failure simulation.
 - **Novelty scoring** (`noveltydetect/`): per-session novelty distinct from agent classification.
 
-Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Verify the current fork tag via `git -C /home/dev/projects/beelzebub describe --tags` rather than trusting this doc — it has drifted between updates.
+Some deployments run this fork; others run stock upstream — do not confuse the two. Verify the current fork tag via `git describe --tags` (run from the repo root) rather than trusting this doc — it has drifted between updates.
 
-> Refreshed 2026-05-22: re-verified the "dead Go packages" claim that an earlier audit raised — `agentdetect`, `noveltydetect`, `historystore`, `artifactstore`, `bridge`, `lifecycle`, `faults` are ALL live in the wire path. Four are used by per-protocol strategy files (`protocols/strategies/{HTTP,SSH,TELNET,OLLAMA,TCP,MCP}/*.go`); three are imported by `builder/`. Per `go list -deps .`, only `integration_test/` is unreachable from main — and that's the project's E2E test suite (intentional), not dead code.
+> Refreshed 2026-06-18: re-verified the "dead Go packages" claim that an earlier audit raised — `agentdetect`, `noveltydetect`, `historystore`, `artifactstore`, `bridge`, `lifecycle`, `faults` are ALL live in the wire path. Most are used by per-protocol strategy files (`protocols/strategies/{HTTP,SSH,TELNET,OLLAMA,TCP,MCP}/*.go`); the rest are imported by `builder/`. Per `go list -deps .`, only `integration_test/` is unreachable from main — and that's the project's E2E test suite (intentional), not dead code.
 
 ## Layout
 
@@ -25,34 +25,44 @@ Dockerfile / docker-compose.yml
 agentdetect/                  # Agent classification (Verdict, Signal, scoring)
 bridge/                       # Cross-protocol message bridge
 builder/                      # Assembles services, connections, handlers
+artifactstore/                # Per-session artifact ledger
+historystore/                 # Thread-safe per-IP event ledger (atomic NextSequence, JSONL)
+lifecycle/                    # Session lifecycle bookkeeping
+noveltydetect/                # Session novelty scoring
+faults/                       # Injected-failure simulation
+internal/cache/               # Internal caching primitives
 configurations/
   beelzebub.yaml              # Core: logging, Prometheus (:2112), tracing
-  services/                   # Per-protocol YAMLs:
+  services/                   # Per-protocol YAMLs (10 files):
                               #   ssh-22.yaml, ssh-2222.yaml,
                               #   http-8888.yaml,
                               #   mcp-8000.yaml (stateful MCP, fork-only),
                               #   openai-8001.yaml (fork moves OpenAI off :8000),
                               #   ollama-11434.yaml,
                               #   tcp-mysql-3306.yaml, tcp-redis-6379.yaml,
-                              #   influxdb-8086.yaml
-  prod-configs/               # Sensor-specific prod overlays
-  test-core.yaml / test-services/
-faults/                       # Injected-failure simulation
-historystore/                 # Thread-safe per-IP event ledger (atomic NextSequence, JSONL)
+                              #   influxdb-8086.yaml, mlflow-5000.yaml
+                              # Run `ls configurations/services/` for the live set.
+  prod-configs/               # Per-deployment config overlays
+  test-services/
 integration_test/             # docker-compose test harness
-noveltydetect/                # Session novelty scoring
 parser/                       # YAML config loader
 plugins/                      # LLM integrations (OpenAI, Ollama, MCP tool virtualization)
 protocols/
   protocol_manager.go         # Registry
   strategies/                 # HTTP / SSH / TCP / TELNET / MCP / OLLAMA handlers
-tracer/                       # JA4H, HASSH, TeeConn, ConnContext propagation
-test-tools/                   # CLI utilities
+                              #   + SSH/shellemulator (persona-driven LLM shell)
+                              #   + responsesubs (response token substitution)
+tracer/                       # JA4H, HASSH, TeeConn, ConnContext propagation, timing
+personas/                     # Persona bundles (lures, nodes, templates, corpora)
+bzb/                          # Python persona-deployment CLI (renderer + deploy)
+tools/                        # Go + Python tooling (fpsink, mcpsink, recon-probe,
+                              #   honeytoken-harness, lure_lint, capture/replay)
+test-tools/                   # Legacy: single MCP test client (real tooling lives in tools/)
 beelzebub-chart/              # Helm chart
 logs/                         # Runtime test logs (gitignored / not authoritative)
 ```
 
-Note: root also holds build artifacts (`beelzebub`, `beelzebub-fork`, `beelzebub-test`, `collector`) — these are `.gitignore`-d build outputs, NOT git-tracked. Prefer `make` / `go build` over assuming the on-disk binary is fresh. Per `git ls-files`, none of these names are tracked as of 2026-05-22.
+Note: root also holds build artifacts (`beelzebub`, `beelzebub-fork`, `collector`, etc.) — these are `.gitignore`-d build outputs, NOT git-tracked. Prefer `make` / `go build` over assuming the on-disk binary is fresh. Confirm with `git ls-files` — none of these binary names are tracked.
 
 ## Build / run / test
 
@@ -80,19 +90,17 @@ Prometheus metrics exposed on `:2112` when enabled in `beelzebub.yaml`.
 
 ## Fork vs upstream
 
-Upstream: `github.com/mariocandela/beelzebub`. We rebase when it makes sense, but fork-specific packages (`agentdetect`, `bridge`, `historystore`, `noveltydetect`, `tracer`, MCP state in `protocols/strategies/MCP/`) and fork-specific service YAMLs (`mcp-8000`, `openai-8001`, `redis-6379`, `tcp-mysql-3306`) do not land upstream. Keep fork and stock service trees distinct — a bad YAML in `services/` only lands on fork sensors.
+Upstream: `github.com/mariocandela/beelzebub`. We rebase when it makes sense, but fork-specific packages (`agentdetect`, `bridge`, `historystore`, `artifactstore`, `lifecycle`, `noveltydetect`, fingerprinting in `tracer/`, MCP state in `protocols/strategies/MCP/`) and fork-specific service YAMLs (`mcp-8000`, `openai-8001`, `tcp-redis-6379`, `tcp-mysql-3306`, `mlflow-5000`) do not land upstream. Keep fork and stock service trees distinct — a bad YAML in `services/` only affects fork deployments.
 
 ## Rules
 
-1. **Never commit live canary tokens, API keys, or webhook URLs** in YAML service configs. The prod service trees contain placeholder tokens that are swapped in during deploy. Gitleaks pre-commit enforces.
-2. **Never leak the word `beelzebub` (or `honeypot`, or sensor hostnames) in a protocol response, banner, or error message.** The persona is the product.
-3. **Don't import patterns from `~/projects/mimic/`.** Mimic is a clean-sheet project and explicitly forbids reverse copying from this repo; keep the boundary clean in both directions.
-4. **Don't block protocol handlers on LLM calls** without a short timeout. An attacker can exhaust LLM budget by opening many concurrent sessions.
-5. **Changes to fingerprint capture (`tracer/`)** must preserve JA4H wire order (FoxIO spec) and HASSH KEXINIT order (Salesforce spec). Fingerprints shipped downstream are cross-comparable with Shodan / public corpora — breaking the spec silently breaks that.
-6. **Both SSH configs (`ssh-22.yaml`, `ssh-2222.yaml`) must stay in sync.** Same persona, same LLM handler settings.
-7. **Conventional commits. No force-push. No `.git/hooks` edits.**
+1. **Never commit live canary tokens, API keys, or webhook URLs** in YAML service configs. Configs carry placeholder tokens that are swapped in at deploy time. Gitleaks pre-commit enforces.
+2. **Never leak the word `beelzebub` (or `honeypot`, or any deployment hostname) in a protocol response, banner, or error message.** The persona is the product.
+3. **Don't block protocol handlers on LLM calls** without a short timeout. A client can exhaust LLM budget by opening many concurrent sessions.
+4. **Changes to fingerprint capture (`tracer/`)** must preserve JA4H wire order (FoxIO spec) and HASSH KEXINIT order (Salesforce spec). Fingerprints emitted here are cross-comparable with Shodan / public corpora — breaking the spec silently breaks that.
+5. **Both SSH configs (`ssh-22.yaml`, `ssh-2222.yaml`) must stay in sync.** Same persona, same LLM handler settings.
+6. **Conventional commits. No force-push. No `.git/hooks` edits.**
 
 ## See also
 
-- The parent `~/CLAUDE.md` for cross-repo rules (OPSEC, vault, sensor topology).
-- `~/projects/honeypot.observer/CLAUDE.md` — the Go collector that consumes this honeypot's JSON log, including the fork-only fields (`AgentScore`, `MCPToolsUsed`, `CorrelationID`, etc.) produced here.
+- `honeypot.observer` — the companion Go collector that consumes this honeypot's JSON event log, including the fork-only fields (`AgentScore`, `AgentCategory`, `CorrelationID`, `JA4H`, `HASSH`, etc.) produced here.

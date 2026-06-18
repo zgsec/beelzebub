@@ -4,9 +4,7 @@ Operator surface for deploying and rotating honeynet persona bundles.
 Reads a persona bundle (directory of YAML), renders deployable artifacts,
 ssh-pushes to a sensor host, and runs `docker compose up`.
 
-See: `~/projects/beelzebub/docs/superpowers/specs/2026-05-05-honeynet-persona-system-design.md`
-(currently lives at `~/projects/honeypot-research/docs/superpowers/specs/...`
-during implementation; will move once handoff complete).
+See the honeynet persona-system design doc under this repo's `docs/`.
 
 ## Status
 
