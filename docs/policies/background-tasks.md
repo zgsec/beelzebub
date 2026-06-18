@@ -58,19 +58,23 @@ goroutine:
 
 ## Where this is used
 
-- `builder/builder.go` — `bridge.clean` (5 min, 60 min TTL).
-- `protocols/strategies/HTTP/http.go` — `http.session.cleanup`,
-  `http.novelty.cleanup` (5 min each).
+- `builder/builder.go` — `bridge.clean` (5 min tick, 60 min TTL) and
+  `timing.clean` (5 min tick, 60 min TTL on the tracer timing cache).
+- `protocols/strategies/HTTP/http.go` — `http.session.cleanup`
+  (5 min tick, 30 min idle cutoff) and `http.novelty.cleanup`
+  (5 min tick, `windowDays`-day max age).
 - `protocols/strategies/OLLAMA/ollama.go` — `ollama.session.cleanup`
-  (5 min, 1 h max age).
+  (5 min tick, 1 h idle eviction).
+
+Run `grep -rn 'lifecycle.Cleaner' --include='*.go' .` for the authoritative
+list — keep this section in step with it.
 
 ## See also
 
 - `lifecycle/lifecycle.go` — the helper itself.
 - `lifecycle/lifecycle_test.go` — semantic tests covering interval cadence,
   context-cancel exit, panic recovery, non-positive interval refusal.
-- The honeypot.observer exporter ships a stdlib-only mirror at
-  `exporter/lifecycle/lifecycle.go` (different module; behavior matched).
-- The Python aggregator has a parallel helper:
-  `~/projects/honeypot-research/api/lifecycle.py`
-  (`background_task` + `periodic_task`). Same intent, asyncio shape.
+- The companion honeypot.observer exporter ships a stdlib-only mirror at
+  `exporter/lifecycle/lifecycle.go` (separate module; behavior matched).
+- The companion Python aggregator carries a parallel asyncio helper
+  (`background_task` + `periodic_task`) with the same intent.
