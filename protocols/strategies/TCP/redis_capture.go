@@ -99,3 +99,28 @@ func redisWriteValue(b []byte) (key string, value []byte, ok bool) {
 	}
 	return string(args[1]), args[len(args)-1], true
 }
+
+// redisReplicationTarget parses a RESP frame for rogue-master replication IOCs.
+// Returns (host, port, true) on SLAVEOF/REPLICAOF <host> <port>;
+// ("","",true) on SLAVEOF NO ONE (cancel intent), PSYNC, or SYNC;
+// ("","",false) for any non-replication command.
+// Pure function — no network calls.
+func redisReplicationTarget(b []byte) (host string, port string, isReplication bool) {
+	args := redisParseArgs(b)
+	if len(args) == 0 {
+		return "", "", false
+	}
+	switch string(bytes.ToLower(args[0])) {
+	case "slaveof", "replicaof":
+		if len(args) >= 3 {
+			if string(bytes.ToUpper(args[1])) == "NO" && string(bytes.ToUpper(args[2])) == "ONE" {
+				return "", "", true // cancel: intent, no endpoint
+			}
+			return string(args[1]), string(args[2]), true
+		}
+		return "", "", true
+	case "psync", "sync":
+		return "", "", true
+	}
+	return "", "", false
+}

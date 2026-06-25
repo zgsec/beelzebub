@@ -74,3 +74,26 @@ func TestGate_CapturesStagingKey(t *testing.T) {
 		t.Fatal("RCE-staging key must be captured even when small")
 	}
 }
+
+func TestRepl_SlaveofEndpoint(t *testing.T) {
+	h, p, isRepl := redisReplicationTarget(resp("SLAVEOF", "45.61.13.7", "6379"))
+	if !isRepl || h != "45.61.13.7" || p != "6379" {
+		t.Fatalf("got h=%q p=%q isRepl=%v", h, p, isRepl)
+	}
+}
+func TestRepl_NoOne(t *testing.T) {
+	h, p, isRepl := redisReplicationTarget(resp("REPLICAOF", "NO", "ONE"))
+	if !isRepl || h != "" || p != "" {
+		t.Fatalf("NO ONE should be repl-intent with no endpoint; got h=%q p=%q isRepl=%v", h, p, isRepl)
+	}
+}
+func TestRepl_PsyncIsIntent(t *testing.T) {
+	if _, _, isRepl := redisReplicationTarget(resp("PSYNC", "?", "-1")); !isRepl {
+		t.Fatal("PSYNC must be replication intent")
+	}
+}
+func TestRepl_NonReplicationFalse(t *testing.T) {
+	if _, _, isRepl := redisReplicationTarget(resp("SET", "k", "v")); isRepl {
+		t.Fatal("SET is not replication")
+	}
+}
