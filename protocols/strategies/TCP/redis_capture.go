@@ -3,6 +3,8 @@ package TCP
 import (
 	"bytes"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // redisParseArgs parses a RESP2 multi-bulk array frame into its raw argument
@@ -122,9 +124,12 @@ func (s *TCPStrategy) redisCaptureHook(rawBytes []byte, captured map[string]stri
 		return
 	}
 	if key, value, ok := redisWriteValue(rawBytes); ok && shouldCaptureRedisValue(key, value) {
-		if a, err := s.artifactStore.Write(value, map[string]any{"redis_key": key}); err == nil {
-			captured["artifact_sha256"] = a.SHA256
+		a, err := s.artifactStore.Write(value, map[string]any{"redis_key": key})
+		if err != nil {
+			log.Warnf("redis artifact capture: write failed (key=%q, %d bytes): %v", key, len(value), err)
+			return
 		}
+		captured["artifact_sha256"] = a.SHA256
 	}
 }
 
