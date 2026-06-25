@@ -135,6 +135,10 @@ captureRequestBody: true
 captureResponseBody: true
 requestBodyMaxBytes: 65536
 responseBodyMaxBytes: 65536
+artifactPath: "/var/lib/beelzebub/artifacts/openwebui"
+artifactMaxBytes: 5000000
+artifactMaxTotalBytes: 524288000
+artifactMaxFiles: 2000
 commands:
 
   # ===========================================================================
@@ -416,6 +420,7 @@ commands:
   - regex: "^/api/v1/retrieval/process/web$"
     method: POST
     name: "openwebui-cve-2026-65958-retrieval-ssrf"
+    artifactCapture: true
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
