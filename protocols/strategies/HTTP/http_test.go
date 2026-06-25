@@ -855,3 +855,92 @@ func TestStatelessArtifactCapture(t *testing.T) {
 		t.Fatalf("stateless lure must capture exactly 1 artifact .bin, got %d", len(bins))
 	}
 }
+
+// TestStatelessArtifactCapture_SessionCreateNoPanic is the regression test for
+// the nil-deref crash introduced by Task 2: a stateless service (no State block,
+// cookieStore == nil) with a command that has SessionAction:"create" must NOT
+// panic and must NOT create any cookie session. If ArtifactCapture is also true,
+// artifact capture must still work as normal.
+//
+// Pre-fix this test would panic at sctx.cookieStore.Create(...) because the
+// stateless artifact-carrier sctx has cookieStore == nil.
+func TestStatelessArtifactCapture_SessionCreateNoPanic(t *testing.T) {
+	dir := t.TempDir()
+
+	// Command combines SessionAction:create (which would panic pre-fix) with
+	// ArtifactCapture:true (must still succeed post-fix).
+	cmd := parser.Command{
+		Name:            "stateless-create-artifact",
+		StatusCode:      200,
+		Handler:         `{"ok":true}`,
+		SessionAction:   "create",
+		ArtifactCapture: true,
+	}
+
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:  "stateless-artifact-lure",
+		ServiceType:  "upload",
+		ArtifactPath: dir,
+		// No State block — purely stateless; cookieStore will be nil.
+		Commands: []parser.Command{cmd},
+	}
+
+	// Minimal stateless artifact-carrier sctx: cookieStore is nil, only artifactStore set.
+	sctx := &sessionContext{
+		artifactStore: artifactstore.New(dir, 0, 0, 0),
+	}
+
+	tt := &captureTracer{}
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("STATELESS-PAYLOAD"))
+	req.RemoteAddr = "203.0.113.77:5555"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:9091"}))
+	req = req.WithContext(ctx)
+
+	// Must not panic (pre-fix: panics at sctx.cookieStore.Create).
+	resp, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Response must come through normally.
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// No Set-Cookie header must appear (no session was created).
+	for _, h := range resp.Headers {
+		if strings.HasPrefix(strings.ToLower(h), "set-cookie") {
+			t.Fatalf("unexpected Set-Cookie header on stateless lure: %q", h)
+		}
+	}
+
+	// ArtifactCapture must still work: artifact_sha256 in the captured event.
+	got := tt.last()
+	sha, ok := got.Captured["artifact_sha256"]
+	if !ok || sha == "" {
+		t.Fatalf("artifact_sha256 missing from Captured: %+v", got.Captured)
+	}
+
+	// Exactly one .bin file must be written.
+	bins, globErr := filepath.Glob(filepath.Join(dir, "*.bin"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(bins) != 1 {
+		t.Fatalf("expected exactly 1 .bin artifact, got %d", len(bins))
+	}
+
+	// Raw-body Feature #6 must NOT fire for stateless sctx: the upload service
+	// type key must not appear in Captured (no spurious side effects).
+	if _, fired := got.Captured["upload.raw_body_first_8kb"]; fired {
+		t.Fatalf("Feature #6 raw_body must not fire for stateless lure, but Captured has it")
+	}
+
+	// Feature #7 header captures must NOT fire for stateless sctx.
+	for _, key := range []string{"upload.referer", "upload.xff", "upload.user_agent_full"} {
+		if _, fired := got.Captured[key]; fired {
+			t.Fatalf("Feature #7 header capture %q must not fire for stateless lure", key)
+		}
+	}
+}

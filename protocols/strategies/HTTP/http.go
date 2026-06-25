@@ -124,9 +124,16 @@ type HTTPStrategy struct {
 
 // sessionContext bundles per-request stateful HTTP context so it can be
 // threaded through buildHTTPResponse without additional globals.
+//
+// sctx can be non-nil in two modes:
+//   - Stateful (cookieStore != nil): full session management, Feature #6/#7,
+//     cookie-forgery detection, and optionally artifact capture.
+//   - Stateless artifact-carrier (cookieStore == nil, artifactStore != nil):
+//     ONLY artifact capture is active; all other sctx-dependent paths must
+//     additionally check cookieStore != nil before using session state.
 type sessionContext struct {
 	sess          *historystore.CookieSession      // nil if no live session for this request
-	cookieStore   *historystore.CookieSessionStore // always non-nil when sctx != nil
+	cookieStore   *historystore.CookieSessionStore // nil for stateless artifact-carrier sctx
 	artifactStore *artifactstore.Store             // nil when ArtifactPath not configured
 	cookieName    string                           // value of servConf.State.CookieName
 	ttlSeconds    int                              // value of servConf.State.TTLSeconds
@@ -450,8 +457,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 
 		// Feature #6: Raw body first 8KB — captures attacker POST bodies verbatim
-		// for stateful services. Gated on sctx != nil (stateless services unaffected).
-		if sctx != nil && len(bodyBytes) > 0 && servConf.ServiceType != "" {
+		// for stateful services. Requires a real stateful session (cookieStore != nil);
+		// stateless artifact-carrier sctx values must not trigger this.
+		if sctx != nil && sctx.cookieStore != nil && len(bodyBytes) > 0 && servConf.ServiceType != "" {
 			n := len(bodyBytes)
 			if n > RawBodyCapBytes {
 				n = RawBodyCapBytes
@@ -460,9 +468,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 
 		// Feature #7: Referer / X-Forwarded-For / User-Agent header captures.
-		// Only emit if the header is non-empty; keeps the Captured map lean for
-		// stateless/uninteresting requests.
-		if sctx != nil && servConf.ServiceType != "" {
+		// Only emit if the header is non-empty; stateless artifact-carrier sctx
+		// values must not trigger this — stateful sessions only (cookieStore != nil).
+		if sctx != nil && sctx.cookieStore != nil && servConf.ServiceType != "" {
 			if v := request.Header.Get("Referer"); v != "" {
 				eventCaptured[servConf.ServiceType+".referer"] = v
 			}
@@ -476,7 +484,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 		// Feature #8: Cookie forgery — emit shape + truncated value when the
 		// handler closure detected a structurally suspicious unresolved cookie.
-		if sctx != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
+		// Requires stateful mode (cookieStore != nil); forgedShape is only set
+		// by the cookie-resolution path which also requires a cookieStore.
+		if sctx != nil && sctx.cookieStore != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
 			eventCaptured[servConf.ServiceType+".forged_cookie_shape"] = sctx.forgedShape
 			eventCaptured[servConf.ServiceType+".forged_cookie_value"] = sctx.forgedValue
 		}
@@ -490,8 +500,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 
 		// Feature #8: Handler override — when forgery is detected, override the
 		// tracer event's Handler to "<svc>/cookie_forgery" for downstream filtering.
+		// Stateful mode only (cookieStore != nil); forgedShape is only set there.
 		handlerOverride := ""
-		if sctx != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
+		if sctx != nil && sctx.cookieStore != nil && sctx.forgedShape != "" && servConf.ServiceType != "" {
 			handlerOverride = servConf.ServiceType + "/cookie_forgery"
 		}
 
@@ -515,7 +526,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	}
 
 	// b. sessionAction:create — extract captures from request body + issue cookie.
-	if command.SessionAction == "create" && sctx != nil {
+	// Requires stateful mode (cookieStore != nil); a stateless artifact-carrier sctx
+	// (cookieStore == nil) must not attempt to create a session — that would panic.
+	if command.SessionAction == "create" && sctx != nil && sctx.cookieStore != nil {
 		captured := make(map[string]string, len(command.SessionCapture))
 		for key, pat := range command.SessionCapture {
 			re, compileErr := regexp.Compile(pat)
