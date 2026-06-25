@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -457,7 +458,7 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 	// Pre-create a session so sess != nil (required by ArtifactCapture path).
 	sess := cookieStore.Create("203.0.113.7", "", map[string]string{"src": "test"})
 
-	astore := artifactstore.New(dir, 0 /* no size limit */)
+	astore := artifactstore.New(dir, 0, 0, 0 /* no size limits */)
 	sctx := &sessionContext{
 		sess:          sess,
 		cookieStore:   cookieStore,
@@ -793,5 +794,64 @@ func TestApplyResponseSubstitutions_SessionVarsStillWork(t *testing.T) {
 	}
 	if strings.Contains(resp.Body, "${request.uuid_short}") {
 		t.Errorf("request.uuid_short not substituted alongside session vars: %q", resp.Body)
+	}
+}
+
+// TestStatelessArtifactCapture verifies that a stateless service (no State/
+// CookieName) can capture request bodies to disk via a top-level ArtifactPath.
+// The capture site must not require sctx; only command.ArtifactCapture and a
+// non-nil httpStrategy.artifactStore are needed.
+func TestStatelessArtifactCapture(t *testing.T) {
+	dir := t.TempDir()
+
+	cmd := parser.Command{
+		Name:            "upload-capture",
+		StatusCode:      201,
+		Handler:         "{}",
+		ArtifactCapture: true,
+	}
+	tt := &captureTracer{}
+	// No State block — purely stateless service with a top-level ArtifactPath.
+	servConf := parser.BeelzebubServiceConfiguration{
+		Description:  "stateless-capture-lure",
+		ServiceType:  "upload",
+		ArtifactPath: dir,
+		Commands:     []parser.Command{cmd},
+	}
+
+	// Minimal sctx carrying only the artifact store — no cookie session.
+	// This is what the Init closure produces for a stateless service that
+	// has ArtifactPath set (the `else if httpStrategy.artifactStore != nil`
+	// branch). At the buildHTTPResponse level, sctx.sess is nil so no
+	// session metadata is captured, but the .bin is still written.
+	sctx := &sessionContext{
+		artifactStore: artifactstore.New(dir, 0, 0, 0),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("PAYLOAD-BYTES"))
+	req.RemoteAddr = "203.0.113.99:4444"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:9090"}))
+	req = req.WithContext(ctx)
+
+	_, err := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// artifact_sha256 must appear in the tracer event's Captured map.
+	got := tt.last()
+	sha, ok := got.Captured["artifact_sha256"]
+	if !ok || sha == "" {
+		t.Fatalf("artifact_sha256 not in event.Captured: %+v", got.Captured)
+	}
+
+	// The corresponding .bin file must exist on disk.
+	bins, globErr := filepath.Glob(filepath.Join(dir, "*.bin"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(bins) != 1 {
+		t.Fatalf("stateless lure must capture exactly 1 artifact .bin, got %d", len(bins))
 	}
 }

@@ -278,6 +278,16 @@ type BeelzebubServiceConfiguration struct {
 	// Zero (default) means the runtime default (64 KiB) is applied when
 	// CaptureRequestBody is true. Truncation is plain byte-cutoff.
 	RequestBodyMaxBytes int `yaml:"requestBodyMaxBytes" json:",omitempty"`
+	// ArtifactPath, when non-empty, enables the artifact store for this
+	// service independent of cookie-session state. Per-command
+	// `artifactCapture: true` directs request bodies into the store,
+	// SHA-named, with an idempotent meta.json sibling per artifact.
+	// Stateless lures (no state: block) can set this top-level field
+	// to capture payloads without requiring a session.
+	ArtifactPath          string `yaml:"artifactPath,omitempty" json:",omitempty"`
+	ArtifactMaxBytes      int    `yaml:"artifactMaxBytes,omitempty" json:",omitempty"`
+	ArtifactMaxTotalBytes int    `yaml:"artifactMaxTotalBytes,omitempty" json:",omitempty"`
+	ArtifactMaxFiles      int    `yaml:"artifactMaxFiles,omitempty" json:",omitempty"`
 	// ServiceProtocol opts a TCP listener into a purpose-built binary
 	// protocol handler instead of the generic regex/command loop. Known
 	// values:

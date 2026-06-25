@@ -196,19 +196,24 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		}
 	}
 
-	// Stateful HTTP: create cookie + artifact stores when configured.
+	// Artifact capture is independent of cookie-session state: a stateless lure
+	// (captureRequestBody only) can still persist payloads to the artifact store.
+	if servConf.ArtifactPath != "" {
+		httpStrategy.artifactStore = artifactstore.New(
+			servConf.ArtifactPath,
+			servConf.ArtifactMaxBytes,
+			servConf.ArtifactMaxTotalBytes,
+			servConf.ArtifactMaxFiles,
+		)
+	}
+
+	// Stateful HTTP: create cookie store when configured.
 	if servConf.State != nil && servConf.State.CookieName != "" {
 		ttl := time.Duration(servConf.State.TTLSeconds) * time.Second
 		if ttl == 0 {
 			ttl = 30 * time.Minute
 		}
 		httpStrategy.cookieStore = historystore.NewCookieSessionStore(ttl)
-		if servConf.State.ArtifactPath != "" {
-			httpStrategy.artifactStore = artifactstore.New(
-				servConf.State.ArtifactPath,
-				servConf.State.ArtifactMaxBytes,
-			)
-		}
 	}
 
 	startHTTPSessionCleanup()
@@ -216,7 +221,9 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
-		// Build per-request session context when stateful mode is active.
+		// Build per-request session context.
+		// sctx is created whenever stateful mode is active OR an artifactStore
+		// is configured, so stateless lures can also capture payloads to disk.
 		var sctx *sessionContext
 		if httpStrategy.cookieStore != nil {
 			sctx = &sessionContext{
@@ -238,6 +245,10 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 					sctx.forgedValue = v
 				}
 			}
+		} else if httpStrategy.artifactStore != nil {
+			// Stateless service with artifact capture: create a minimal sctx so
+			// buildHTTPResponse can reach the store without requiring a cookie session.
+			sctx = &sessionContext{artifactStore: httpStrategy.artifactStore}
 		}
 
 		// Buffer the body so commands can match on it (bodyRegex) AND the downstream
@@ -547,7 +558,9 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// from the request body (e.g. echoing JSON-RPC id in lure responses).
 	applyResponseSubstitutions(&resp, sctx, bodyBytes)
 
-	// d. Artifact capture — write request body + session metadata to disk.
+	// d. Artifact capture — write request body + (best-effort) session metadata.
+	// sctx.artifactStore is set for both stateful and stateless services when
+	// ArtifactPath is configured; sctx itself is always non-nil in that case.
 	if command.ArtifactCapture && sctx != nil && sctx.artifactStore != nil {
 		caps := map[string]any{}
 		if sctx.sess != nil {
