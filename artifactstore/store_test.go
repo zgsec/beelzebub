@@ -2,14 +2,16 @@ package artifactstore
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStore_WriteCreatesArtifactAndMeta(t *testing.T) {
 	dir := t.TempDir()
-	s := New(dir, 50*1024*1024)
+	s := New(dir, 50*1024*1024, 0, 0)
 	body := []byte("<extension>https://evil.example/x</extension>")
 	captures := map[string]any{
 		"session_key":   "abc123",
@@ -42,7 +44,7 @@ func TestStore_WriteCreatesArtifactAndMeta(t *testing.T) {
 }
 
 func TestStore_RejectsOversize(t *testing.T) {
-	s := New(t.TempDir(), 100)
+	s := New(t.TempDir(), 100, 0, 0)
 	// Empty body is allowed (0 <= 100); should NOT error.
 	if _, err := s.Write([]byte(""), nil); err != nil {
 		t.Fatalf("empty body should be allowed: %v", err)
@@ -55,7 +57,7 @@ func TestStore_RejectsOversize(t *testing.T) {
 
 func TestStore_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	s := New(dir, 1024)
+	s := New(dir, 1024, 0, 0)
 	body := []byte("<dup/>")
 	a1, _ := s.Write(body, map[string]any{"first": "v1"})
 	a2, _ := s.Write(body, map[string]any{"first": "v2"})
@@ -67,7 +69,7 @@ func TestStore_Idempotent(t *testing.T) {
 }
 
 func TestStore_ExtractsURLs(t *testing.T) {
-	s := New(t.TempDir(), 1024)
+	s := New(t.TempDir(), 1024, 0, 0)
 	body := []byte(`<x>see https://evil.example/loader.exe and http://c2.example/beacon</x>`)
 	a, _ := s.Write(body, nil)
 	urls, _ := a.Captures["embedded_urls"].([]string)
@@ -77,7 +79,7 @@ func TestStore_ExtractsURLs(t *testing.T) {
 }
 
 func TestStore_DoesNotMutateCallerCaptures(t *testing.T) {
-	s := New(t.TempDir(), 1024)
+	s := New(t.TempDir(), 1024, 0, 0)
 	captures := map[string]any{"operator_user": "pwn"}
 	_, err := s.Write([]byte("body"), captures)
 	if err != nil {
@@ -92,5 +94,38 @@ func TestStore_DoesNotMutateCallerCaptures(t *testing.T) {
 	}
 	if _, ok := captures["embedded_urls"]; ok {
 		t.Fatal("embedded_urls leaked into caller map")
+	}
+}
+
+func TestStore_EvictsOldestOverBudget(t *testing.T) {
+	dir := t.TempDir()
+	// maxFiles=2: third distinct write evicts the oldest.
+	s := New(dir, 0, 0, 2)
+	a1, _ := s.Write([]byte("one"), nil)
+	time.Sleep(10 * time.Millisecond) // ensure distinct mtimes
+	_, _ = s.Write([]byte("two"), nil)
+	time.Sleep(10 * time.Millisecond)
+	_, _ = s.Write([]byte("three"), nil)
+
+	if _, err := os.Stat(filepath.Join(dir, a1.SHA256+".bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest .bin should have been evicted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, a1.SHA256+".meta.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest .meta.json should have been evicted")
+	}
+	bins, _ := filepath.Glob(filepath.Join(dir, "*.bin"))
+	if len(bins) != 2 {
+		t.Fatalf("want 2 .bin remaining, got %d", len(bins))
+	}
+}
+
+func TestStore_TotalBytesBudgetEvicts(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir, 0, 6 /*bytes*/, 0) // ~2 small bodies fit
+	a1, _ := s.Write([]byte("aaaa"), nil) // 4 bytes
+	time.Sleep(10 * time.Millisecond)
+	_, _ = s.Write([]byte("bbbb"), nil) // 4 bytes -> total 8 > 6 -> evict a1
+	if _, err := os.Stat(filepath.Join(dir, a1.SHA256+".bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest should be evicted under byte budget")
 	}
 }

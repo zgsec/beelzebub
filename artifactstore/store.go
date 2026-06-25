@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,13 +36,15 @@ type Artifact struct {
 }
 
 type Store struct {
-	dir          string
-	maxBodyBytes int
-	mu           sync.Mutex // serializes writes per process; per-sha is content-addressable so collisions are no-ops
+	dir           string
+	maxBodyBytes  int
+	maxTotalBytes int
+	maxFiles      int
+	mu            sync.Mutex // serializes writes per process; per-sha is content-addressable so collisions are no-ops
 }
 
-func New(dir string, maxBodyBytes int) *Store {
-	return &Store{dir: dir, maxBodyBytes: maxBodyBytes}
+func New(dir string, maxBodyBytes, maxTotalBytes, maxFiles int) *Store {
+	return &Store{dir: dir, maxBodyBytes: maxBodyBytes, maxTotalBytes: maxTotalBytes, maxFiles: maxFiles}
 }
 
 // Write persists body atomically + writes a meta.json sibling.
@@ -88,12 +92,54 @@ func (s *Store) Write(body []byte, captures map[string]any) (Artifact, error) {
 	if err := writeAtomic(metaPath, metaBytes, 0o600); err != nil {
 		return Artifact{}, err
 	}
+	s.enforceBudget()
 	return Artifact{
 		SHA256:    sha,
 		Captured:  now,
 		Captures:  enriched,
 		SizeBytes: len(body),
 	}, nil
+}
+
+// enforceBudget evicts oldest artifacts (FIFO by mtime) when the store exceeds
+// its file-count or total-byte budget. Best-effort: never fails the caller.
+// Caller must hold s.mu.
+func (s *Store) enforceBudget() {
+	if s.maxTotalBytes <= 0 && s.maxFiles <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	type binFile struct {
+		sha  string
+		size int64
+		mod  time.Time
+	}
+	var bins []binFile
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".bin") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		bins = append(bins, binFile{strings.TrimSuffix(e.Name(), ".bin"), info.Size(), info.ModTime()})
+		total += info.Size()
+	}
+	sort.Slice(bins, func(i, j int) bool { return bins[i].mod.Before(bins[j].mod) }) // oldest first
+	for len(bins) > 0 &&
+		((s.maxTotalBytes > 0 && total > int64(s.maxTotalBytes)) ||
+			(s.maxFiles > 0 && len(bins) > s.maxFiles)) {
+		oldest := bins[0]
+		bins = bins[1:]
+		_ = os.Remove(filepath.Join(s.dir, oldest.sha+".bin"))
+		_ = os.Remove(filepath.Join(s.dir, oldest.sha+".meta.json"))
+		total -= oldest.size
+	}
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
