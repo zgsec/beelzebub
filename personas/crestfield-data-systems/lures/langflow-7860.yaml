@@ -80,6 +80,10 @@ captureRequestBody: true
 requestBodyMaxBytes: 262144
 captureResponseBody: true
 responseBodyMaxBytes: 65536
+artifactPath: "/var/lib/beelzebub/artifacts/langflow"
+artifactMaxBytes: 5000000          # 5 MB per body
+artifactMaxTotalBytes: 524288000   # 500 MB store budget
+artifactMaxFiles: 2000
 commands:
 
   # ───────────────────────────────────────────────────────────────────────
@@ -134,6 +138,7 @@ commands:
     method: POST
     bodyRegex: "code"
     name: "langflow-validate-code-cve-2025-3248-cve-2026-0770"
+    artifactCapture: true
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -173,6 +178,7 @@ commands:
     method: POST
     bodyRegex: 'filename="'
     name: "langflow-files-cve-2026-5027-path-traversal-write"
+    artifactCapture: true
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
