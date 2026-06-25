@@ -100,6 +100,34 @@ func redisWriteValue(b []byte) (key string, value []byte, ok bool) {
 	return string(args[1]), args[len(args)-1], true
 }
 
+// redisCaptureHook inspects a raw RESP frame and records relevant IOCs or
+// artifacts into the captured map. It is best-effort: errors never break the
+// caller's connection loop.
+//
+// Priority ordering:
+//  1. Replication commands (SLAVEOF / REPLICAOF / PSYNC / SYNC) → record the
+//     rogue-master endpoint as an IOC and return immediately. No .bin written,
+//     no outbound connection opened.
+//  2. Write commands (SET / SETEX / etc.) whose value passes the gate →
+//     write a .bin artifact to the store and record its sha256 in captured.
+func (s *TCPStrategy) redisCaptureHook(rawBytes []byte, captured map[string]string) {
+	if host, port, isRepl := redisReplicationTarget(rawBytes); isRepl {
+		captured["redis_replication"] = "true"
+		if host != "" {
+			captured["redis_replication_master"] = host + ":" + port
+		}
+		return // IOC-only; no egress, no artifact write
+	}
+	if s.artifactStore == nil {
+		return
+	}
+	if key, value, ok := redisWriteValue(rawBytes); ok && shouldCaptureRedisValue(key, value) {
+		if a, err := s.artifactStore.Write(value, map[string]any{"redis_key": key}); err == nil {
+			captured["artifact_sha256"] = a.SHA256
+		}
+	}
+}
+
 // redisReplicationTarget parses a RESP frame for rogue-master replication IOCs.
 // Returns (host, port, true) on SLAVEOF/REPLICAOF <host> <port>;
 // ("","",true) on SLAVEOF NO ONE (cancel intent), PSYNC, or SYNC;

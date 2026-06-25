@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mariocandela/beelzebub/v3/agentdetect"
+	"github.com/mariocandela/beelzebub/v3/artifactstore"
 	"github.com/mariocandela/beelzebub/v3/bridge"
 	"github.com/mariocandela/beelzebub/v3/historystore"
 	"github.com/mariocandela/beelzebub/v3/parser"
@@ -36,6 +37,10 @@ type TCPStrategy struct {
 	Sessions *historystore.HistoryStore
 	Bridge   *bridge.ProtocolBridge
 
+	// artifactStore captures gated Redis write values (payloads, staging keys)
+	// to disk. Nil when ArtifactPath is not configured in the service config.
+	artifactStore *artifactstore.Store
+
 	// Per-IP timing accumulation for automation detection.
 	// We collect the data here; the scoring thresholds may need tuning
 	// as we learn what TCP automation looks like vs SSH/HTTP.
@@ -48,6 +53,11 @@ type TCPStrategy struct {
 func (tcpStrategy *TCPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	if tcpStrategy.Sessions == nil {
 		tcpStrategy.Sessions = historystore.NewHistoryStore()
+	}
+	if servConf.ArtifactPath != "" {
+		tcpStrategy.artifactStore = artifactstore.New(
+			servConf.ArtifactPath, servConf.ArtifactMaxBytes,
+			servConf.ArtifactMaxTotalBytes, servConf.ArtifactMaxFiles)
 	}
 	go tcpStrategy.Sessions.HistoryCleaner()
 	go tcpStrategy.cleanAgentState()
@@ -239,6 +249,11 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		var commandInput string
 		var commandRawHex string // hex-escaped raw bytes, for v2 classifier (binarySafe only)
 		var err error
+		// eventCaptured carries per-command lure metadata (artifact sha256,
+		// replication IOCs, etc.) that flows into the tracer event's Captured
+		// field. Allocated fresh each iteration so stale values from a prior
+		// command never leak into the next event.
+		eventCaptured := map[string]string{}
 		if servConf.BinarySafe {
 			// Binary-safe path: read the full frame (multi-line CRLF-terminated)
 			// then protocol-decode it to extract the command name. The decoded
@@ -253,6 +268,9 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			}
 			commandRawHex = hexEscapeNonPrintable(rawBytes)
 			commandInput = decodeProtocolCommand(rawBytes)
+			// Redis capture hook: record replication IOCs and/or write
+			// payload artifacts. Best-effort — never breaks the connection.
+			strategy.redisCaptureHook(rawBytes, eventCaptured)
 		} else {
 			// Default path: printable-ASCII, newline-delimited (legacy
 			// behavior, used by telnet / LLM-plugin services / etc.).
@@ -354,6 +372,10 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 		verdict := strategy.classifyTCP(host, commandInput)
 
 		// Trace interaction
+		var capturedField map[string]string
+		if len(eventCaptured) > 0 {
+			capturedField = eventCaptured
+		}
 		tr.TraceEvent(tracer.Event{
 			Msg:           "TCP Session Interaction",
 			RemoteAddr:    conn.RemoteAddr().String(),
@@ -374,6 +396,7 @@ func handleInteractiveConnection(conn net.Conn, servConf parser.BeelzebubService
 			AgentScore:    verdict.Score,
 			AgentCategory: verdict.Category,
 			AgentSignals:  verdict.SignalsString(),
+			Captured:      capturedField,
 		})
 
 		if shouldQuit {
