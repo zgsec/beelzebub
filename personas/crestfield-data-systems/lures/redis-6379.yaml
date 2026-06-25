@@ -63,6 +63,10 @@ banner: ""
 serverName: ""
 deadlineTimeoutSeconds: 120
 binarySafe: true
+artifactPath: "/var/lib/beelzebub/artifacts/redis"
+artifactMaxBytes: 5000000
+artifactMaxTotalBytes: 524288000
+artifactMaxFiles: 2000
 
 commands:
   # ---------------------------------------------------------------------------
