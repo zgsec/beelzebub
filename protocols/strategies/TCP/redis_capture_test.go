@@ -53,3 +53,24 @@ func TestRedisWriteValue_PartialFrameIsFalse(t *testing.T) {
 		t.Fatal("truncated frame must return ok=false")
 	}
 }
+
+func TestGate_SkipsSmallBenign(t *testing.T) {
+	if shouldCaptureRedisValue("user:42:name", []byte("alice")) {
+		t.Fatal("small printable benign value must not be captured")
+	}
+}
+func TestGate_CapturesLarge(t *testing.T) {
+	if !shouldCaptureRedisValue("k", bytes.Repeat([]byte("A"), 512)) {
+		t.Fatal(">=512B value must be captured")
+	}
+}
+func TestGate_CapturesBinary(t *testing.T) {
+	if !shouldCaptureRedisValue("k", []byte{0x7f, 0x45, 0x4c, 0x46, 0x00}) {
+		t.Fatal("binary value must be captured")
+	}
+}
+func TestGate_CapturesStagingKey(t *testing.T) {
+	if !shouldCaptureRedisValue("crackit:cron", []byte("short")) {
+		t.Fatal("RCE-staging key must be captured even when small")
+	}
+}

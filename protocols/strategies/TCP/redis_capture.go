@@ -1,6 +1,9 @@
 package TCP
 
-import "bytes"
+import (
+	"bytes"
+	"strings"
+)
 
 // redisParseArgs parses a RESP2 multi-bulk array frame into its raw argument
 // byte-slices. Returns nil on a non-array header or a malformed/truncated frame.
@@ -56,6 +59,31 @@ func redisParseArgs(b []byte) [][]byte {
 var redisWriteVerbs = map[string]bool{
 	"set": true, "setex": true, "psetex": true, "setnx": true,
 	"append": true, "getset": true, "restore": true,
+}
+
+const redisCaptureMinBytes = 512
+
+var redisStagingKeyHints = []string{"cron", "dbfilename", "module", ".so", "backup", "rdb"}
+
+// shouldCaptureRedisValue returns true when a write command's value is
+// payload-shaped: large (≥512 B), contains a binary/non-printable byte, or
+// the key matches an RCE-staging hint substring (case-insensitive).
+func shouldCaptureRedisValue(key string, value []byte) bool {
+	if len(value) >= redisCaptureMinBytes {
+		return true
+	}
+	for _, by := range value {
+		if by < 0x09 || (by > 0x0d && by < 0x20) || by == 0x7f {
+			return true // non-printable / binary
+		}
+	}
+	lk := strings.ToLower(key)
+	for _, h := range redisStagingKeyHints {
+		if strings.Contains(lk, h) {
+			return true
+		}
+	}
+	return false
 }
 
 // redisWriteValue returns the key + raw value bytes of a payload-bearing write
