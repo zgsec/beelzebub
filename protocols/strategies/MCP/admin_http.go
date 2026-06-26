@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,15 @@ var adminHTTPHandlers = map[string]adminHTTPHandler{
 	"user_update": adminUserUpdate,
 	"user_new":    adminUserNew,
 	"credentials": adminCredentials,
+	// Credential-API read/action routes the 206.189.8.200-class operator probed
+	// and our lure used to answer with the generic default-404 — a fingerprint
+	// tell, since real LiteLLM exposes these routes. Masking is universal across
+	// the credential API (measured), so these are FIDELITY surfaces (keep the
+	// sophisticated operator engaged), NOT fireable canary seams; the AWS canary
+	// still fires only via the full key in /litellm_config.yaml + /key/generate.
+	"credentials_by_name":  adminCredentialsByName,
+	"credentials_by_model": adminCredentialsByModel,
+	"credentials_delete":   adminCredentialsDelete,
 }
 
 // litellmTSLayout is the oracle's millisecond ISO timestamp with a trailing Z
@@ -506,4 +516,92 @@ func adminCredentials(ws *WorldState, r *http.Request, body []byte) (string, int
 		},
 	}
 	return marshal(env), http.StatusOK
+}
+
+// credentialEntryByName is the GET /credentials/by_name/{name} body. Real LiteLLM
+// returns the BARE entry (no {"success",...} envelope) and orders the members
+// credential_name, credential_info, credential_values — note info BEFORE values,
+// the reverse of the list envelope. Captured: write-surface/credentials_by_name.json.
+type credentialEntryByName struct {
+	CredentialName   string           `json:"credential_name"`
+	CredentialInfo   credentialInfo   `json:"credential_info"`
+	CredentialValues credentialValues `json:"credential_values"`
+}
+
+// litellmError is LiteLLM's ordered error envelope inner object
+// ({"error":{message,type,param,code}}). A map would marshal these alphabetically
+// (code,message,param,type) and break byte-fidelity, so order is pinned here.
+type litellmError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Param   string `json:"param"`
+	Code    string `json:"code"`
+}
+
+// litellmErrorBody renders {"error":{...}} with the oracle field order. The outer
+// single-key map can't reorder (one key), the inner struct preserves order.
+func litellmErrorBody(message, errType, code string) string {
+	return marshal(map[string]interface{}{
+		"error": litellmError{Message: message, Type: errType, Param: "None", Code: code},
+	})
+}
+
+// credentialActionResult is the ordered {"success":true,"message":...} envelope
+// LiteLLM returns from credential write verbs (create/delete). Struct pins the
+// success-before-message order a map would alphabetize.
+type credentialActionResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// bedrockCredName is the single provider credential the persona's proxy stores.
+const bedrockCredName = "bedrock-prod-creds"
+
+// adminCredentialsByName → GET /credentials/by_name/{name}. Real LiteLLM returns
+// the MASKED entry for a known name (200, no success wrapper, info before values)
+// and a 404 internal_server_error echoing the requested name for an unknown one.
+// Masking is universal here too, so per-path AWS attribution is impossible by
+// construction — this exists to remove the by_name 404 tell and keep the
+// credential-API operator engaged toward the seams that DO fire.
+func adminCredentialsByName(ws *WorldState, r *http.Request, body []byte) (string, int) {
+	name := ""
+	if r != nil {
+		name = strings.TrimPrefix(r.URL.Path, "/credentials/by_name/")
+	}
+	if name != bedrockCredName {
+		return litellmErrorBody(
+			"Credential not found. Got credential name: "+name,
+			"internal_server_error", "404"), http.StatusNotFound
+	}
+	maskedKey, maskedSecret := maskedAWSCanary()
+	return marshal(credentialEntryByName{
+		CredentialName: bedrockCredName,
+		CredentialInfo: credentialInfo{
+			Description:       "Production Bedrock access for platform-eng",
+			CustomLLMProvider: "bedrock",
+		},
+		CredentialValues: credentialValues{
+			AWSRegionName:      "us-east-1",
+			AWSAccessKeyID:     maskedKey,
+			AWSSecretAccessKey: maskedSecret,
+		},
+	}), http.StatusOK
+}
+
+// adminCredentialsByModel → GET /credentials/by_model/{id}. The persona binds no
+// credential to a model id, so every lookup is real LiteLLM's 404 "Model not
+// found" — the exact shape, not the generic default-404 tell.
+func adminCredentialsByModel(ws *WorldState, r *http.Request, body []byte) (string, int) {
+	return litellmErrorBody("Model not found", "internal_server_error", "404"), http.StatusNotFound
+}
+
+// adminCredentialsDelete → DELETE /credentials/{name}. Real LiteLLM is stateful
+// and 200s {"success":true,"message":"Credential deleted successfully"}. The lure
+// is inert (nothing actually deletes), but echoing the envelope removes the
+// write-surface 404 tell the operator probed.
+func adminCredentialsDelete(ws *WorldState, r *http.Request, body []byte) (string, int) {
+	return marshal(credentialActionResult{
+		Success: true,
+		Message: "Credential deleted successfully",
+	}), http.StatusOK
 }

@@ -955,7 +955,7 @@ commands:
   # GET /credentials — stored model-provider credential listing.
   # stateHandler "credentials": Go-backed, per-session-stateful credential surface.
   # The handler: string below is the static fallback if the name fails to resolve.
-  - regex: "^/credentials$"
+  - regex: "^/credentials(\\?.*)?$"
     method: GET
     name: "litellm-credentials"
     stateHandler: "credentials"
@@ -964,6 +964,65 @@ commands:
       - "Server: uvicorn"
     statusCode: 200
     handler: '{"success":true,"credentials":[]}'
+
+  # GET /credentials/by_name/{name} — real LiteLLM credential lookup-by-name.
+  # The 206.189.8.200-class operator hit this (and by_model, trailing-slash,
+  # DELETE) and our lure answered with the generic default-404 — a fingerprint
+  # tell, since these routes exist in real LiteLLM. stateHandler renders the
+  # MASKED entry for the known cred (no success wrapper, info before values) and
+  # a 404 internal_server_error echoing the name otherwise. Masking is universal
+  # on the credential API, so this is a FIDELITY surface (keep the operator
+  # engaged), NOT a fireable seam — the AWS canary still fires only via the full
+  # key in /litellm_config.yaml + /key/generate. Captured ground truth:
+  # tools/oracle-diff/litellm-1.83.6-admin/fixtures/oracle/write-surface/credentials_by_name*.json
+  - regex: "^/credentials/by_name/.+$"
+    method: GET
+    name: "litellm-credentials-by-name"
+    stateHandler: "credentials_by_name"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"error":{"message":"Credential not found.","type":"internal_server_error","param":"None","code":"404"}}'
+
+  # GET /credentials/by_model/{id} — no credential is bound to a model id, so the
+  # oracle-accurate answer is 404 "Model not found" (not the generic default-404).
+  - regex: "^/credentials/by_model/.+$"
+    method: GET
+    name: "litellm-credentials-by-model"
+    stateHandler: "credentials_by_model"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 404
+    handler: '{"error":{"message":"Model not found","type":"internal_server_error","param":"None","code":"404"}}'
+
+  # DELETE /credentials/{name} — real LiteLLM is stateful: 200 deleted envelope.
+  # The lure is inert (nothing actually deletes); echoing the shape removes the
+  # write-surface 404 tell. Single path segment only (by_name/by_model are GET).
+  - regex: "^/credentials/[^/]+$"
+    method: DELETE
+    name: "litellm-credentials-delete"
+    stateHandler: "credentials_delete"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 200
+    handler: '{"success":true,"message":"Credential deleted successfully"}'
+
+  # GET /credentials/{seg} and GET /credentials/ (trailing slash) — the credential
+  # name is a DELETE/PATCH route param, so a GET on a single path segment is
+  # FastAPI 405 Method Not Allowed, NOT 404. Covers /credentials/, /credentials/get,
+  # /credentials/bedrock-prod-creds (GET). Two-segment by_name/by_model match their
+  # specific GET rules above (listed first). Static route (no state needed).
+  - regex: "^/credentials/[^/]*$"
+    method: GET
+    name: "litellm-credentials-seg-405"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+      - "Server: uvicorn"
+    statusCode: 405
+    handler: '{"detail":"Method Not Allowed"}'
 
   # GET /team/info — team metadata.
   - regex: "^/team/info$"

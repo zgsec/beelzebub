@@ -106,7 +106,7 @@ func replayAdminServConf() parser.BeelzebubServiceConfiguration {
 				Handler:      `{"user_id":"new_user","user_role":"internal_user"}`,
 			},
 			{
-				Regex:        regexp.MustCompile(`^/credentials$`),
+				Regex:        regexp.MustCompile(`^/credentials(\?.*)?$`),
 				Method:       "GET",
 				Name:         "litellm-credentials",
 				StateHandler: "credentials",
@@ -124,6 +124,41 @@ func replayAdminServConf() parser.BeelzebubServiceConfiguration {
 				Headers:    jsonHdr,
 				StatusCode: 200,
 				Handler:    `{"key":"sk-litellm-replayKey","token_id":"litellm-key-replay","models":[],"max_budget":100.0,"user_id":"default_user_id"}`,
+			},
+			{
+				Regex:        regexp.MustCompile(`^/credentials/by_name/.+$`),
+				Method:       "GET",
+				Name:         "litellm-credentials-by-name",
+				StateHandler: "credentials_by_name",
+				Headers:      jsonHdr,
+				StatusCode:   200,
+				Handler:      `{"detail":"Not Found"}`,
+			},
+			{
+				Regex:        regexp.MustCompile(`^/credentials/by_model/.+$`),
+				Method:       "GET",
+				Name:         "litellm-credentials-by-model",
+				StateHandler: "credentials_by_model",
+				Headers:      jsonHdr,
+				StatusCode:   200,
+				Handler:      `{"detail":"Not Found"}`,
+			},
+			{
+				Regex:        regexp.MustCompile(`^/credentials/[^/]+$`),
+				Method:       "DELETE",
+				Name:         "litellm-credentials-delete",
+				StateHandler: "credentials_delete",
+				Headers:      jsonHdr,
+				StatusCode:   200,
+				Handler:      `{"detail":"Not Found"}`,
+			},
+			{
+				Regex:      regexp.MustCompile(`^/credentials/[^/]*$`),
+				Method:     "GET",
+				Name:       "litellm-credentials-seg-405",
+				Headers:    jsonHdr,
+				StatusCode: 405,
+				Handler:    `{"detail":"Method Not Allowed"}`,
 			},
 		},
 		// Default-404: any path that does NOT match a command above falls here.
@@ -287,4 +322,89 @@ func TestReplayAdminChain(t *testing.T) {
 	if !t.Failed() {
 		t.Log("PASS canary-present")
 	}
+}
+
+// TestReplayCredentialAPIShapes covers the credential-API routes the
+// 206.189.8.200-class operator probed and the lure used to answer with the
+// generic default-404 tell. Ground truth: the live-capture fixtures in
+// tools/oracle-diff/litellm-1.83.6-admin/fixtures/oracle/write-surface/
+// (credentials_by_name{,_missing}.json, credentials_by_model_missing.json,
+// credentials_delete.json, credentials_trailing_slash.json).
+func TestReplayCredentialAPIShapes(t *testing.T) {
+	servConf := replayAdminServConf()
+	s := newStateStrategy()
+	s.seedConfig = testSeed()
+	s.persona = replayPersona()
+
+	// by_name (known) → 200 MASKED, no success wrapper, info before values.
+	st, body := replayOne(s, servConf, "GET", "/credentials/by_name/bedrock-prod-creds", "")
+	require.Equalf(t, 200, st, "by_name known status: %s", body)
+	var bn struct {
+		CredentialName   string            `json:"credential_name"`
+		CredentialInfo   map[string]string `json:"credential_info"`
+		CredentialValues map[string]string `json:"credential_values"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &bn), "by_name parse: %s", body)
+	assert.Equal(t, "bedrock-prod-creds", bn.CredentialName)
+	assert.Equal(t, "bedrock", bn.CredentialInfo["custom_llm_provider"])
+	mask := regexp.MustCompile(`^..\*\*\*\*..$`)
+	assert.Regexpf(t, mask, bn.CredentialValues["aws_access_key_id"], "by_name key must be masked: %s", body)
+	assert.NotContainsf(t, body, `"success"`, "by_name must NOT have the list's success wrapper: %s", body)
+	assert.Lessf(t, strings.Index(body, "credential_info"), strings.Index(body, "credential_values"),
+		"by_name field order must be info before values: %s", body)
+
+	// by_name (unknown) → 404 internal_server_error echoing the requested name.
+	st, body = replayOne(s, servConf, "GET", "/credentials/by_name/does-not-exist", "")
+	assert.Equalf(t, 404, st, "by_name unknown status: %s", body)
+	assert.Contains(t, body, "Credential not found. Got credential name: does-not-exist")
+	assert.Contains(t, body, `"type":"internal_server_error"`)
+
+	// by_model → 404 "Model not found".
+	st, body = replayOne(s, servConf, "GET", "/credentials/by_model/01J8K2HV3R4XPQM7N5Z9", "")
+	assert.Equalf(t, 404, st, "by_model status: %s", body)
+	assert.Contains(t, body, "Model not found")
+
+	// DELETE /credentials/{name} → 200, success before message.
+	st, body = replayOne(s, servConf, "DELETE", "/credentials/bedrock-prod-creds", "")
+	assert.Equalf(t, 200, st, "delete status: %s", body)
+	assert.Contains(t, body, "Credential deleted successfully")
+	assert.Lessf(t, strings.Index(body, "success"), strings.Index(body, "message"),
+		"delete field order must be success before message: %s", body)
+
+	// GET single-segment + trailing slash → 405 Method Not Allowed (name is a
+	// DELETE/PATCH param, not a GET route). Covers /credentials/ and /credentials/get.
+	for _, p := range []string{"/credentials/", "/credentials/get"} {
+		st, body = replayOne(s, servConf, "GET", p, "")
+		assert.Equalf(t, 405, st, "GET %s status: %s", p, body)
+		assert.Containsf(t, body, "Method Not Allowed", "GET %s body", p)
+	}
+
+	// Query-string variants (?unmasked/?reveal/?credential_name) → 200 masked
+	// LIST: real LiteLLM ignores unknown params, our ^/credentials$ used to miss
+	// the query string and 404. This is the exact unmask sweep the operator ran.
+	for _, p := range []string{"/credentials?unmasked=true", "/credentials?reveal=true", "/credentials?credential_name=bedrock-prod-creds"} {
+		st, body = replayOne(s, servConf, "GET", p, "")
+		assert.Equalf(t, 200, st, "GET %s status: %s", p, body)
+		assert.Containsf(t, body, `"success":true`, "GET %s must serve the masked list, not 404: %s", p, body)
+		assert.Regexpf(t, mask, gjsonAWSKey(body), "GET %s key still masked: %s", p, body)
+	}
+
+	if !t.Failed() {
+		t.Log("PASS credential-api-shapes")
+	}
+}
+
+// gjsonAWSKey pulls credentials[0].credential_values.aws_access_key_id from a
+// /credentials list body without a full struct (the query-variant assertions
+// only need the masked key to confirm no unmask leak).
+func gjsonAWSKey(body string) string {
+	var env struct {
+		Credentials []struct {
+			CredentialValues map[string]string `json:"credential_values"`
+		} `json:"credentials"`
+	}
+	if json.Unmarshal([]byte(body), &env) != nil || len(env.Credentials) == 0 {
+		return ""
+	}
+	return env.Credentials[0].CredentialValues["aws_access_key_id"]
 }
