@@ -99,7 +99,7 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 	}
 	ws := NewWorldState(s.seedConfig, s.persona)
 	// Mint per-IP agent-reactive honeytokens. Deterministic from the IP so the
-	// research-1 detector (agent/lib/honeytoken.py) re-derives identical nonces.
+	// our detector re-derives identical nonces.
 	ws.Honeytoken = MintHoneytokens(ip, "")
 	s.worldState[ip] = ws
 	return ws
@@ -512,7 +512,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 				// Honeytoken: a deductive agent fire (the actor read a planted
 				// decoy path it could only have learned from an NL directive).
-				// Surface a live flag; the authoritative confirmation is research-1
+				// Surface a live flag; the authoritative confirmation is the research backend
 				// re-deriving the nonce via agent/lib/honeytoken.py over the
 				// captured tool-call args (the decoy path is in the trace).
 				if ws.Honeytoken != nil && ws.Honeytoken.HasDeductiveAgent() && mcpStrategy.Bridge != nil {

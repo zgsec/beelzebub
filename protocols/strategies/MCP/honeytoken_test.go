@@ -7,7 +7,7 @@ import (
 
 // TestNonceDeterminismMatchesPython pins the Go nonce derivation to the Python
 // reference (agent/lib/honeytoken.py). If these drift, the Go planter and the
-// research-1 detector would derive different nonces and fires would not attribute.
+// our detector would derive different nonces and fires would not attribute.
 func TestNonceDeterminismMatchesPython(t *testing.T) {
 	r := MintHoneytokens("test-sid", "")
 	cases := map[string]string{
