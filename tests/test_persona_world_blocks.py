@@ -2,7 +2,7 @@
 import yaml
 from pathlib import Path
 
-REPO = Path("/home/dev/projects/beelzebub")
+REPO = Path(__file__).resolve().parents[1]
 
 REQUIRED_PATHS = [
     ("coherence", "world", "company", "display_name"),
