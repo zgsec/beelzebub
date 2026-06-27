@@ -343,11 +343,11 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // event reflects what was actually written to the wire — not the in-memory
 // state at buildHTTPResponse's return point.
 //
-// Discovered 2026-05-23: when ExecuteModel failed on sensor-fra, the wire
+// Discovered 2026-05-23: when ExecuteModel failed in production, the wire
 // response was correctly the configured llmOfflineResponse envelope (curl
 // received 500 + 219 bytes), but the tracer event recorded the pre-fix
 // "404 Not Found!" bare-text from inside buildHTTPResponse's deferred
-// trace fire. Corpus on research-1 looked like the lure was still broken
+// trace fire. Corpus in our backend looked like the lure was still broken
 // when it wasn't. Returning the trace as a callback the caller invokes
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
