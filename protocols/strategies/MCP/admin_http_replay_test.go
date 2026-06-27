@@ -15,7 +15,7 @@ import (
 )
 
 // TestReplay218157 is the regression that locks in the LiteLLM-admin-lure fix
-// for the 218.200.187.157 capture (sensor-fra, 2026-06-12). In the ORIGINAL
+// for the 218.200.187.157 capture (a fork sensor, 2026-06-12). In the ORIGINAL
 // capture the operator's read-surface requests returned 200 but the two ACTION
 // requests — GET /credentials and POST /user/update — returned 404. That
 // read-200/write-404 asymmetry is the honeypot tell: it forfeited the capture
@@ -49,7 +49,7 @@ import (
 // Corpus sourcing: the request method/uri/body are read from
 // testdata/admin_chain_218157.json, which is a verbatim projection of the
 // admin-surface requests in
-// honeypot-research/research/218.200.187.157.sensor-fra.jsonl (fields
+// the captured session corpus (fields
 // HTTPMethod→method, RequestURI→uri, Body→body, ResponseStatusCode→
 // captured_status). The method field is present and unambiguous in the jsonl
 // (HTTPMethod), so it is sourced directly — not hardcoded per path. The

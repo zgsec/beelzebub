@@ -11,7 +11,7 @@ Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. T
 - **Fault injection** (`faults/`): grace-period-gated failure simulation.
 - **Novelty scoring** (`noveltydetect/`): per-session novelty distinct from agent classification.
 
-Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Verify the current fork tag via `git -C /home/dev/projects/beelzebub describe --tags` rather than trusting this doc — it has drifted between updates.
+Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Per-sensor deployed tags are tracked in a private operator inventory that does not ship with this repo.
 
 > Refreshed 2026-05-22: re-verified the "dead Go packages" claim that an earlier audit raised — `agentdetect`, `noveltydetect`, `historystore`, `artifactstore`, `bridge`, `lifecycle`, `faults` are ALL live in the wire path. Four are used by per-protocol strategy files (`protocols/strategies/{HTTP,SSH,TELNET,OLLAMA,TCP,MCP}/*.go`); three are imported by `builder/`. Per `go list -deps .`, only `integration_test/` is unreachable from main — and that's the project's E2E test suite (intentional), not dead code.
 
