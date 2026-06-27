@@ -502,7 +502,7 @@ beelzebub/
 
 ## Upstream
 
-This fork is based on [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub). The upstream project provides the core honeypot framework: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. Upstream badges and community links:
+This fork is based on [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub) (formerly `mariocandela/beelzebub`). The upstream project provides the core honeypot framework: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. Upstream badges and community links:
 
 [![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3) [![Go Reference](https://pkg.go.dev/badge/github.com/mariocandela/beelzebub/v3.svg)](https://pkg.go.dev/github.com/mariocandela/beelzebub/v3) [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 

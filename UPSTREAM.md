@@ -1,4 +1,4 @@
-# UPSTREAM.md — relationship to mariocandela/beelzebub
+# UPSTREAM.md — relationship to beelzebub-labs/beelzebub
 
 This is a **research fork** of [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub),
 the low-code honeypot framework created by Mario Candela and now maintained under

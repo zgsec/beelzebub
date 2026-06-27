@@ -78,7 +78,7 @@ Prometheus metrics exposed on `:2112` when enabled in `beelzebub.yaml`.
 
 ## Fork vs upstream
 
-Upstream: `github.com/mariocandela/beelzebub`. We rebase when it makes sense, but fork-specific packages (`agentdetect`, `bridge`, `historystore`, `noveltydetect`, `tracer`, MCP state in `protocols/strategies/MCP/`) and fork-specific service YAMLs (`mcp-8000`, `openai-8001`, `redis-6379`, `tcp-mysql-3306`) do not land upstream. Keep fork and stock service trees distinct — a bad YAML in `services/` only lands on fork sensors.
+Upstream: `github.com/beelzebub-labs/beelzebub` (formerly `mariocandela/beelzebub`, which redirects). We rebase when it makes sense, but fork-specific packages (`agentdetect`, `bridge`, `historystore`, `noveltydetect`, `tracer`, MCP state in `protocols/strategies/MCP/`) and fork-specific service YAMLs (`mcp-8000`, `openai-8001`, `redis-6379`, `tcp-mysql-3306`) do not land upstream. Keep fork and stock service trees distinct — a bad YAML in `services/` only lands on fork sensors.
 
 ## Rules
 
