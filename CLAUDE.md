@@ -2,7 +2,7 @@
 
 ## What this is
 
-Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. This fork adds:
+Our research fork of **[beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub)** — the Go low-code honeypot framework created by Mario Candela, now maintained under the Beelzebub Labs org. This fork adds:
 
 - **Stateful MCP** (`protocols/strategies/MCP/`): per-IP world model, tool-history tracking, tool-chain detection.
 - **Agent detection** (`agentdetect/`): scores every session 0–100 on behavioral signals (MCP handshake shape, mechanical timing, cross-protocol pivots, AI-discovery probes). Wired into every protocol handler.

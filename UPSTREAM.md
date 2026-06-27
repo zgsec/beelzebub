@@ -1,9 +1,10 @@
 # UPSTREAM.md — relationship to mariocandela/beelzebub
 
-This is a **research fork** of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub),
-Mario Candela's low-code honeypot framework. We are grateful for the upstream
-project — it's the foundation everything here builds on — and we aim to be good
-citizens of it.
+This is a **research fork** of [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub),
+the low-code honeypot framework created by Mario Candela and now maintained under
+the **Beelzebub Labs** org (the repo moved from `mariocandela/beelzebub`, which
+still redirects). We are grateful for the upstream project — it's the foundation
+everything here builds on — and we aim to be good citizens of it.
 
 ## Current state
 
@@ -21,8 +22,11 @@ We are running a **stabilize-now, decide-sync-later** posture:
 - We are **not** mechanically merging upstream's 40 ahead-commits into the fork
   right now. The sync/tracking decision is **deliberately deferred** to a focused
   session — this doc exists so that decision starts from facts, not archaeology.
-- We keep the `origin` remote pointed at upstream (`mariocandela/beelzebub`) and
-  `fork` at our copy (`zgsec/beelzebub`), so a sync is always one fetch away.
+- The `origin` remote points at upstream and `fork` at our copy
+  (`zgsec/beelzebub`), so a sync is always one fetch away. Upstream is now
+  `beelzebub-labs/beelzebub`; if your `origin` still reads `mariocandela/...`
+  (it redirects, but update it for clarity):
+  `git remote set-url origin https://github.com/beelzebub-labs/beelzebub.git`
 - We do **not** rewrite public history (no force-push). Hygiene happens forward.
 
 ## Why this matters now
@@ -64,7 +68,7 @@ in the fork.)
 ## When we do sync
 
 ```sh
-git fetch origin                 # upstream = mariocandela/beelzebub
+git fetch origin                 # upstream = beelzebub-labs/beelzebub
 git log --oneline fork/main..origin/main   # review the delta first
 # then a reviewed merge (NOT a blind one) onto a branch, resolve the overlaps above
 ```

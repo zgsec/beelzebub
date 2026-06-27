@@ -1,6 +1,6 @@
 # Beelzebub — AI Agent Research Fork
 
-> **Fork of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub)** — 49 commits, ~16,900 lines of Go across 10 new packages. Transforms Beelzebub from a traditional honeypot into a research platform for studying AI agent behavior in adversarial environments.
+> **Research fork of [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub)** — the low-code honeypot framework created by Mario Candela (Beelzebub Labs). This fork adds ~10 new Go packages that turn Beelzebub into a research platform for studying AI agent behavior in adversarial environments. See [`UPSTREAM.md`](UPSTREAM.md) for the current fork↔upstream relationship.
 
 All additions are backward-compatible. Existing configurations work unchanged — every new feature is opt-in via YAML config.
 
