@@ -17,19 +17,19 @@ import (
 const Workers = 5
 
 type Event struct {
-	DateTime      string
-	RemoteAddr    string
-	Protocol      string
-	Command       string
+	DateTime   string
+	RemoteAddr string
+	Protocol   string
+	Command    string
 	// CommandRaw is a hex-escaped representation of the raw bytes the
 	// attacker sent for binary protocols (Redis RESP, MySQL handshake, etc).
 	// Only populated when the service config sets `binarySafe: true`.
 	// Empty for ASCII protocols. Stored alongside Command (which holds the
 	// protocol-decoded form) so downstream classifiers can reason about the
 	// wire-level protocol class without re-parsing.
-	CommandRaw    string `json:"CommandRaw,omitempty"`
-	CommandOutput string
-	Status        string
+	CommandRaw      string `json:"CommandRaw,omitempty"`
+	CommandOutput   string
+	Status          string
 	Msg             string
 	ID              string
 	Environ         string
@@ -67,6 +67,15 @@ type Event struct {
 	// MCP-specific
 	ToolName      string `json:"ToolName,omitempty"`
 	ToolArguments string `json:"ToolArguments,omitempty"`
+	// MCP initialize handshake (emitted by the AfterInitialize hook, not tool calls).
+	// clientInfo is attacker-controlled; capabilities is the more structural fingerprint.
+	MCPClientName      string `json:"MCPClientName,omitempty"`
+	MCPClientVersion   string `json:"MCPClientVersion,omitempty"`
+	MCPProtocolVersion string `json:"MCPProtocolVersion,omitempty"`
+	MCPCapabilities    string `json:"MCPCapabilities,omitempty"` // JSON-encoded client capabilities
+	// Records the honeypot's own tarpit delay for this event, so net attacker
+	// think-time = delta_ms - injected_delay_ms is recoverable.
+	InjectedDelayMs int64 `json:"InjectedDelayMs,omitempty"`
 
 	// Timing
 	InterEventMs int64 `json:"InterEventMs,omitempty"`

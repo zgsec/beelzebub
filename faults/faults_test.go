@@ -83,12 +83,12 @@ func TestApplyWithSequenceGracePeriod(t *testing.T) {
 	})
 	// Default grace is 3 — calls 1-3 should not fault
 	for seq := 1; seq <= 3; seq++ {
-		_, ft, faulted := fi.ApplyWithSequence(seq)
+		_, ft, faulted, _ := fi.ApplyWithSequence(seq)
 		assert.False(t, faulted, "seq %d should be in grace period", seq)
 		assert.Equal(t, "", ft)
 	}
 	// Call 4 should fault (100% error rate)
-	_, ft, faulted := fi.ApplyWithSequence(4)
+	_, ft, faulted, _ := fi.ApplyWithSequence(4)
 	assert.True(t, faulted)
 	assert.Equal(t, "error", ft)
 }
@@ -101,9 +101,12 @@ func TestApplyWithSequenceDelayDuringGrace(t *testing.T) {
 		DelayJitterMs: 0,
 	})
 	// During grace period: delay still applies, but no error fault
-	_, ft, faulted := fi.ApplyWithSequence(1)
+	_, ft, faulted, delayMs := fi.ApplyWithSequence(1)
 	assert.False(t, faulted)
 	assert.Equal(t, "delay", ft)
+	if delayMs <= 0 {
+		t.Errorf("ApplyWithSequence delayMs = %d, want > 0 when a delay is injected", delayMs)
+	}
 }
 
 func TestApplyWithSequenceCustomGrace(t *testing.T) {
@@ -115,11 +118,11 @@ func TestApplyWithSequenceCustomGrace(t *testing.T) {
 	fi.GraceCalls = 1
 
 	// seq 1 should be in grace
-	_, _, faulted := fi.ApplyWithSequence(1)
+	_, _, faulted, _ := fi.ApplyWithSequence(1)
 	assert.False(t, faulted)
 
 	// seq 2 should fault
-	_, _, faulted = fi.ApplyWithSequence(2)
+	_, _, faulted, _ = fi.ApplyWithSequence(2)
 	assert.True(t, faulted)
 }
 

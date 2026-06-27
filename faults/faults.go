@@ -104,9 +104,10 @@ func (fi *Injector) Apply() (response string, faultType string, faulted bool) {
 // ApplyWithSequence applies fault injection with a grace period.
 // During the grace period (seq <= GraceCalls), error faults are suppressed
 // but delays still apply. After the grace period, behaves like Apply.
-func (fi *Injector) ApplyWithSequence(seq int) (response string, faultType string, faulted bool) {
+// The fourth return value is the actual delay injected in milliseconds (0 if none).
+func (fi *Injector) ApplyWithSequence(seq int) (response string, faultType string, faulted bool, delayMs int64) {
 	if !fi.config.Enabled {
-		return "", "", false
+		return "", "", false, 0
 	}
 
 	hasDelay := fi.HasDelay()
@@ -118,17 +119,19 @@ func (fi *Injector) ApplyWithSequence(seq int) (response string, faultType strin
 	}
 
 	if hasDelay {
-		time.Sleep(fi.Delay())
+		d := fi.Delay()
+		time.Sleep(d)
+		delayMs = d.Milliseconds()
 	}
 
 	if isError && hasDelay {
-		return fi.ErrorResponse(), "error+delay", true
+		return fi.ErrorResponse(), "error+delay", true, delayMs
 	}
 	if isError {
-		return fi.ErrorResponse(), "error", true
+		return fi.ErrorResponse(), "error", true, 0
 	}
 	if hasDelay {
-		return "", "delay", false
+		return "", "delay", false, delayMs
 	}
-	return "", "", false
+	return "", "", false, 0
 }
