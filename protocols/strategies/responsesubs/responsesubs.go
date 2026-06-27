@@ -41,7 +41,7 @@
 //	                               in the `created` field of /v1/chat/completions
 //	                               responses; without this, LLM-generated bodies
 //	                               leak the static prompt-template placeholder
-//	                               (observed 2026-05-23 on sensor-fra/ewr:
+//	                               (observed 2026-05-23 in production:
 //	                               `"created":1710000000` static across all
 //	                               responses, an obvious honeypot fingerprint).
 //	${time.ago.<N><unit>}        — current UTC time minus N units in RFC3339.

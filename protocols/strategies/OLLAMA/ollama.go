@@ -230,7 +230,7 @@ func wrapDegradedTier(originalPrompt string) string {
 // since some clients are whitespace-sensitive on captcha submissions.
 //
 // Discovered 2026-05-23: captcha-bypass operator 5.182.204.221 was receiving
-// 7/8 correct answers from sensor-ewr despite llmjacking_sustained being
+// 7/8 correct answers in production despite llmjacking_sustained being
 // flagged — the wrap-prompt was ineffective against gpt-4.1-mini.
 func mutateForDegradedTier(response string) string {
 	trimmed := strings.TrimSpace(response)

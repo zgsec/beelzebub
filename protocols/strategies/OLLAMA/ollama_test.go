@@ -963,7 +963,7 @@ func TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
 // TestMutateForDegradedTier covers the captcha-defeating post-LLM mutation
 // applied when the calling session is flagged llmjacking_sustained.
 // Discovered 2026-05-23: captcha-bypass operator 5.182.204.221 was
-// receiving 7/8 correct answers from sensor-ewr despite the flag being
+// receiving 7/8 correct answers in production despite the flag being
 // set, because the wrap-prompt approach (wrapDegradedTier) doesn't bind
 // gpt-4.1-mini's behavior. Mutation runs after the LLM call to guarantee
 // wrong-but-plausibly-shaped output.
@@ -1009,7 +1009,7 @@ func TestMutateForDegradedTier(t *testing.T) {
 
 // TestMutateForDegradedTier_DefeatsCaptchaPayloads asserts the mutation
 // produces WRONG answers for every CAPTCHA response shape observed in the
-// 5.182.204.221 captcha-bypass burst on sensor-ewr 2026-05-23.
+// 5.182.204.221 captcha-bypass burst in production 2026-05-23.
 func TestMutateForDegradedTier_DefeatsCaptchaPayloads(t *testing.T) {
 	captures := []struct {
 		challenge string
