@@ -14,7 +14,7 @@ package MCP
 // confirmed_agent fires ONLY on an inst hit.
 //
 // Nonces are deterministic from the session key so the offline detector
-// (agent/lib/honeytoken.py on research-1) derives identical values with no side
+// (our honeytoken detector) derives identical values with no side
 // channel. Determinism is pinned by a cross-language test against the Python core.
 //
 // Directives are BENIGN by construction (read-a-decoy / fetch-a-canary /
