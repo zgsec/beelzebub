@@ -17,7 +17,9 @@ The upstream project is a solid multi-protocol honeypot with LLM-powered respons
 | `faults` | `faults.go` | Per-service fault injection (configurable error rates, delays, jitter) to study agent retry behavior. |
 | `noveltydetect` | `scorer.go`, `store.go` | Fingerprint store + novelty scoring. Tracks commands, credentials, paths, tool sequences, user agents across all sessions. |
 | `historystore` | `history_store.go` | Per-session message history with sequence tracking, retry detection via 16-slot ring buffer. |
-| `shellemulator` | `emulator.go` | 55+ command shell emulator with per-session filesystem overlay, pipe chains, canary token lures. |
+| `artifactstore` | `store.go` | Content-addressable capture of request bodies (uploads, payloads) keyed by SHA-256, each with a sibling `meta.json`. Capture-only — no execution or analysis. |
+| `protocols/strategies/SSH/shellemulator` | `emulator.go`, `llm_shell.go` | LLM-backed interactive shell grounded by a structured world-state prompt (persona, processes, listeners, env vars, lure files), per-session overlays, canary-token seeding, per-category response jitter. |
+| `protocols/strategies/responsesubs` | `responsesubs.go` | Response template substitution — environment variables and time templates (e.g. `${time.now.unix}`) rendered into handler/LLM output. |
 
 ### Enhanced Modules
 
@@ -117,28 +119,21 @@ Tool calls mutate this state. `iam.manage` can list, deactivate, or modify users
 
 ## Shell Emulator
 
-The SSH protocol handler includes a high-fidelity shell emulator (`shellemulator/`) with 55+ commands:
+The SSH protocol handler delegates command responses to an LLM-backed shell (`protocols/strategies/SSH/shellemulator/`). Rather than hardcoding command output, the emulator builds a structured **world-state prompt** that grounds the LLM in a consistent host persona, so responses stay coherent across a session.
 
-**Identity/System**: `whoami`, `id`, `hostname`, `uname`, `uptime`, `w`, `who`, `last`, `date`
-**Filesystem**: `pwd`, `cd`, `ls`, `cat`, `find`, `file`, `df`, `mount`, `du`, `stat`, `wc`, `head`, `tail`, `rm`, `mkdir`, `touch`, `cp`
-**Network**: `ifconfig`, `ip`, `netstat`, `ss`, `ping`, `dig`, `nslookup`
-**Process**: `ps`, `free`, `top`, `docker`, `systemctl`, `service`, `lsof`, `kill`
-**Credential lures**: `env`, `printenv`, `history`, `set`
-**Utility**: `echo`, `which`, `type`, `grep`, `export`, `alias`
+**World state** (`BuildPromptContext`): hostname, kernel, OS, IP, configured processes (for `ps`/`top`), listening ports (for `netstat`/`ss`), environment variables, seeded users, and lure files are serialized into the system prompt. The persona is configured in YAML and merged over a default persona.
 
-**Session state**: Per-connection filesystem overlay (files written/deleted persist within session), working directory tracking, PID offsets.
+**Session state**: each connection carries a per-session overlay (`FileOverlay`, `DirOverlay`, `Deleted`) so files written or removed during a session persist for that session, plus a command counter and working-directory tracking.
 
-**Command chaining**: Supports `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 | cmd2`, subshell expansion `$(cmd)`, and redirects `>` / `>>`.
+**Canary tokens**: environment variables and lure file contents (`AWS_ACCESS_KEY_ID`, `DB_PASSWORD`, etc.) are seeded from configured token values at startup. When an agent exfiltrates and later uses one externally, the canary fires.
 
-**Canary tokens**: Environment variables (`AWS_ACCESS_KEY_ID`, `DB_PASSWORD`, etc.) are seeded from per-sensor env vars. Commands like `env`, `cat .bash_history`, and `cat /var/log/syslog` return these tokens. When an agent exfiltrates and uses them externally, the canary fires.
-
-**Jitter**: Configurable per-category response delays to defeat timing-based honeypot detection:
+**Jitter**: optional per-category response delays to blunt timing-based honeypot detection. Categories are `identity`, `memory`, `fs`, and `network`; each is a `[min, max]` millisecond range (omit to use defaults):
 ```yaml
-jitterRanges:
-  identity: [1, 5]     # ms — whoami, id, hostname
-  memory:   [2, 10]    # ms — free, ps, docker
-  fs:       [3, 25]    # ms — ls, cat, find
-  network:  [5, 30]    # ms — curl, dig, ping
+jitter:
+  identity: [1, 5]     # ms
+  memory:   [2, 10]    # ms
+  fs:       [3, 25]    # ms
+  network:  [5, 30]    # ms
 ```
 
 ---
@@ -151,7 +146,11 @@ HTTP client fingerprinting based on the JA4 standard. Computed from HTTP method,
 
 ### HASSH (SSH)
 
-SSH client fingerprinting from the `SSH_MSG_KEXINIT` packet. Extracts key exchange algorithms, encryption, MAC, and compression offers. Returns an MD5 hash for client identification. Emitted as `HASSH` on SSH session start.
+SSH client fingerprinting from the `SSH_MSG_KEXINIT` packet. Extracts key exchange algorithms, encryption, MAC, and compression offers. Returns an MD5 hash for client identification. Emitted as `HASSH` on SSH session start, with the raw algorithm lists preserved in `HASSHAlgorithms`.
+
+### JA4 (TLS)
+
+TLS client fingerprinting from the ClientHello, following the JA4 standard. Emitted as `JA4` when a TLS handshake is observed.
 
 ### TeeConn
 
@@ -219,7 +218,18 @@ The fork adds 20+ fields to the `tracer.Event` struct. All are `json:",omitempty
 | `JA4H` | string | HTTP client fingerprint |
 | `HeaderOrder` | string | Wire-order header names |
 | `HASSH` | string | SSH client fingerprint |
+| `HASSHAlgorithms` | string | Raw SSH KEX algorithm lists behind the HASSH hash |
+| `JA4` | string | TLS ClientHello fingerprint |
 | `ResponseBytes` | int64 | HTTP response body size |
+
+### Artifact / Body Capture (opt-in per service)
+| Field | Type | Description |
+|---|---|---|
+| `RequestBody` | string | Captured request body (opt-in, truncated) |
+| `ResponseBody` | string | Captured response body (opt-in, truncated) |
+| `RequestBodySha256` | string | SHA-256 of the full request body (forensic identity) |
+| `ResponseBodySha256` | string | SHA-256 of the full response body |
+| `RequestBodyParts` | array | Parsed multipart parts of a request body |
 
 ---
 
@@ -274,7 +284,7 @@ plugin:
   openAISecretKey: "sk-proj-..."
 shellEmulator:
   enabled: true
-  jitterRanges:
+  jitter:
     identity: [1, 5]
     memory: [2, 10]
     fs: [3, 25]
@@ -443,9 +453,8 @@ helm install beelzebub ./beelzebub-chart
 ```bash
 # Unit tests
 go test ./...
-
-# With verbose output
-go test -v ./...
+make test.unit                 # equivalent Make target
+make test.unit.verbose         # with -v
 
 # Integration tests (require RabbitMQ)
 make test.dependencies.start
@@ -461,12 +470,13 @@ make test.dependencies.down
 beelzebub/
 ├── main.go                           # Entry point (flags, parser, builder, run)
 ├── agentdetect/                      # Agent classification engine
+├── artifactstore/                    # Content-addressable request-body/artifact capture
 ├── bridge/                           # Cross-protocol credential tracking
 ├── builder/                          # Builder pattern for service init
 ├── configurations/
 │   ├── beelzebub.yaml                # Core config
-│   ├── services/                     # Production service configs
-│   ├── prod-configs/                 # Per-sensor overrides
+│   ├── services/                     # Service configs
+│   ├── prod-configs/                 # Deployment-specific config overlays
 │   └── test-services/                # Test configs
 ├── faults/                           # Fault injection (errors, delays, jitter)
 ├── historystore/                     # Per-session history + retry detection
@@ -482,15 +492,18 @@ beelzebub/
 │       │   └── state.go              # Per-IP world model
 │       ├── SSH/
 │       │   ├── ssh.go                # SSH handler
-│       │   └── shellemulator/        # 55+ command shell emulator
+│       │   └── shellemulator/        # LLM-backed shell + world-state prompt
 │       ├── TCP/                      # Banner + interactive TCP
 │       ├── TELNET/                   # TELNET with IAC negotiation
-│       └── OLLAMA/                   # Ollama/OpenAI API honeypot
+│       ├── OLLAMA/                   # Ollama/OpenAI API honeypot
+│       └── responsesubs/             # Response template substitution
 ├── tracer/
 │   ├── tracer.go                     # Event tracing (5 async workers)
 │   ├── timing.go                     # Inter-event timing cache
 │   ├── ja4h.go                       # JA4H HTTP fingerprinting
+│   ├── ja4.go                        # JA4 TLS fingerprinting
 │   ├── hassh.go                      # HASSH SSH fingerprinting
+│   ├── multipart.go                  # Multipart request-body parsing
 │   └── teeconn.go                    # Wire-capture net.Conn wrapper
 ├── Dockerfile                        # Multi-stage scratch image
 ├── docker-compose.yml
@@ -500,9 +513,13 @@ beelzebub/
 
 ---
 
+## Contributing & Upstream
+
+This is a research fork. For how it relates to — and stays a good citizen of — the upstream project, see [`UPSTREAM.md`](UPSTREAM.md). Contribution guidelines and the code of conduct are inherited from upstream: see [`CONTRIBUTING.md`](CONTRIBUTING.md). Where an addition here is genuinely general-purpose, we aim to offer it back to upstream as a clean, standalone PR rather than carrying it indefinitely in the fork.
+
 ## Upstream
 
-This fork is based on [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub) (formerly `mariocandela/beelzebub`). The upstream project provides the core honeypot framework: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. Upstream badges and community links:
+This fork is based on [beelzebub-labs/beelzebub](https://github.com/beelzebub-labs/beelzebub) (formerly `mariocandela/beelzebub`), created by Mario Candela. The upstream project provides the core honeypot framework this fork builds on: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. Upstream badges and community links:
 
 [![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3) [![Go Reference](https://pkg.go.dev/badge/github.com/mariocandela/beelzebub/v3.svg)](https://pkg.go.dev/github.com/mariocandela/beelzebub/v3) [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
 
