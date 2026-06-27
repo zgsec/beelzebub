@@ -2,7 +2,7 @@
 import subprocess
 from pathlib import Path
 
-REPO = Path("/home/dev/projects/beelzebub")
+REPO = Path(__file__).resolve().parents[1]
 RENDERED = REPO / "out/crestfield-data-systems/placeholder/persona/lures/mcp-8000.yaml"
 
 def _render():

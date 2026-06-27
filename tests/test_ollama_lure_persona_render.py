@@ -2,7 +2,7 @@
 import subprocess
 from pathlib import Path
 
-REPO = Path("/home/dev/projects/beelzebub")
+REPO = Path(__file__).resolve().parents[1]
 RENDERED = REPO / "out/crestfield-data-systems/placeholder/persona/lures/ollama-11434.yaml"
 BASE_SRC = REPO / "configurations/services/ollama-11434.yaml"
 OVERLAY_SRC = REPO / "personas/crestfield-data-systems/lures/ollama-11434.yaml"
