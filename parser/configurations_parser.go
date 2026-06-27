@@ -447,7 +447,7 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 		// would only get substituted in code paths that explicitly call
 		// os.ExpandEnv (e.g. SSH/shellemulator/defaults.go) — leaving HTTP/
 		// MCP response bodies serving the LITERAL ${VAR} string to attackers,
-		// which is the lure burn observed on sensor-fra 2026-05-23 for
+		// which is the lure burn observed in production 2026-05-23 for
 		// ${HTTP_CANARY_WEB_BUG}.
 		//
 		// Scoped to ${UPPER_CASE_VAR} via envVarRefRegex so the lowercase
@@ -465,7 +465,7 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 		}
 
 		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
-		// Discovered when sensor-fra served literal "${HTTP_CANARY_WEB_BUG}"
+		// Discovered when a fork sensor served literal "${HTTP_CANARY_WEB_BUG}"
 		// in 374+ Open WebUI responses since 2026-05-19. Runs after the
 		// substitution above so it sees only the UNRESOLVED literals.
 		warnMissingEnvVars(filePath, buf)
