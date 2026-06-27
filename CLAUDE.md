@@ -11,7 +11,7 @@ Our fork of **mariocandela/beelzebub** — the Go low-code honeypot framework. T
 - **Fault injection** (`faults/`): grace-period-gated failure simulation.
 - **Novelty scoring** (`noveltydetect/`): per-session novelty distinct from agent classification.
 
-Deployed on a subset of fork sensors (see private operator inventory). Other sensors run stock upstream — do not confuse the two deployments. Current tag: `v3.6.7`.
+Deployed on a subset of fork sensors; other sensors run stock upstream — do not confuse the two deployments. Per-sensor deployed tags are tracked in a private operator inventory that does not ship with this repo. See [`UPSTREAM.md`](UPSTREAM.md) for the fork's relationship to upstream.
 
 ## Layout
 
@@ -50,7 +50,7 @@ beelzebub-chart/              # Helm chart
 logs/                         # Runtime test logs (gitignored / not authoritative)
 ```
 
-Note: root also holds committed binary artifacts (`beelzebub`, `beelzebub-fork`, `beelzebub-fra`, `beelzebub-test`, `collector`) — these are build outputs, not source. Prefer `make` / `go build` over assuming they're fresh.
+Note: build outputs (the `beelzebub` binary, `collector`, etc.) are **gitignored, not committed** — run `make` / `go build` to produce them fresh.
 
 ## Build / run / test
 

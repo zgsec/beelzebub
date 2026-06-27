@@ -1,0 +1,70 @@
+# UPSTREAM.md — relationship to mariocandela/beelzebub
+
+This is a **research fork** of [mariocandela/beelzebub](https://github.com/mariocandela/beelzebub),
+Mario Candela's low-code honeypot framework. We are grateful for the upstream
+project — it's the foundation everything here builds on — and we aim to be good
+citizens of it.
+
+## Current state
+
+- Forked around **`v3.6.5`**; `fork/main` is currently **~229 commits ahead** of
+  upstream `main` and **~40 commits behind** it.
+- Our additions are listed in the top of `README.md` / `CLAUDE.md` (agent
+  detection, stateful MCP, cross-protocol bridge, fingerprint capture, fault
+  injection, novelty scoring). They are designed to be **opt-in** and
+  **backward-compatible** with upstream configs.
+
+## Posture (as of 2026-06)
+
+We are running a **stabilize-now, decide-sync-later** posture:
+
+- We are **not** mechanically merging upstream's 40 ahead-commits into the fork
+  right now. The sync/tracking decision is **deliberately deferred** to a focused
+  session — this doc exists so that decision starts from facts, not archaeology.
+- We keep the `origin` remote pointed at upstream (`mariocandela/beelzebub`) and
+  `fork` at our copy (`zgsec/beelzebub`), so a sync is always one fetch away.
+- We do **not** rewrite public history (no force-push). Hygiene happens forward.
+
+## Why this matters now
+
+We expect to **collaborate with Beelzebub directly**. That raises the bar on this
+fork: it should read as a respectful, accurately-attributed extension of upstream,
+not a private playground. Concretely:
+
+- Keep commit messages and comments professional and free of internal infra
+  identifiers (see the OPSEC hygiene pass, `chore(opsec)` commits).
+- Frame our work as *additions to* a solid upstream, never as criticism of it.
+- Keep our additions self-contained enough that the genuinely-general ones could
+  be offered back as clean, standalone PRs.
+
+## Upstream commits worth reconciling when we revisit sync
+
+Most of upstream's lead is dependabot dependency bumps. The substantive ones:
+
+| Upstream PR | What it is | Note for us |
+|---|---|---|
+| #320 | `feat(tcp)`: preserve raw client bytes in trace events | **Overlaps our `fix/tcp-preserve-raw-binary-bytes`** — reconcile (likely retire ours in favor of upstream's). |
+| #300 | `feat`: `validate` flag to statically check config files | Useful; adopt rather than reinvent. |
+| #306 | `fix`: prevent goroutine + ticker leak in `HistoryCleaner` | Check our `historystore/` for the same class of leak. |
+| #323 | `feat`: `ServicePlugin` for background plugins at boot | May overlap our `plugins/` integration points. |
+| #305 | `feat`: improve cloud plugin | Review for conflicts with our plugin changes. |
+
+## Candidates to contribute upstream (potential, not committed)
+
+To be proposed humbly and only where genuinely general-purpose — not the
+research-specific or OPSEC-coupled pieces:
+
+- Network-fingerprint capture in `tracer/` (JA4H wire-order, HASSH) — general
+  honeypot value, independent of our research stack.
+- The `TeeConn` raw-byte `net.Conn` wrapper pattern.
+
+(Anything tied to our private sensor fleet, personas, or research pipeline stays
+in the fork.)
+
+## When we do sync
+
+```sh
+git fetch origin                 # upstream = mariocandela/beelzebub
+git log --oneline fork/main..origin/main   # review the delta first
+# then a reviewed merge (NOT a blind one) onto a branch, resolve the overlaps above
+```
