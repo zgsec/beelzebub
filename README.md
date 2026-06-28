@@ -179,12 +179,12 @@ The MCP handler builds a **per-IP world model** from a YAML seed. Each connectin
 worldSeed:
   users:
     - id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-      email: "admin@crestfielddata.io"
+      email: "admin@example.com"
       role: "platform-admin"
       lastLogin: "${time.ago.3d}"      # baked to a concrete RFC3339 value at world creation
   resources:
     aws_access_key_id: "AKIAIOSFODNN7EXAMPLE"   # AWS's public example key
-    db_primary: "postgresql://crestfield_app:s3cret@db.internal:5432/crestfield"
+    db_primary: "postgresql://app_user:REDACTED@db.example:5432/appdb"
   logs:
     - ts: "${time.ago.2d}"
       level: "error"
@@ -368,7 +368,7 @@ Stateful honeypot with a per-IP world model, tool-call handling, fault injection
 apiVersion: "v1"
 protocol: "mcp"
 address: ":8000"
-description: "Crestfield Platform v3.12.1"
+description: "Example Platform v3.12.1"
 worldSeed:
   users: [...]
   resources: { aws_access_key_id: "...", db_primary: "..." }

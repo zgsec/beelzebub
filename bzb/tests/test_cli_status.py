@@ -15,12 +15,12 @@ def _mock_resp(sensors):
 
 
 SAMPLE_SENSORS = [
-    {"sensor_id": "fra-01", "persona_slug": "crestfield-data-systems",
+    {"sensor_id": "fra-01", "persona_slug": "example",
      "liveness_status": "healthy",
      "last_session_first_seen": "2026-05-05T22:00:00Z",
      "last_attestation_status": "match",
      "last_image_digest": "sha256:abc123def456"},
-    {"sensor_id": "ewr-01", "persona_slug": "crestfield-data-systems",
+    {"sensor_id": "ewr-01", "persona_slug": "example",
      "liveness_status": "stale_data",
      "last_session_first_seen": "2026-05-04T10:00:00Z",
      "last_attestation_status": "match",

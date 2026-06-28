@@ -1149,7 +1149,6 @@ func (mcpStrategy *MCPStrategy) handleHTTPFallback(
 	// wire but never persisted it to the tracer event, leaving
 	// sessions.response_summary null in PG even when captureResponseBody:true
 	// was set in the service config.
-	// See: vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §0.
 	if servConf.CaptureResponseBody {
 		maxBytes := servConf.ResponseBodyMaxBytes
 		if maxBytes <= 0 {

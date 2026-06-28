@@ -25,7 +25,6 @@ func (c *captureTracer) TraceEvent(e tracer.Event) {
 
 // TestMCP_HTTPFallback_ResponseBody_OptIn verifies the response-capture
 // wiring added 2026-05-18 (closes the gap documented in
-// vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §0).
 //
 // Before the patch: HTTP-fallback handlers under MCP-protocol services
 // (the 38-route mcp-8000.yaml architecture)

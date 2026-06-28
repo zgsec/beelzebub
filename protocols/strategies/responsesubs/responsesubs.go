@@ -3,7 +3,7 @@
 // header values).
 //
 // Why a shared package:
-// The HTTP strategy historically owned this rewrite, but Crestfield's
+// The HTTP strategy historically owned this rewrite, but a persona's
 // MCP-on-port-8000 deployment exposed a wire-format gap — the MCP HTTP
 // fallback path emits matchedCommand.Handler verbatim, so any
 // ${request.uuid_short} placeholder authored in a YAML lure would land
