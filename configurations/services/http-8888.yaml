@@ -111,7 +111,7 @@ commands:
   # 7. GET /api/models — Lists models from connected Ollama (cross-port coherence)
   - regex: "^/api/models$"
     handler: |
-      {"models":[{"id":"phi:2.7b","name":"phi:2.7b","object":"model","created":1739214000,"owned_by":"ollama","ollama":{"name":"phi:2.7b","model":"phi:2.7b","size":1700000000,"digest":"a1b2c3d4e5f6","details":{"parameter_size":"2.7B","quantization_level":"Q4_0"}}},{"id":"nomic-embed-text","name":"nomic-embed-text","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"nomic-embed-text","model":"nomic-embed-text","size":274000000,"digest":"7850acbc7150","details":{"parameter_size":"137M","quantization_level":"F16"}}},{"id":"cdf-embed-v1","name":"cdf-embed-v1","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"cdf-embed-v1","model":"cdf-embed-v1","size":274000000,"digest":"d4e5f6a7b8c9","details":{"parameter_size":"137M","quantization_level":"F16"}}}]}
+      {"models":[{"id":"phi:2.7b","name":"phi:2.7b","object":"model","created":1739214000,"owned_by":"ollama","ollama":{"name":"phi:2.7b","model":"phi:2.7b","size":1700000000,"digest":"a1b2c3d4e5f6","details":{"parameter_size":"2.7B","quantization_level":"Q4_0"}}},{"id":"nomic-embed-text","name":"nomic-embed-text","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"nomic-embed-text","model":"nomic-embed-text","size":274000000,"digest":"7850acbc7150","details":{"parameter_size":"137M","quantization_level":"F16"}}},{"id":"team-embed-v1","name":"team-embed-v1","object":"model","created":1738076520,"owned_by":"ollama","ollama":{"name":"team-embed-v1","model":"team-embed-v1","size":274000000,"digest":"d4e5f6a7b8c9","details":{"parameter_size":"137M","quantization_level":"F16"}}}]}
     headers:
       - "Content-Type: application/json"
       - "Server: uvicorn"
@@ -196,7 +196,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"mcpServers":{"{{ persona.lure_content.service_name | default("platform") }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
+    handler: '{"mcpServers":{"{{ persona.lure_content.service_name | default("platform") }}-platform":{"url":"http://localhost:8000/mcp","transport":"streamable-http","description":"{{ persona.lure_content.platform_display_name | default(persona.display_name) }} {{ persona.coherence.world.product.platform_version | default("v2.4.0-rc1") }} — IAM, logging, config store for the service mesh","capabilities":["tools","resources"],"alternateTransport":{"url":"http://localhost:8000/sse","transport":"sse"}}}}'
 
   # Root-level /sse — scanners check this first for MCP SSE transport
   - regex: "^/sse$"
@@ -282,7 +282,7 @@ commands:
       - "Content-Type: application/json"
       - "Server: uvicorn"
     statusCode: 200
-    handler: '{"schema_version":"v1","name_for_model":"open_webui_chat","description_for_model":"Open WebUI chat interface connected to Ollama. Models: phi:2.7b, nomic-embed-text, cdf-embed-v1. Chat API at /api/chat. Model list at /api/models. Chat history at /api/v1/chats/list. Auth: signup at /api/v1/auths/signup, signin at /api/v1/auths/signin.","auth":{"type":"none"},"api":{"type":"openapi","url":"/api"}}'
+    handler: '{"schema_version":"v1","name_for_model":"open_webui_chat","description_for_model":"Open WebUI chat interface connected to Ollama. Models: phi:2.7b, nomic-embed-text, team-embed-v1. Chat API at /api/chat. Model list at /api/models. Chat history at /api/v1/chats/list. Auth: signup at /api/v1/auths/signup, signin at /api/v1/auths/signin.","auth":{"type":"none"},"api":{"type":"openapi","url":"/api"}}'
 
   # LLM-readable site info
   - regex: "^/llms\\.txt$"
@@ -297,11 +297,11 @@ commands:
       ## Connected Models (via Ollama)
       - phi:2.7b (2.7B params, Q4_0, loaded)
       - nomic-embed-text (137M params, F16, embedding)
-      - cdf-embed-v1 (137M params, F16, custom embedding)
+      - team-embed-v1 (137M params, F16, custom embedding)
 
       ## Connected MCP Servers
-      - {{ persona.lure_content.platform_display_name | default(persona.display_name) }} v3.12.1-rc1 at localhost:8000 (POST /mcp or GET /sse)
-        Tools: cdf/iam.manage, cdf/logs.query, cdf/configstore.kv
+      - {{ persona.lure_content.platform_display_name | default(persona.display_name) }} {{ persona.coherence.world.product.platform_version | default("v2.4.0-rc1") }} at localhost:8000 (POST /mcp or GET /sse)
+        Tools: {{ persona.lure_content.service_name | default("platform") }}/iam.manage, {{ persona.lure_content.service_name | default("platform") }}/logs.query, {{ persona.lure_content.service_name | default("platform") }}/configstore.kv
       - Open WebUI MCP bridge at localhost:8888/mcp/sse
 
       ## API Access
