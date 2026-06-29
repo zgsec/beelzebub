@@ -645,7 +645,7 @@ commands:
 
   - regex: "^(?i)GET\\s+config:app$"
     replyFormat: "redis-bulk"
-    handler: "{\"version\":\"v3.12.1-rc1\",\"env\":\"production\",\"mcp_endpoint\":\"http://localhost:8000/mcp\"}"
+    handler: "{\"version\":\"{{ persona.coherence.world.product.platform_version | default('v2.4.0-rc1') }}\",\"env\":\"production\",\"mcp_endpoint\":\"http://localhost:8000/mcp\"}"
 
   # ---------------------------------------------------------------------------
   # Persistence / dropper-campaign coverage: SAVE/BGSAVE/LASTSAVE
