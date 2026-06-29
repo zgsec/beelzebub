@@ -40,12 +40,24 @@ def load_bundle(root: Path) -> Bundle:
             f"canaries.persona ({canaries.persona}) != persona.slug ({persona.slug})"
         )
 
+    # Render node templates through Jinja (persona context) before parsing —
+    # node files reference persona.coherence.world.* (e.g. world.instance.node.*)
+    # so per-instance identity (mac/ip/pids/rss) diverges per persona instead of
+    # shipping byte-identical. Lures already render this way; nodes must too.
+    # See persona-rotation remediation tells #2 / #53. Local import avoids any
+    # render<-models import-order coupling.
+    from bzb.render.jinja_env import make_env
+
+    _node_env = make_env()
+    _node_ctx = {"persona": persona.model_dump(mode="json")}
+
     nodes: dict[str, Node] = {}
     for ref in persona.nodes:
         node_path = root / "nodes" / f"{ref.id}.yaml"
         if not node_path.is_file():
             raise FileNotFoundError(f"nodes/{ref.id}.yaml not found")
-        node = Node.model_validate(yaml.safe_load(node_path.read_text()))
+        _node_text = _node_env.from_string(node_path.read_text()).render(**_node_ctx)
+        node = Node.model_validate(yaml.safe_load(_node_text))
         if node.node_id != ref.id:
             raise ValueError(
                 f"nodes/{ref.id}.yaml has node_id={node.node_id}, expected {ref.id}"
