@@ -15,7 +15,7 @@ type noopTracer struct{}
 
 func (noopTracer) TraceEvent(tracer.Event) {}
 
-// TestMCP_HTTPFallback_AppliesResponseSubstitutions — Crestfield's
+// TestMCP_HTTPFallback_AppliesResponseSubstitutions — a persona's
 // MCP-on-port-8000 deployment exercised the wire-format gap that
 // motivates the responsesubs package. A YAML lure authoring
 // "${request.uuid_short}" in matchedCommand.Handler must NOT emit the

@@ -11,7 +11,7 @@ def test_teardown_runs_compose_down():
     completed = MagicMock(returncode=0, stdout="", stderr="")
     with patch("subprocess.run", return_value=completed) as mock_run:
         result = runner.invoke(cli, [
-            "teardown", "crestfield-data-systems", "fra-01",
+            "teardown", "example", "fra-01",
             "--target", "host.example",
         ])
     assert result.exit_code == 0, result.output
@@ -27,7 +27,7 @@ def test_teardown_purge_uses_volumes_flag():
     completed = MagicMock(returncode=0, stdout="", stderr="")
     with patch("subprocess.run", return_value=completed) as mock_run:
         result = runner.invoke(cli, [
-            "teardown", "crestfield-data-systems", "fra-01",
+            "teardown", "example", "fra-01",
             "--target", "host.example",
             "--purge",
         ])

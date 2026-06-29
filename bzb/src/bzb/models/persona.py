@@ -37,7 +37,6 @@ class Coherence(BaseModel):
     # Jinja and the field set stops churning), replace `extra="allow"`
     # with a typed `World` BaseModel.
     #
-    # See: vault/architecture/2026-05-18-crestfield-disney-cohesion-plan.md §1
     model_config = ConfigDict(extra="allow", frozen=False)
 
     hosts_file_template: str

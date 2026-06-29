@@ -8,7 +8,7 @@ import (
 )
 
 // TestOllama_LLMOfflineResponse_AppliesResponseSubstitutions — YAML-authored
-// llmOfflineResponse bodies (BlueSpark's litellm/vllm/ollama lures) must get
+// llmOfflineResponse bodies (a persona's litellm/vllm/ollama lures) must get
 // per-request placeholder substitution; otherwise a "${request.uuid_short}"
 // in the configured fallback body would leak as a literal string on the
 // wire. Mirrors the fix wired into MCP / TCP / TELNET.

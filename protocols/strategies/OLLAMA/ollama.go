@@ -160,7 +160,7 @@ func isEmbeddingModel(name string) bool {
 // ollamaLLMOfflineResponse returns the (status, body) pair to emit when the LLM
 // path produced no usable response (missing API key, ExecuteModel error,
 // rate limit, or empty template fallback). When the lure has llmOfflineResponse
-// configured, those values win verbatim — letting BlueSpark's litellm /
+// configured, those values win verbatim — letting a persona's litellm /
 // vllm / ollama lures all emit vendor-shaped JSON envelopes. When unset,
 // preserves the legacy Ollama-shaped CUDA-OOM body for backward compat
 // with every existing OLLAMA lure that doesn't opt in.

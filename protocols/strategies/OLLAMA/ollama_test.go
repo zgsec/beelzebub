@@ -781,8 +781,8 @@ func TestHandleTags_ModifiedAtIsRFC3339AndRecent(t *testing.T) {
 	}
 	s.SetPersona(&parser.Persona{
 		SchemaVersion: 1,
-		Slug:          "bluespark-labs",
-		DisplayName:   "BlueSpark Labs",
+		Slug:          "example",
+		DisplayName:   "Example Labs",
 		Coherence: parser.PersonaCoherence{
 			Timezone: "Asia/Singapore",
 		},
@@ -916,7 +916,7 @@ func TestOllama_LLMOfflineResponse_BackwardCompatCUDABody(t *testing.T) {
 }
 
 // TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides — when the lure has
-// llmOfflineResponse configured (e.g. BlueSpark's ollama-11434 lure), the
+// llmOfflineResponse configured (e.g. a persona's ollama-11434 lure), the
 // configured envelope wins verbatim. The model parameter is ignored
 // because the configured body is taken as-is from YAML.
 func TestOllama_LLMOfflineResponse_PersonaShapedBodyOverrides(t *testing.T) {
