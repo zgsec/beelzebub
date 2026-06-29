@@ -49,6 +49,14 @@
 //	                               h (hours), d (days). Integer count only.
 //	                               Example: ${time.ago.3h} → 3 hours ago.
 //	                               Unknown units are left untouched.
+//	${time.since.<epoch>}        — integer seconds since a unix epoch (now-epoch,
+//	                               clamped ≥0). Drives advancing "seconds since
+//	                               boot" fields (redis uptime_in_seconds) so a
+//	                               re-probe never sees a frozen uptime.
+//	${counter.<b>.<n>.<d>.<e>}   — monotonic counter b+(now-e)*n/d (int64). Stats
+//	                               like total_commands_processed advance linearly
+//	                               from the same boot epoch <e> as uptime, staying
+//	                               internally consistent and never frozen. d≠0.
 //
 // Safety contract:
 //
@@ -87,6 +95,20 @@ var timeAgoRE = regexp.MustCompile(`\$\{time\.ago\.(\d+)([smhd])\}`)
 // expires_at, cert renewal cutoffs) so they roll forward with wall-clock
 // time instead of being frozen ISO literals that drift stale.
 var timeInRE = regexp.MustCompile(`\$\{time\.in\.(\d+)([smhd])\}`)
+
+// timeSinceRE matches ${time.since.<epoch>} → integer seconds elapsed since the
+// given unix epoch (now-epoch, clamped at 0). Drives "seconds since boot" fields
+// (redis uptime_in_seconds, process uptime) that must ADVANCE on every probe
+// instead of being frozen at render time — re-probing a frozen uptime is a
+// honeypot tell. Epoch is the persona's per-instance boot epoch.
+var timeSinceRE = regexp.MustCompile(`\$\{time\.since\.(\d+)\}`)
+
+// counterRE matches ${counter.<base>.<num>.<den>.<epoch>} → a monotonic counter
+// base + (now-epoch)*num/den (integer arithmetic), so stats like
+// total_commands_processed / keyspace_hits advance linearly from the same boot
+// epoch as uptime, staying internally consistent (e.g. cmds == 4×uptime) while
+// never frozen. den must be non-zero; all fields are integers (no float parse).
+var counterRE = regexp.MustCompile(`\$\{counter\.(\d+)\.(\d+)\.(\d+)\.(\d+)\}`)
 
 // replaceTimeAgo / replaceTimeIn share their unit parsing. Unknown unit
 // letters are left untouched so mistyped placeholders are visible in test
@@ -135,6 +157,47 @@ func replaceTimeIn(match string) string {
 		return match
 	}
 	return time.Now().UTC().Add(d).Format(time.RFC3339)
+}
+
+// replaceTimeSince resolves ${time.since.<epoch>} to (now - epoch) seconds,
+// clamped at 0 so a future/misconfigured epoch never emits a negative uptime.
+func replaceTimeSince(match string) string {
+	m := timeSinceRE.FindStringSubmatch(match)
+	if m == nil {
+		return match
+	}
+	epoch, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return match
+	}
+	elapsed := time.Now().Unix() - epoch
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return strconv.FormatInt(elapsed, 10)
+}
+
+// replaceCounter resolves ${counter.<base>.<num>.<den>.<epoch>} to
+// base + (now-epoch)*num/den using int64 arithmetic. Elapsed is clamped at 0;
+// den==0 (or any parse failure) leaves the token untouched so the mistake is
+// visible in test traffic rather than emitting a bogus number.
+func replaceCounter(match string) string {
+	m := counterRE.FindStringSubmatch(match)
+	if m == nil {
+		return match
+	}
+	base, e1 := strconv.ParseInt(m[1], 10, 64)
+	num, e2 := strconv.ParseInt(m[2], 10, 64)
+	den, e3 := strconv.ParseInt(m[3], 10, 64)
+	epoch, e4 := strconv.ParseInt(m[4], 10, 64)
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || den == 0 {
+		return match
+	}
+	elapsed := time.Now().Unix() - epoch
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return strconv.FormatInt(base+elapsed*num/den, 10)
 }
 
 // Apply rewrites ${request.*}, ${session.*}, and ${captured.*}
@@ -214,6 +277,12 @@ func applyTime(s string) string {
 	}
 	if strings.Contains(s, "${time.in.") {
 		s = timeInRE.ReplaceAllStringFunc(s, replaceTimeIn)
+	}
+	if strings.Contains(s, "${time.since.") {
+		s = timeSinceRE.ReplaceAllStringFunc(s, replaceTimeSince)
+	}
+	if strings.Contains(s, "${counter.") {
+		s = counterRE.ReplaceAllStringFunc(s, replaceCounter)
 	}
 	return s
 }

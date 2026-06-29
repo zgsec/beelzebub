@@ -2,6 +2,7 @@ package responsesubs
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,51 @@ func TestApply_VariesAcrossInvocations(t *testing.T) {
 		}
 		seen[body] = struct{}{}
 	}
+}
+
+// TestApply_TimeSince — ${time.since.<epoch>} emits integer seconds elapsed,
+// clamped at 0 for a future epoch. Drives redis uptime_in_seconds so it never
+// reads frozen across probes.
+func TestApply_TimeSince(t *testing.T) {
+	epoch := time.Now().Unix() - 1000
+	body, _ := Apply("${time.since."+strconv.FormatInt(epoch, 10)+"}", nil, nil, nil)
+	got, err := strconv.Atoi(body)
+	if err != nil {
+		t.Fatalf("time.since did not resolve to an int: %q (%v)", body, err)
+	}
+	if got < 998 || got > 1002 {
+		t.Errorf("time.since = %d, want ~1000", got)
+	}
+	future := strconv.FormatInt(time.Now().Unix()+5000, 10)
+	if fb, _ := Apply("${time.since."+future+"}", nil, nil, nil); fb != "0" {
+		t.Errorf("time.since future epoch = %q, want 0 (clamped)", fb)
+	}
+}
+
+// TestApply_Counter — ${counter.<base>.<num>.<den>.<epoch>} emits
+// base+(now-epoch)*num/den; integer division; a den==0 token is left untouched
+// so the authoring mistake is visible instead of emitting a bogus number.
+func TestApply_Counter(t *testing.T) {
+	e := strconv.FormatInt(time.Now().Unix()-1000, 10)
+	// base 100, 4/sec over ~1000s -> ~4100
+	if got, err := strconv.Atoi(mustApply(t, "${counter.100.4.1."+e+"}")); err != nil {
+		t.Fatalf("counter not an int: %v", err)
+	} else if got < 4092 || got > 4108 {
+		t.Errorf("counter = %d, want ~4100", got)
+	}
+	// integer division: base 137, 1 per 113s over ~1000s -> 137 + 8 = ~145
+	if got, _ := strconv.Atoi(mustApply(t, "${counter.137.1.113."+e+"}")); got < 144 || got > 147 {
+		t.Errorf("counter div = %d, want ~145", got)
+	}
+	if z := mustApply(t, "${counter.0.1.0.123}"); z != "${counter.0.1.0.123}" {
+		t.Errorf("counter den=0 = %q, want untouched", z)
+	}
+}
+
+func mustApply(t *testing.T, body string) string {
+	t.Helper()
+	out, _ := Apply(body, nil, nil, nil)
+	return out
 }
 
 // TestApply_SessionVarsRespected — caller-supplied session.* and
