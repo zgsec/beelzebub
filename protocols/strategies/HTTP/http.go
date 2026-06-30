@@ -883,9 +883,12 @@ func extractServerHeader(headers []string) string {
 
 func setResponseHeaders(responseWriter http.ResponseWriter, headers []string, statusCode int) {
 	for _, headerStr := range headers {
-		keyValue := strings.Split(headerStr, ":")
-		if len(keyValue) > 1 {
-			responseWriter.Header().Add(keyValue[0], keyValue[1])
+		// Split only on the first colon: header values (URLs, error
+		// messages, etc.) may legitimately contain additional colons,
+		// and splitting on every colon truncated them.
+		keyValue := strings.SplitN(headerStr, ":", 2)
+		if len(keyValue) == 2 {
+			responseWriter.Header().Add(strings.TrimSpace(keyValue[0]), strings.TrimSpace(keyValue[1]))
 		}
 	}
 	// http.StatusText(statusCode): empty string if the code is unknown.

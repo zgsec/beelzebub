@@ -809,3 +809,31 @@ func TestApplyResponseSubstitutions_SessionVarsStillWork(t *testing.T) {
 		t.Errorf("request.uuid_short not substituted alongside session vars: %q", resp.Body)
 	}
 }
+
+// TestSetResponseHeaders_PreservesColonsInValue guards against a regression
+// where a header value containing a colon (e.g. a URL with a port, or an
+// error message with embedded colons) was truncated because the splitter
+// split on every colon in the line instead of only the header-name
+// separator.
+func TestSetResponseHeaders_PreservesColonsInValue(t *testing.T) {
+	headers := []string{
+		"Server: uvicorn",
+		"Location: https://example.com:8443/path",
+		"X-Influxdb-Error: error parsing query: found NOT",
+	}
+	recorder := httptest.NewRecorder()
+
+	setResponseHeaders(recorder, headers, http.StatusOK)
+
+	tests := map[string]string{
+		"Server":           "uvicorn",
+		"Location":         "https://example.com:8443/path",
+		"X-Influxdb-Error": "error parsing query: found NOT",
+	}
+	for key, want := range tests {
+		got := recorder.Header().Get(key)
+		if got != want {
+			t.Errorf("header %q = %q, want %q", key, got, want)
+		}
+	}
+}
