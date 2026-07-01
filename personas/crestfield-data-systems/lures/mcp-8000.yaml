@@ -1477,6 +1477,81 @@ commands:
     statusCode: 405
     handler: '{"error":"method_not_allowed","allow":["GET"]}'
 
+  # =========================================================================
+  # Spark RAT (XZB-1248/Spark) overlay — capture Spark client-update scanners
+  # instead of 404ing them. Authored capture-first from a WIRE-CAPTURED real
+  # Spark server (commit 08059e95dacafe0bf6e5782f8e2c8ec9cd8c5a17).
+  # Oracle + gate: tools/oracle-diff/spark-08059e95/ (honeypot-research).
+  # Byte-exact notes:
+  #   - NO Server header: real Spark is Go net/http (emits Date only); beelzebub
+  #     matches for free by omitting Server here (MCP write path injects none).
+  #   - ${i18n|...} ships LITERAL on the wire — the Vue frontend resolves it, not
+  #     the backend; verified responsesubs.Apply leaves unknown ${...} intact.
+  # INERT: every handler is a static string — controls no device, execs nothing.
+  # IOCs shared with Coop/Mario: ~/vault/30-techniques/tool-spark-rat-enum.md.
+  # Known minor divergences (scanner never triggers them — sends canonical 384B
+  # replay): real Spark 413 on ContentLength>384 and 429 on rate-limit are not
+  # reproduced by static commands.
+  # =========================================================================
+
+  # client-update poll, MATCHING commit → real Spark "you're current" 200.
+  # No method gate: real handler is ctx.Any (GET or POST), no auth.
+  - regex: "^/api/client/update\\?.*commit=08059e95dacafe0bf6e5782f8e2c8ec9cd8c5a17"
+    name: "spark/client-update-current"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0}'
+
+  # client-update, any OTHER commit → real Spark no-prebuilt 404 (literal i18n)
+  - regex: "^/api/client/update\\?.*(commit=|arch=|os=)"
+    name: "spark/client-update-noprebuilt"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 404
+    handler: '{"code":1,"msg":"${i18n|GENERATOR.NO_PREBUILT_FOUND}"}'
+
+  # client-update missing os/arch/commit → real Spark 400 invalid-parameter
+  - regex: "^/api/client/update$"
+    name: "spark/client-update-badparam"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 400
+    handler: '{"code":-1,"msg":"${i18n|COMMON.INVALID_PARAMETER}"}'
+
+  # PANEL/EXPLOIT paths — real Spark 401-Basic-walls these. We let them PAST the
+  # wall with inert responses that CAPTURE the operator's next move (novel data;
+  # request bodies persisted via service captureRequestBody:true). Controls
+  # nothing. device/list returns an empty fleet so a panel probe "succeeds" and
+  # the operator proceeds to push a command we log.
+  - regex: "^/api/device/list"
+    name: "spark/device-list-empty"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0,"data":{}}'
+
+  - regex: "^/api/device/exec"
+    name: "spark/device-exec-capture"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0}'
+
+  - regex: "^/api/device/(process|file)/"
+    name: "spark/device-notexist"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":1,"msg":"${i18n|COMMON.DEVICE_NOT_EXIST}"}'
+
+  - regex: "^/api/client/(generate|check)"
+    name: "spark/client-generate-noprebuilt"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 404
+    handler: '{"code":1,"msg":"${i18n|GENERATOR.NO_PREBUILT_FOUND}"}'
+
 # Fallback for unmatched routes
 fallbackCommand:
   name: "default-404"
