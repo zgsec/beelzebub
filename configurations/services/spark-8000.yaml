@@ -1,0 +1,88 @@
+apiVersion: "v1"
+# protocol MUST be "mcp", not "http": beelzebub's HTTP strategy force-adds a
+# Server header (nginx/1.25.4 fallback), but real Spark (Go net/http) sends NONE.
+# The MCP strategy's HTTP-fallback path emits only the headers you list here, so
+# omitting Server yields a byte-identical header set (Date + Content-Length only).
+protocol: "mcp"
+address: ":8000"
+description: "Spark RAT (XZB-1248/Spark) C2 panel — decoy"
+serviceType: "spark"
+# Capture the operator's pushed command when they probe the (inert) panel.
+captureRequestBody: true
+requestBodyMaxBytes: 65536
+captureResponseBody: true
+responseBodyMaxBytes: 65536
+
+# Authored capture-first from a REAL Spark server (https://github.com/XZB-1248/Spark)
+# built at commit 08059e95dacafe0bf6e5782f8e2c8ec9cd8c5a17 — the exact commit the
+# in-wild scanners replay. i18n placeholders ship LITERAL on the wire (the Spark Vue
+# frontend resolves them, not the backend); a byte-exact lure serves the literal.
+commands:
+
+  # client-update poll, MATCHING commit -> real Spark "you're current" 200.
+  # ctx.Any in real Spark (GET or POST), no auth. Adjust the commit to the client
+  # you want to look "current" for; any other commit falls through to the 404 below.
+  - regex: "^/api/client/update\\?.*commit=08059e95dacafe0bf6e5782f8e2c8ec9cd8c5a17"
+    name: "spark/client-update-current"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0}'
+
+  # client-update, any OTHER commit -> real Spark no-prebuilt 404 (literal i18n)
+  - regex: "^/api/client/update\\?.*(commit=|arch=|os=)"
+    name: "spark/client-update-noprebuilt"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 404
+    handler: '{"code":1,"msg":"${i18n|GENERATOR.NO_PREBUILT_FOUND}"}'
+
+  # client-update missing os/arch/commit -> real Spark 400 invalid-parameter
+  - regex: "^/api/client/update$"
+    name: "spark/client-update-badparam"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 400
+    handler: '{"code":-1,"msg":"${i18n|COMMON.INVALID_PARAMETER}"}'
+
+  # PANEL/EXPLOIT paths — real Spark 401-Basic-walls these. This decoy INSTEAD lets
+  # them past the wall with inert responses that CAPTURE the operator's next move
+  # (captureRequestBody above). Controls nothing; every handler is a static string.
+  # device/list returns an empty fleet so a panel probe "succeeds" and the operator
+  # proceeds to push a command we log. Remove these four if you want a pure
+  # byte-faithful decoy (then everything but /api/client/update hits the 401 wall).
+  - regex: "^/api/device/list"
+    name: "spark/device-list-empty"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0,"data":{}}'
+
+  - regex: "^/api/device/exec"
+    name: "spark/device-exec-capture"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":0}'
+
+  - regex: "^/api/device/(process|file)/"
+    name: "spark/device-notexist"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 200
+    handler: '{"code":1,"msg":"${i18n|COMMON.DEVICE_NOT_EXIST}"}'
+
+  - regex: "^/api/client/(generate|check)"
+    name: "spark/client-generate-noprebuilt"
+    headers:
+      - "Content-Type: application/json; charset=utf-8"
+    statusCode: 404
+    handler: '{"code":1,"msg":"${i18n|GENERATOR.NO_PREBUILT_FOUND}"}'
+
+# Real Spark 401-Basic-walls every non-update path (empty body, no Server header).
+fallbackCommand:
+  name: "spark/auth-wall"
+  statusCode: 401
+  headers:
+    - "WWW-Authenticate: Basic realm=Authorization Required"
+  handler: ""
