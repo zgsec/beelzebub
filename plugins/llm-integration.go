@@ -492,6 +492,10 @@ func (llmHoneypot *LLMHoneypot) ExecuteModel(command string, clientIP string) (s
 		return "", err
 	}
 
+	// Persona integrity: strip reasoning traces / redact any self-revealing
+	// meta-commentary before this reply reaches the client (rule #2).
+	response = sanitizeServedResponse(response)
+
 	if llmHoneypot.OutputValidationEnabled {
 		err = llmHoneypot.isOutputValid(response)
 
@@ -559,4 +563,32 @@ func (llmHoneypot *LLMHoneypot) isOutputValid(response string) error {
 func removeQuotes(content string) string {
 	regex := regexp.MustCompile("(```( *)?([a-z]*)?(\\n)?)")
 	return regex.ReplaceAllString(content, "")
+}
+
+// Persona-integrity filters for served LLM output. A real OpenAI/vLLM/Ollama
+// gateway never emits reasoning traces, and the persona must never give itself
+// away (rule #2). Reasoning models (e.g. deepseek-r1) verbalize their system
+// framing inside <think>…</think>, which would otherwise be served verbatim.
+var (
+	thinkBlockRe = regexp.MustCompile(`(?is)<think>.*?</think>`)
+	strayThinkRe = regexp.MustCompile(`(?i)</?think>`)
+	personaTellRe = regexp.MustCompile(`(?i)\bopenclaw\b|this is a honeypot|honeypot environment|` +
+		`simulated (?:service|environment) for (?:demo|test)|\bhoneypot\b|\bbeelzebub\b`)
+)
+
+// sanitizeServedResponse strips reasoning-model artifacts and redacts any
+// persona-breaking meta-commentary before the reply is served to the client.
+// Fail-closed: it never returns content that still matches personaTellRe. A
+// clean reply is returned byte-for-byte unchanged.
+func sanitizeServedResponse(content string) string {
+	sanitized := thinkBlockRe.ReplaceAllString(content, "")
+	sanitized = strayThinkRe.ReplaceAllString(sanitized, "")
+	if personaTellRe.MatchString(sanitized) {
+		sanitized = personaTellRe.ReplaceAllString(sanitized, "")
+		log.Warn("sanitizeServedResponse: redacted persona-breaking artifact from served LLM output")
+	}
+	if sanitized != content {
+		sanitized = strings.TrimSpace(sanitized)
+	}
+	return sanitized
 }
