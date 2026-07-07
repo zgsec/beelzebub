@@ -817,6 +817,32 @@ func (s *OllamaStrategy) modelExists(name string) bool {
 	return false
 }
 
+// writeOllamaModelNotFound emits real Ollama's 404 for a model that isn't in the
+// local set, matching /api/show and /api/delete. Synthesizing a 200 for any model
+// name is a behavioral fingerprint (a caller probing with a junk model and getting
+// a real answer knows the server is fabricating).
+func (s *OllamaStrategy) writeOllamaModelNotFound(w http.ResponseWriter, model string) {
+	errResp, _ := json.Marshal(map[string]string{"error": "model '" + model + "' not found"})
+	w.Header().Set("Ollama-Version", s.version)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	w.Write(errResp)
+}
+
+// writeOpenAIModelNotFound emits the OpenAI-compat 404 for an unknown model,
+// matching real api.openai.com. Same anti-fingerprint rationale as the native path.
+func (s *OllamaStrategy) writeOpenAIModelNotFound(w http.ResponseWriter, model string) {
+	errResp, _ := json.Marshal(map[string]any{"error": map[string]any{
+		"message": "The model `" + model + "` does not exist",
+		"type":    "invalid_request_error",
+		"param":   nil,
+		"code":    "model_not_found",
+	}})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	w.Write(errResp)
+}
+
 // stableDigest returns a deterministic digest for a model name, prefixed
 // with "sha256:". Used on /api/pull where real Ollama ships the prefix.
 func (s *OllamaStrategy) stableDigest(modelName string) string {
@@ -1043,6 +1069,19 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		req.Model = s.defaultModelName()
 	}
 
+	// Real Ollama returns 404 for a model that isn't pulled locally (see
+	// /api/show, /api/delete). Answering for any model name is the negative-
+	// control fingerprint callers probe with. Embedding-model names fall
+	// through to the wrong-endpoint 400 below, preserving that behavior.
+	if !isEmbeddingModel(req.Model) && !s.modelExists(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "ollama_unknown_model_probe")
+		}
+		s.writeOllamaModelNotFound(w, req.Model)
+		s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, "[reject:unknown_model]", string(body))
+		return
+	}
+
 	// Real Ollama returns a 400 when /api/generate is invoked on an embedding
 	// model. Mirroring that here keeps schema-accurate behavior and prevents
 	// the "embedding model answered with chat text" fingerprint.
@@ -1159,6 +1198,17 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	}
 	if req.Model == "" {
 		req.Model = s.defaultModelName()
+	}
+
+	// Unknown model → 404, as real Ollama does (mirrors /api/show). Embedding-
+	// model names fall through to the wrong-endpoint 400 below.
+	if !isEmbeddingModel(req.Model) && !s.modelExists(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "ollama_unknown_model_probe")
+		}
+		s.writeOllamaModelNotFound(w, req.Model)
+		s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, "[reject:unknown_model]", string(body))
+		return
 	}
 
 	// Real Ollama rejects /api/chat for embedding models the same way.
@@ -1622,6 +1672,17 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		req.Model = s.defaultModelName()
 	}
 
+	// Unknown model → 404 model_not_found, as real api.openai.com does.
+	// Embedding-model names fall through to the wrong-endpoint 400 below.
+	if !isEmbeddingModel(req.Model) && !s.modelExists(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "openai_unknown_model_probe")
+		}
+		s.writeOpenAIModelNotFound(w, req.Model)
+		s.traceEvent(r, tr, servConf, "openai/chat", req.Model, "[reject:unknown_model]", string(body))
+		return
+	}
+
 	// OpenAI-compat: embedding models belong on /v1/embeddings, not here.
 	if isEmbeddingModel(req.Model) {
 		if s.Bridge != nil {
@@ -1744,6 +1805,17 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 	}
 	if req.Model == "" {
 		req.Model = s.defaultModelName()
+	}
+
+	// Unknown model → 404 model_not_found, as real api.openai.com does.
+	// (This endpoint has no embedding-model branch, so no guard is needed.)
+	if !s.modelExists(req.Model) {
+		if s.Bridge != nil {
+			s.Bridge.SetFlag(host, "openai_unknown_model_probe")
+		}
+		s.writeOpenAIModelNotFound(w, req.Model)
+		s.traceEvent(r, tr, servConf, "openai/completions", req.Model, "[reject:unknown_model]", string(body))
+		return
 	}
 
 	sess := s.getOrCreateSession(host)

@@ -141,8 +141,8 @@ func TestReflectTopic(t *testing.T) {
 	}{
 		{"explain kubernetes networking", "Regarding kubernetes networking: "},
 		{"what is a docker container", "Regarding docker container: "},
-		{"Hi", ""},                  // too short, no keywords
-		{"hello world", ""},         // both are stop words
+		{"Hi", ""},          // too short, no keywords
+		{"hello world", ""}, // both are stop words
 		{"translate this to french", "Regarding french: "},
 		{"how do microservices communicate with databases and caching layers", "Regarding microservices communicate databases: "},
 	}
@@ -765,7 +765,6 @@ func TestHandleChatAcceptsUserSystemMessage(t *testing.T) {
 	assert.Equal(t, true, resp["done"])
 }
 
-
 // TestHandleTags_ModifiedAtIsRFC3339AndRecent verifies the dynamic
 // modified_at fix: every emitted timestamp parses cleanly as RFC3339,
 // falls within the last 90 days, all timestamps in a single response
@@ -969,9 +968,9 @@ func TestOllama_LLMOfflineResponse_ZeroFieldsKeepLegacy(t *testing.T) {
 // wrong-but-plausibly-shaped output.
 func TestMutateForDegradedTier(t *testing.T) {
 	cases := []struct {
-		name  string
-		in    string
-		want  string
+		name string
+		in   string
+		want string
 	}{
 		// Rule 1: pure digits → increment last digit with carry.
 		{"single digit", "5", "6"},
@@ -1032,4 +1031,79 @@ func TestMutateForDegradedTier_DefeatsCaptchaPayloads(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- unknown-model 404 gate (fidelity: real Ollama/OpenAI 404 unknown models) ---
+// A synthesized 200 for any model name is a behavioral fingerprint — the
+// negative-control probe callers use. The inference handlers now mirror the
+// existing handleShow/handleDelete modelExists->404 pattern.
+
+func testOllamaModels() []parser.OllamaModel {
+	return []parser.OllamaModel{
+		{Name: "llama3.1:8b", Family: "llama", ParameterSize: "8B", QuantizationLevel: "Q4_0"},
+	}
+}
+
+func TestHandleGenerate_UnknownModel404(t *testing.T) {
+	s := newTestStrategy()
+	s.models = testOllamaModels()
+	req := httptest.NewRequest("POST", "/api/generate",
+		strings.NewReader(`{"model":"no-such-model-xyz:latest","prompt":"hi"}`))
+	w := httptest.NewRecorder()
+	s.handleGenerate(w, req, parser.BeelzebubServiceConfiguration{Description: "test"},
+		tracer.GetInstance(func(event tracer.Event) {}))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"error":"model 'no-such-model-xyz:latest' not found"`)
+}
+
+func TestHandleChat_UnknownModel404(t *testing.T) {
+	s := newTestStrategy()
+	s.models = testOllamaModels()
+	req := httptest.NewRequest("POST", "/api/chat",
+		strings.NewReader(`{"model":"no-such-model-xyz:latest","messages":[{"role":"user","content":"hi"}]}`))
+	w := httptest.NewRecorder()
+	s.handleChat(w, req, parser.BeelzebubServiceConfiguration{Description: "test"},
+		tracer.GetInstance(func(event tracer.Event) {}))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"error":"model 'no-such-model-xyz:latest' not found"`)
+}
+
+func TestHandleOpenAIChat_UnknownModel404(t *testing.T) {
+	s := newTestStrategy()
+	s.models = testOllamaModels()
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"no-such-model-xyz","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
+	w := httptest.NewRecorder()
+	s.handleOpenAIChat(w, req, parser.BeelzebubServiceConfiguration{Description: "test"},
+		tracer.GetInstance(func(event tracer.Event) {}))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"code":"model_not_found"`)
+	assert.Contains(t, w.Body.String(), "no-such-model-xyz")
+}
+
+func TestHandleOpenAICompletions_UnknownModel404(t *testing.T) {
+	s := newTestStrategy()
+	s.models = testOllamaModels()
+	req := httptest.NewRequest("POST", "/v1/completions",
+		strings.NewReader(`{"model":"no-such-model-xyz","prompt":"hi"}`))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
+	w := httptest.NewRecorder()
+	s.handleOpenAICompletions(w, req, parser.BeelzebubServiceConfiguration{Description: "test"},
+		tracer.GetInstance(func(event tracer.Event) {}))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `"code":"model_not_found"`)
+}
+
+func TestHandleOpenAIChat_KnownModelNot404(t *testing.T) {
+	// Sanity: a configured model must NOT be rejected by the new gate.
+	s := newTestStrategy()
+	s.models = testOllamaModels()
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"llama3.1:8b","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test-0000")
+	w := httptest.NewRecorder()
+	s.handleOpenAIChat(w, req, parser.BeelzebubServiceConfiguration{Description: "test"},
+		tracer.GetInstance(func(event tracer.Event) {}))
+	assert.NotEqual(t, http.StatusNotFound, w.Code)
 }
