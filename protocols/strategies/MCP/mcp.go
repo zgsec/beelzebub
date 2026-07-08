@@ -112,8 +112,8 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 // example keys, since returning those to an operator immediately blows the
 // deception (any security-trained reader recognizes AKIAIOSFODNN7EXAMPLE).
 //
-// Initialized lazily (sync.Once) so test code that doesn't exercise the
-// substitution path doesn't need every MCP_CANARY_* var pre-populated.
+// The required-env check runs on every call (see defaultMCPCanaryFallbacks);
+// only the fallback map itself is built lazily via sync.Once.
 //
 // To populate in production: mint canarytokens.org tokens for each variable,
 // add to the sensor's .env, run ops/render-services.sh (which also envsubsts
@@ -123,28 +123,42 @@ var (
 	canaryFallbacksCache map[string]string
 )
 
-func defaultMCPCanaryFallbacks() map[string]string {
+// requiredCanaryEnv lists the env vars that must be populated before the MCP
+// service will substitute canaries.
+func requiredCanaryEnv() []string {
+	return []string{
+		"MCP_CANARY_AWS_KEY",
+		"MCP_CANARY_AWS_SECRET",
+		"MCP_CANARY_DB_PASS",
+		"MCP_CANARY_DNS",
+		"MCP_CANARY_WEB_URL",
+		"MCP_CANARY_DD_KEY",
+		"MCP_CANARY_VAULT_TOKEN",
+	}
+}
+
+// missingCanaryEnv returns the required canary env vars that are unset/empty.
+func missingCanaryEnv() []string {
+	var missing []string
+	for _, v := range requiredCanaryEnv() {
+		if os.Getenv(v) == "" {
+			missing = append(missing, v)
+		}
+	}
+	return missing
+}
+
+func defaultMCPCanaryFallbacks() (map[string]string, error) {
+	// The missing-env check runs on EVERY call (outside the sync.Once) so a
+	// misconfigured service reliably returns an error that Init propagates —
+	// instead of log.Fatalf/os.Exit, which killed the whole sensor process at
+	// boot. The Once only caches the fallback map, and only once env is present.
+	if missing := missingCanaryEnv(); len(missing) > 0 {
+		return nil, fmt.Errorf("MCP service refusing to substitute canaries: missing "+
+			"required env vars: %v. Populate /opt/honeypot-sensor/.env and "+
+			"re-run ops/render-services.sh before docker compose up", missing)
+	}
 	canaryFallbacksOnce.Do(func() {
-		required := []string{
-			"MCP_CANARY_AWS_KEY",
-			"MCP_CANARY_AWS_SECRET",
-			"MCP_CANARY_DB_PASS",
-			"MCP_CANARY_DNS",
-			"MCP_CANARY_WEB_URL",
-			"MCP_CANARY_DD_KEY",
-			"MCP_CANARY_VAULT_TOKEN",
-		}
-		missing := []string{}
-		for _, v := range required {
-			if os.Getenv(v) == "" {
-				missing = append(missing, v)
-			}
-		}
-		if len(missing) > 0 {
-			log.Fatalf("MCP service refusing to substitute canaries: missing "+
-				"required env vars: %v. Populate /opt/honeypot-sensor/.env and "+
-				"re-run ops/render-services.sh before docker compose up.", missing)
-		}
 		canaryFallbacksCache = map[string]string{
 			// EMAIL placeholders in the fallback cache are intentionally left
 			// empty here; they are filled per-strategy by substituteMCPCanaries
@@ -161,7 +175,7 @@ func defaultMCPCanaryFallbacks() map[string]string {
 			"CANARYTOKEN_VAULT_TOKEN": os.Getenv("MCP_CANARY_VAULT_TOKEN"),
 		}
 	})
-	return canaryFallbacksCache
+	return canaryFallbacksCache, nil
 }
 
 // substituteMCPCanaries rewrites every CANARYTOKEN_* placeholder embedded in
@@ -171,10 +185,14 @@ func defaultMCPCanaryFallbacks() map[string]string {
 // shared backing arrays so the substitution is visible to every subsequent
 // handler that reads servConf.Commands / .Tools / .FallbackCommand /
 // .WorldSeed.
-func (s *MCPStrategy) substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) {
+func (s *MCPStrategy) substituteMCPCanaries(servConf *parser.BeelzebubServiceConfiguration) error {
 	// Build a per-call fallback map from the global cache + persona-derived email values.
+	base, err := defaultMCPCanaryFallbacks()
+	if err != nil {
+		return err
+	}
 	fallbacks := make(map[string]string)
-	for k, v := range defaultMCPCanaryFallbacks() {
+	for k, v := range base {
 		fallbacks[k] = v
 	}
 	// Persona-derived canary emails override the empty placeholders in the cache.
@@ -222,6 +240,7 @@ func (s *MCPStrategy) substituteMCPCanaries(servConf *parser.BeelzebubServiceCon
 			servConf.WorldSeed.Resources[k] = apply(v)
 		}
 	}
+	return nil
 }
 
 // bareUUIDSessionIdManager emits session IDs as bare UUIDs (matching
@@ -276,7 +295,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	// Substitute CANARYTOKEN_* placeholders before anything reads the config.
 	// See substituteMCPCanaries — the literal placeholder strings previously
 	// leaked straight to clients, an unambiguous honeypot fingerprint.
-	mcpStrategy.substituteMCPCanaries(&servConf)
+	if err := mcpStrategy.substituteMCPCanaries(&servConf); err != nil {
+		return err
+	}
 
 	mcpStrategy.seedConfig = seedFromConfig(servConf.WorldSeed)
 	mcpStrategy.worldState = make(map[string]*WorldState)
