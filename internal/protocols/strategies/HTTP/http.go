@@ -521,6 +521,29 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 	}
 
+	if command.Plugin == plugins.MazePluginName {
+		// Deterministic infinite-directory tarpit: every path resolves to an
+		// Apache-style listing (more links) or realistic fabricated file
+		// content. Prolongs automated crawls and exposes agent traversal/looping
+		// behaviour to agentdetect/novelty. Deterministic per URL by design.
+		maze := &plugins.MazeHoneypot{
+			ServerVersion: servConf.ServerVersion,
+			ServerName:    servConf.ServerName,
+		}
+		mazeResp := maze.HandleRequest(request)
+		resp.StatusCode = mazeResp.StatusCode
+		resp.Body = mazeResp.Body
+		headers := make([]string, 0, len(mazeResp.Headers)+1)
+		if mazeResp.ContentType != "" {
+			headers = append(headers, "Content-Type: "+mazeResp.ContentType)
+		}
+		for k, v := range mazeResp.Headers {
+			headers = append(headers, k+": "+v)
+		}
+		resp.Headers = headers
+		return resp, nil, fireTrace
+	}
+
 	if command.Plugin == plugins.LLMPluginName {
 		llmProvider, err := plugins.FromStringToLLMProvider(servConf.Plugin.LLMProvider)
 
