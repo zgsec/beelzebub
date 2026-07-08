@@ -18,3 +18,10 @@ __pycache__/
 *.egg-info/
 build/
 out/
+
+# Local build artifacts / session tooling — must never enter this PUBLIC fork.
+honeytoken-harness
+docs/superpowers/
+
+# Research / fingerprint-oracle tooling lives in honeypot-research, not here.
+tools/fingerprint-oracle/
