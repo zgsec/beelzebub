@@ -470,6 +470,9 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 			return nil, fmt.Errorf("in file %s: %v", filePath, err)
 		}
 
+		// Stamp the source file so the validator can group findings per file.
+		beelzebubServiceConfiguration.Filename = servicesName
+
 		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
 		// Discovered when a fork sensor served literal "${HTTP_CANARY_WEB_BUG}"
 		// in 374+ Open WebUI responses since 2026-05-19. Runs after the
