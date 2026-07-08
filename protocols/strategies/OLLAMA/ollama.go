@@ -442,7 +442,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 			s.handleFallback(w, r, servConf, tr)
 			return
 		}
-		w.Header().Set("Ollama-Version", s.version)
+		// Real Ollama sends no Ollama-Version response header on "/".
 		s.handleRoot(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("GET /api/version", withCORS(func(w http.ResponseWriter, r *http.Request) {
@@ -733,7 +733,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if auth == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":null}}`
 		w.Write([]byte(body401))
@@ -742,7 +742,7 @@ func (s *OllamaStrategy) requireOpenAIAuth(w http.ResponseWriter, r *http.Reques
 	}
 	// "Bearer " prefix, with a non-empty token after.
 	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		body401 := `{"error":{"message":"Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
 		w.Write([]byte(body401))
@@ -943,7 +943,7 @@ func (s *OllamaStrategy) handleVersion(w http.ResponseWriter, r *http.Request, s
 	}
 
 	w.Header().Set("Ollama-Version", s.version)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/version", "GET /api/version", string(out), "")
@@ -957,53 +957,60 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 	sess.EndpointsHit["tags"] = true
 	sess.mu.Unlock()
 
-	type modelEntry struct {
-		Name       string `json:"name"`
-		Model      string `json:"model"`
-		ModifiedAt string `json:"modified_at"`
-		Size       int64  `json:"size"`
-		Digest     string `json:"digest"`
-		Details    struct {
-			ParentModel       string   `json:"parent_model"`
-			Format            string   `json:"format"`
-			Family            string   `json:"family"`
-			Families          []string `json:"families"`
-			ParameterSize     string   `json:"parameter_size"`
-			QuantizationLevel string   `json:"quantization_level"`
-		} `json:"details"`
-	}
-
 	// Per-model timestamps: deterministic from (persona.slug, model.name)
 	// so two consecutive requests for the same model produce identical
 	// modified_at values, but each model has its own apparent mtime within
 	// the last 90 days. All emitted values share the persona's timezone
 	// offset (Asia/Singapore +08:00, America/New_York -05:00, etc.) which
-	// keeps coherence with where the persona claims to be hosted. Replaces
-	// the previous hardcoded build-time strings — those tripped both
-	// staleness AND mixed-offset (-05/-08/-06) detection signals.
-	var models []modelEntry
+	// keeps coherence with where the persona claims to be hosted.
+	//
+	// details/capabilities/context_length/embedding_length come from the
+	// baked GGUF metadata when present (authoritative + coherent with
+	// /api/show); otherwise from config + per-model derivation. Real 0.31.1
+	// /api/tags carries context_length + embedding_length in details AND a
+	// top-level capabilities array — both were previously missing.
+	var models []ollamaTagsModel
 	for _, m := range s.models {
-		e := modelEntry{
+		e := ollamaTagsModel{
 			Name:       m.Name,
 			Model:      m.Name,
 			ModifiedAt: s.modelModifiedAt(m.Name),
 			Size:       sizeFromParam(m.ParameterSize),
 			Digest:     s.stableDigestHex(m.Name),
 		}
-		e.Details.Format = "gguf"
-		e.Details.Family = m.Family
-		e.Details.Families = []string{m.Family}
-		e.Details.ParameterSize = m.ParameterSize
-		e.Details.QuantizationLevel = m.QuantizationLevel
+		if meta, ok := lookupModelMeta(m.Name); ok {
+			e.Details = ollamaTagsDetails{
+				ParentModel:       meta.details.ParentModel,
+				Format:            meta.details.Format,
+				Family:            meta.details.Family,
+				Families:          meta.details.Families,
+				ParameterSize:     meta.details.ParameterSize,
+				QuantizationLevel: meta.details.QuantizationLevel,
+				ContextLength:     meta.contextLength,
+				EmbeddingLength:   meta.embeddingLength,
+			}
+			e.Capabilities = meta.capabilities
+		} else {
+			e.Details = ollamaTagsDetails{
+				ParentModel:       "",
+				Format:            "gguf",
+				Family:            m.Family,
+				Families:          []string{m.Family},
+				ParameterSize:     m.ParameterSize,
+				QuantizationLevel: m.QuantizationLevel,
+				ContextLength:     contextLengthForModel(m.Name, m.Family),
+				EmbeddingLength:   embeddingLengthForModel(m.Name, m.Family),
+			}
+			e.Capabilities = capabilitiesForModel(m.Name, m.Family)
+		}
 		models = append(models, e)
 	}
 
-	resp := struct {
-		Models []modelEntry `json:"models"`
-	}{Models: models}
+	resp := ollamaTagsResponse{Models: models}
 
-	w.Header().Set("Ollama-Version", s.version)
-	w.Header().Set("Content-Type", "application/json")
+	// Real Ollama sends NO Ollama-Version response header (only content-type/
+	// date/transfer-encoding), and JSON endpoints are application/json;charset=utf-8.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/tags", "GET /api/tags", string(out), "")
@@ -1018,34 +1025,34 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 	// a loaded model is trivially detectable by polling /api/ps on a fresh
 	// target. Mirror the real behavior: require at least one inference call
 	// from ANY IP within the last 5 minutes to list a model as loaded.
-	running := []map[string]interface{}{}
+	running := []ollamaPsModel{}
 	s.lastInferenceMu.RLock()
 	fresh := !s.lastInferenceAt.IsZero() && time.Since(s.lastInferenceAt) < 5*time.Minute
 	s.lastInferenceMu.RUnlock()
 	if fresh && len(s.models) > 0 {
 		m := s.models[0]
-		running = append(running, map[string]interface{}{
-			"name":           m.Name,
-			"model":          m.Name,
-			"size":           sizeFromParam(m.ParameterSize),
-			"digest":         s.stableDigestHex(m.Name),
-			"expires_at":     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
-			"size_vram":      sizeFromParam(m.ParameterSize),
-			"context_length": 4096,
-			"details": map[string]interface{}{
-				"parent_model":       "",
-				"format":             "gguf",
-				"family":             m.Family,
-				"families":           []string{m.Family},
-				"parameter_size":     m.ParameterSize,
-				"quantization_level": m.QuantizationLevel,
+		running = append(running, ollamaPsModel{
+			Name:   m.Name,
+			Model:  m.Name,
+			Size:   sizeFromParam(m.ParameterSize),
+			Digest: s.stableDigestHex(m.Name),
+			Details: ollamaModelDetails{
+				ParentModel:       "",
+				Format:            "gguf",
+				Family:            m.Family,
+				Families:          []string{m.Family},
+				ParameterSize:     m.ParameterSize,
+				QuantizationLevel: m.QuantizationLevel,
 			},
+			ExpiresAt:     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+			SizeVRAM:      sizeFromParam(m.ParameterSize),
+			ContextLength: 4096,
 		})
 	}
 
-	resp := map[string]interface{}{"models": running}
+	resp := ollamaPsResponse{Models: running}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/ps", "GET /api/ps", string(out), "")
@@ -1089,7 +1096,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "ollama_embed_on_generate")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := fmt.Sprintf(`{"error":"%q does not support generate"}`, req.Model)
 		w.Write([]byte(errResp))
@@ -1130,7 +1137,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
 		if faulted {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprint(w, resp)
 			s.traceEvent(r, tr, servConf, "ollama/generate", req.Model, resp, string(body))
 			return
@@ -1153,7 +1160,7 @@ func (s *OllamaStrategy) handleGenerate(w http.ResponseWriter, r *http.Request, 
 	// persona-shaped error envelope), use it verbatim; otherwise keep the
 	// legacy Ollama-shaped CUDA-OOM body for backward-compat.
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
@@ -1216,7 +1223,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "ollama_embed_on_chat")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := fmt.Sprintf(`{"error":"%q does not support chat"}`, req.Model)
 		w.Write([]byte(errResp))
@@ -1278,7 +1285,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	if s.Fault != nil {
 		resp, _, faulted := s.Fault.Apply()
 		if faulted {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			fmt.Fprint(w, resp)
 			s.traceEvent(r, tr, servConf, "ollama/chat", req.Model, resp, string(body))
 			return
@@ -1299,7 +1306,7 @@ func (s *OllamaStrategy) handleChat(w http.ResponseWriter, r *http.Request, serv
 	// Empty response = degradation tier 3 simulated error. Persona-shaped
 	// envelope (when configured) wins over the legacy CUDA-OOM body.
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		status, errResp := ollamaLLMOfflineResponse(servConf.LLMOfflineResponse, req.Model)
 		w.WriteHeader(status)
 		w.Write([]byte(errResp))
@@ -1349,8 +1356,7 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		errResp, _ := json.Marshal(map[string]string{
 			"error": "model '" + req.Model + "' not found",
 		})
-		w.Header().Set("Ollama-Version", s.version)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write(errResp)
 		s.traceEvent(r, tr, servConf, "ollama/show", "POST /api/show", string(errResp), string(body))
@@ -1368,58 +1374,51 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		}
 	}
 
+	// Faithful path: serve the byte-exact GGUF /api/show (full 28-key
+	// model_info + the tensor list, both present by default in 0.31.1) with
+	// modified_at patched to this deploy's per-model timestamp. Advertised
+	// models should always have baked metadata (modelmeta/<model>.json).
+	if baked, ok := bakedShow(req.Model, s.modelModifiedAt(req.Model)); ok {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Write(baked)
+		s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(baked), string(body))
+		return
+	}
+
+	// Fallback: no baked metadata (an authoring omission). Emit an ORDERED,
+	// structurally-complete /api/show — but model_info/tensors are necessarily
+	// incomplete without the GGUF. NOTE: this path deliberately drops the
+	// former cdf.* model_info enrichment; those keys are themselves a fidelity
+	// tell (real model_info holds only general.*/<arch>.* keys).
+	log.Printf("ollama/show: no baked metadata for %q — serving degraded /api/show; run gguf_oracle", req.Model)
 	pCount := paramCountFromSize(paramSize)
-	host, _ := s.clientIP(r)
-	modelInfo := map[string]interface{}{
-		"general.architecture":         family,
-		"general.parameter_count":      pCount,
-		"general.quantization_version": 2,
-		"general.file_type":            2,
-		"general.context_length":       4096,
-		"general.embedding_length":     4096,
-	}
-
-	// Cross-protocol: enrich model_info for IPs seen on other protocols
-	if s.Bridge != nil {
-		if s.Bridge.HasFlag(host, "mcp_tool_call") {
-			modelInfo["cdf.mcp_integration"] = true
-			modelInfo["cdf.mcp_endpoint"] = "http://localhost:8000/mcp"
-		}
-		if s.Bridge.HasFlag(host, "ssh_authenticated") {
-			vaultAddr := s.personaOrEmpty().Coherence.VaultAddr
-			if vaultAddr == "" {
-				vaultAddr = s.personaOrEmpty().Identity.InternalDomain
-			}
-			if vaultAddr != "" {
-				modelInfo["cdf.credential_vault"] = "https://vault." + vaultAddr + ":8200"
-			}
-			modelInfo["cdf.ssh_config_available"] = true
-		}
-		discoveries := s.Bridge.GetDiscoveries(host)
-		if len(discoveries) > 0 {
-			modelInfo["cdf.service_credentials_available"] = true
-		}
-	}
-
-	showResp := map[string]interface{}{
-		"modelfile":  fmt.Sprintf("FROM %s", req.Model),
-		"parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
-		"template":   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
-		"details": map[string]interface{}{
-			"parent_model":       "",
-			"format":             "gguf",
-			"family":             family,
-			"families":           []string{family},
-			"parameter_size":     paramSize,
-			"quantization_level": quantLevel,
+	modelInfo, _ := json.Marshal(ollamaFallbackModelInfo{
+		Architecture:   family,
+		FileType:       2,
+		ParameterCount: pCount,
+		QuantVersion:   2,
+	})
+	resp := ollamaShowResponse{
+		License:    "Meta Llama 3.1 Community License Agreement",
+		Modelfile:  fmt.Sprintf("FROM %s", req.Model),
+		Parameters: "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
+		Template:   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
+		Details: ollamaModelDetails{
+			ParentModel:       "",
+			Format:            "gguf",
+			Family:            family,
+			Families:          []string{family},
+			ParameterSize:     paramSize,
+			QuantizationLevel: quantLevel,
 		},
-		"model_info":   modelInfo,
-		"license":      "Meta Llama 3.1 Community License Agreement",
-		"capabilities": []string{"completion"},
+		ModelInfo:    modelInfo,
+		Tensors:      json.RawMessage("[]"),
+		Capabilities: capabilitiesForModel(req.Model, family),
+		ModifiedAt:   s.modelModifiedAt(req.Model),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	out, _ := json.Marshal(showResp)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(out), string(body))
 }
@@ -1510,15 +1509,15 @@ func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, ser
 	evalDurNs := int64(50+s.rng.Intn(30)) * 1e6
 	s.rngMu.Unlock()
 
-	resp := map[string]interface{}{
-		"model":             req.Model,
-		"embeddings":        [][]float32{embedding},
-		"total_duration":    loadDurNs + evalDurNs,
-		"load_duration":     loadDurNs,
-		"prompt_eval_count": promptEvalCount,
+	resp := ollamaEmbedResponse{
+		Model:           req.Model,
+		Embeddings:      [][]float32{embedding},
+		TotalDuration:   loadDurNs + evalDurNs,
+		LoadDuration:    loadDurNs,
+		PromptEvalCount: promptEvalCount,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/embed", req.Model, fmt.Sprintf("[%d-dim embedding]", dims), string(body), int64(len(out)))
@@ -1550,7 +1549,7 @@ func (s *OllamaStrategy) handleEmbeddingsLegacy(w http.ResponseWriter, r *http.R
 		"embedding": embedding,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/embeddings", req.Model, fmt.Sprintf("[%d-dim legacy embedding]", dims), string(body), int64(len(out)))
@@ -1596,15 +1595,15 @@ func (s *OllamaStrategy) handlePull(w http.ResponseWriter, r *http.Request, serv
 	// real pulls emit between writing-manifest and success.
 	shortHex := s.stableDigestHex(req.Name)[:12]
 	fullDigest := s.stableDigest(req.Name)
-	stages := []map[string]interface{}{
-		{"status": "pulling manifest"},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 1200000000},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 3500000000},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 4700000000},
-		{"status": "verifying sha256 digest"},
-		{"status": "writing manifest"},
-		{"status": "removing any unused layers"},
-		{"status": "success"},
+	stages := []ollamaPullProgress{
+		{Status: "pulling manifest"},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 1200000000},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 3500000000},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 4700000000},
+		{Status: "verifying sha256 digest"},
+		{Status: "writing manifest"},
+		{Status: "removing any unused layers"},
+		{Status: "success"},
 	}
 
 	for _, stage := range stages {
@@ -1663,7 +1662,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		Stream *bool `json:"stream"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request. (HINT: This likely means you aren't using your HTTP library correctly. The OpenAI API expects a JSON payload, but what was sent was not valid JSON.)","type":"invalid_request_error","param":null,"code":null}}`))
 		return
@@ -1688,7 +1687,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 		if s.Bridge != nil {
 			s.Bridge.SetFlag(host, "openai_embed_on_chat")
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		errResp := `{"error":{"message":"This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/embeddings?","type":"invalid_request_error","param":"model","code":"model_not_supported"}}`
 		w.Write([]byte(errResp))
@@ -1765,7 +1764,7 @@ func (s *OllamaStrategy) handleOpenAIChat(w http.ResponseWriter, r *http.Request
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
@@ -1798,7 +1797,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 		Stream *bool  `json:"stream"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"We could not parse the JSON body of your request.","type":"invalid_request_error","param":null,"code":null}}`))
 		return
@@ -1860,7 +1859,7 @@ func (s *OllamaStrategy) handleOpenAICompletions(w http.ResponseWriter, r *http.
 
 	// Empty response = degradation tier 3 simulated error (OpenAI error format)
 	if response == "" {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		errResp := `{"error":{"message":"The server is currently overloaded. Please try again later.","type":"server_error","code":"overloaded"}}`
 		w.Write([]byte(errResp))
@@ -1986,11 +1985,17 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 	s.checkBridgeAndCapture(r, "ollama/fallback")
 	body := s.readBody(r)
 
-	w.Header().Set("Content-Type", "application/json")
+	// Real Ollama's 404 for an unmatched route is the uniform Go/gin default:
+	// Content-Type text/plain (NO charset), body "404 page not found" (18 bytes,
+	// no trailing newline), Content-Length 18. The prior JSON {"error":"not found"}
+	// envelope was a fingerprint. (Method-mismatch on a KNOWN path still yields a
+	// 405 from the mux — that path is unaffected.)
+	const notFound = "404 page not found"
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(notFound)))
 	w.WriteHeader(http.StatusNotFound)
-	resp := `{"error":"not found"}`
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/fallback", r.Method+" "+r.URL.Path, resp, string(body))
+	fmt.Fprint(w, notFound)
+	s.traceEvent(r, tr, servConf, "ollama/fallback", r.Method+" "+r.URL.Path, notFound, string(body))
 }
 
 // --- Streaming helpers ---
@@ -2012,11 +2017,11 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
-		chunk := map[string]interface{}{
-			"model":      model,
-			"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-			"response":   token,
-			"done":       false,
+		chunk := ollamaGenerateChunk{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Response:  token,
+			Done:      false,
 		}
 		out, _ := json.Marshal(chunk)
 		w.Write(out)
@@ -2035,19 +2040,19 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 
 	// Final chunk with stats
 	elapsed := time.Since(start)
-	finalChunk := map[string]interface{}{
-		"model":                model,
-		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
-		"response":             "",
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
-		"context":              ollamaContextArray(promptEvalCount, len(tokens)),
+	finalChunk := ollamaGenerateDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Response:           "",
+		Done:               true,
+		DoneReason:         "stop",
+		Context:            ollamaContextArray(promptEvalCount, len(tokens)),
+		TotalDuration:      elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(tokens),
+		EvalDuration:       elapsed.Nanoseconds(),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -2061,21 +2066,21 @@ func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, r
 	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
 	evalCount := len(response) / 4
-	resp := map[string]interface{}{
-		"model":                model,
-		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
-		"response":             response,
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           evalCount,
-		"eval_duration":        int64(200e6),
-		"context":              ollamaContextArray(promptEvalCount, evalCount),
+	resp := ollamaGenerateDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Response:           response,
+		Done:               true,
+		DoneReason:         "stop",
+		Context:            ollamaContextArray(promptEvalCount, evalCount),
+		TotalDuration:      int64(timing.LoadDurationMs+200) * 1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          evalCount,
+		EvalDuration:       int64(200e6),
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }
@@ -2097,14 +2102,11 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
-		chunk := map[string]interface{}{
-			"model":      model,
-			"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-			"message": map[string]string{
-				"role":    "assistant",
-				"content": token,
-			},
-			"done": false,
+		chunk := ollamaChatChunk{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message:   ollamaChatMessage{Role: "assistant", Content: token},
+			Done:      false,
 		}
 		out, _ := json.Marshal(chunk)
 		w.Write(out)
@@ -2121,21 +2123,18 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	}
 
 	elapsed := time.Since(start)
-	finalChunk := map[string]interface{}{
-		"model":      model,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"message": map[string]string{
-			"role":    "assistant",
-			"content": "",
-		},
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
+	finalChunk := ollamaChatDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Message:            ollamaChatMessage{Role: "assistant", Content: ""},
+		Done:               true,
+		DoneReason:         "stop",
+		TotalDuration:      elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(tokens),
+		EvalDuration:       elapsed.Nanoseconds(),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -2148,23 +2147,20 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
 	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
-	resp := map[string]interface{}{
-		"model":      model,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"message": map[string]string{
-			"role":    "assistant",
-			"content": response,
-		},
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(response) / 4,
-		"eval_duration":        int64(200e6),
+	resp := ollamaChatDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Message:            ollamaChatMessage{Role: "assistant", Content: response},
+		Done:               true,
+		DoneReason:         "stop",
+		TotalDuration:      int64(timing.LoadDurationMs+200) * 1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(response) / 4,
+		EvalDuration:       int64(200e6),
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 }

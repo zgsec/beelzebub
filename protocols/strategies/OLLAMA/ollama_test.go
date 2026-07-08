@@ -527,7 +527,11 @@ func TestHandleShow_UnknownModel404(t *testing.T) {
 	s.handleShow(w, req, servConf, tr)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Equal(t, s.version, w.Header().Get("Ollama-Version"))
+	// Real Ollama sends NO Ollama-Version response header (verified vs 0.31.1);
+	// JSON responses are application/json; charset=utf-8. The prior assertion
+	// codified a honeypot tell.
+	assert.Empty(t, w.Header().Get("Ollama-Version"))
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
 	assert.Contains(t, w.Body.String(), `"error":"model 'definitely-not-a-real-model:latest' not found"`)
 }
 
