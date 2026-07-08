@@ -17,11 +17,13 @@ func main() {
 		configurationsCorePath          string
 		configurationsServicesDirectory string
 		memLimitMiB                     int
+		validateOnly                    bool
 	)
 
 	flag.StringVar(&configurationsCorePath, "confCore", "./configurations/beelzebub.yaml", "Provide the path of configurations core")
 	flag.StringVar(&configurationsServicesDirectory, "confServices", "./configurations/services/", "Directory config services")
 	flag.IntVar(&memLimitMiB, "memLimitMiB", 100, "Process Memory in MiB (default 100, set to -1 to use system default)")
+	flag.BoolVar(&validateOnly, "validate", false, "Validate configuration files and exit (non-zero on errors)")
 	flag.Parse()
 
 	if memLimitMiB > 0 {
@@ -37,6 +39,21 @@ func main() {
 
 	beelzebubServicesConfiguration, err := cfgParser.ReadConfigurationsServices()
 	failOnError(err, "Error during ReadConfigurationsServices: ")
+
+	// -validate: statically check configs (core + services, including the
+	// per-protocol validators registered via init()) and exit. Non-zero exit
+	// on any error-level finding. Registered validators are present because
+	// the builder import above pulls in every protocol package.
+	if validateOnly {
+		coreResult := bzbparser.ValidateCore(coreConfigurations, configurationsCorePath)
+		servicesResult := bzbparser.Validate(beelzebubServicesConfiguration, nil)
+		coreResult.Print()
+		servicesResult.Print()
+		if coreResult.ExitCode() != 0 || servicesResult.ExitCode() != 0 {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Load persona.yaml from the services directory (or PERSONA_DIR override).
 	// Backward-compat: warn and continue with an empty persona if file is absent.

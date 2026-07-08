@@ -206,6 +206,12 @@ type State struct {
 
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service
 type BeelzebubServiceConfiguration struct {
+	// Filename is the source config file this service was loaded from, stamped
+	// at load time and used by the validator to group findings per file. Not a
+	// config field: yaml:"-" so it is never parsed, json:"-" so it stays out of
+	// HashCode's marshaling.
+	Filename string `yaml:"-" json:"-"`
+
 	ApiVersion             string          `yaml:"apiVersion"`
 	Protocol               string          `yaml:"protocol"`
 	Address                string          `yaml:"address"`
@@ -463,6 +469,9 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 		if err != nil {
 			return nil, fmt.Errorf("in file %s: %v", filePath, err)
 		}
+
+		// Stamp the source file so the validator can group findings per file.
+		beelzebubServiceConfiguration.Filename = servicesName
 
 		// Warn on ${ENV_VAR} references whose corresponding env var is unset.
 		// Discovered when a fork sensor served literal "${HTTP_CANARY_WEB_BUG}"
