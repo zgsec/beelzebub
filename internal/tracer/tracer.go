@@ -166,17 +166,16 @@ type Event struct {
 	// HTTP strategy's stateful handlers (sessionCapture) plus the
 	// artifact_sha256 when an artifact was written. Keys MUST be
 	// dot-namespaced by service to avoid collision: "screenconnect.operator_user".
-	// Propagates through to the aggregator's deception_metadata JSONB column.
+	// Propagates downstream with the event.
 	Captured map[string]string `json:"Captured,omitempty"`
 
 	// WS-4 Slice B (2026-05-12): body-capture integrity fields. Hashes are
 	// computed over the FULL raw body bytes BEFORE any truncation, so the
 	// hash is forensic identity even when RequestBody / ResponseBody are
-	// truncated for storage. Empty when the body was empty (per Slice B Q1
-	// — see docs/strategy/2026-05-12-ws4-slice-b-body-capture-design.md in
-	// the honeypot-research repo). Hashing runs unconditionally on every
-	// body the wire carried — independent of CaptureRequestBody — so the
-	// hash field always reflects "what was on the wire" (Slice B Q5).
+	// truncated for storage. Empty when the body was empty. Hashing runs
+	// unconditionally on every body the wire carried — independent of
+	// CaptureRequestBody — so the hash field always reflects "what was on the
+	// wire".
 	RequestBodySha256  string `json:"RequestBodySha256,omitempty"`
 	ResponseBodySha256 string `json:"ResponseBodySha256,omitempty"`
 
@@ -203,6 +202,24 @@ const (
 
 func (protocol Protocol) String() string {
 	return [...]string{"HTTP", "SSH", "TCP", "MCP", "TELNET"}[protocol]
+}
+
+// ProtocolFromString converts a lowercase protocol name to its Protocol constant.
+func ProtocolFromString(s string) (Protocol, bool) {
+	switch s {
+	case "http":
+		return HTTP, true
+	case "ssh":
+		return SSH, true
+	case "tcp":
+		return TCP, true
+	case "mcp":
+		return MCP, true
+	case "telnet":
+		return TELNET, true
+	default:
+		return 0, false
+	}
 }
 
 const (

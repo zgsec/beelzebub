@@ -23,5 +23,5 @@ out/
 honeytoken-harness
 docs/superpowers/
 
-# Research / fingerprint-oracle tooling lives in honeypot-research, not here.
+# Research / fingerprint-oracle tooling belongs in a private repo, not here.
 tools/fingerprint-oracle/

@@ -7,6 +7,5 @@ version: 0.1.0
 appVersion: "v3.0.0"
 
 maintainers:
-  - name: mariocandela
-    email: mario.candela.personal@gmail.com
-    url: https://github.com/mariocandela
+  - name: zgsec
+    url: https://github.com/zgsec/beelzebub

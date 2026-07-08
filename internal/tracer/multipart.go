@@ -13,10 +13,8 @@ import (
 // MultipartPart is one entry in tracer.Event.RequestBodyParts. Populated by
 // ParseMultipart when an HTTP request arrives with a multipart/* Content-Type.
 //
-// Shape is the same as the Slice B design's schema:
-// docs/strategy/2026-05-12-ws4-slice-b-body-capture-design.md (in the
-// honeypot-research repo). The exporter forwards this struct verbatim as
-// opaque JSON and the aggregator stores it in sessions.multipart_parts JSONB.
+// The exporter forwards this struct verbatim as opaque JSON for downstream
+// storage.
 type MultipartPart struct {
 	Name        string `json:"name,omitempty"`
 	Filename    string `json:"filename,omitempty"`

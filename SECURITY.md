@@ -9,5 +9,9 @@
 
 ## Reporting a Vulnerability
 
-Please report (suspected) security vulnerabilities to mario.candela.personal@gmail.com. 
-You will receive a response from us within 48 hours. If the issue is confirmed, we will release a patch as soon as possible depending on complexity but historically within a few days.
+Please report (suspected) security vulnerabilities privately via GitHub's private
+vulnerability reporting on this repository — the **Security** tab → **Report a
+vulnerability**. Please do not open a public issue for security matters.
+
+We aim to respond within a few days and, if the issue is confirmed, to release a
+patch as soon as possible depending on complexity.
