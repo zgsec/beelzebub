@@ -75,3 +75,25 @@ func TestContentTypeSplit(t *testing.T) {
 		t.Errorf("/v1 400 ct=%q, want %q", ct(rec), charset)
 	}
 }
+
+// Real Ollama's 404 for an unmatched route is the uniform Go/gin default:
+// Content-Type "text/plain" (NO charset), body "404 page not found" (18 bytes,
+// no trailing newline) — NOT a JSON error envelope.
+func TestFallback404Shape(t *testing.T) {
+	s := newTestStrategy()
+	rec := httptest.NewRecorder()
+	s.handleFallback(rec, httptest.NewRequest("GET", "/api/bogus", nil), parser.BeelzebubServiceConfiguration{}, noopTracer())
+
+	if rec.Code != 404 {
+		t.Fatalf("code=%d, want 404", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain" {
+		t.Errorf("content-type=%q, want %q (bare, no charset)", ct, "text/plain")
+	}
+	if b := rec.Body.String(); b != "404 page not found" {
+		t.Errorf("body=%q, want %q (no trailing newline, no JSON)", b, "404 page not found")
+	}
+	if v := rec.Header().Get("Ollama-Version"); v != "" {
+		t.Errorf("Ollama-Version header present (%q); real Ollama sends none", v)
+	}
+}

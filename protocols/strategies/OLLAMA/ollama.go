@@ -442,7 +442,7 @@ func (s *OllamaStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr 
 			s.handleFallback(w, r, servConf, tr)
 			return
 		}
-		w.Header().Set("Ollama-Version", s.version)
+		// Real Ollama sends no Ollama-Version response header on "/".
 		s.handleRoot(w, r, servConf, tr)
 	}))
 	mux.HandleFunc("GET /api/version", withCORS(func(w http.ResponseWriter, r *http.Request) {
@@ -1985,11 +1985,17 @@ func (s *OllamaStrategy) handleFallback(w http.ResponseWriter, r *http.Request, 
 	s.checkBridgeAndCapture(r, "ollama/fallback")
 	body := s.readBody(r)
 
-	w.Header().Set("Content-Type", "application/json")
+	// Real Ollama's 404 for an unmatched route is the uniform Go/gin default:
+	// Content-Type text/plain (NO charset), body "404 page not found" (18 bytes,
+	// no trailing newline), Content-Length 18. The prior JSON {"error":"not found"}
+	// envelope was a fingerprint. (Method-mismatch on a KNOWN path still yields a
+	// 405 from the mux — that path is unaffected.)
+	const notFound = "404 page not found"
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(notFound)))
 	w.WriteHeader(http.StatusNotFound)
-	resp := `{"error":"not found"}`
-	fmt.Fprint(w, resp)
-	s.traceEvent(r, tr, servConf, "ollama/fallback", r.Method+" "+r.URL.Path, resp, string(body))
+	fmt.Fprint(w, notFound)
+	s.traceEvent(r, tr, servConf, "ollama/fallback", r.Method+" "+r.URL.Path, notFound, string(body))
 }
 
 // --- Streaming helpers ---
