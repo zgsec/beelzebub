@@ -60,12 +60,19 @@ func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {
 }
 
 func (b *Builder) buildLogger(configurations parser.Logging) error {
-	logsFile, err := os.OpenFile(configurations.LogsPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return err
+	// No logsPath: log to stdout only. A missing path must not abort boot —
+	// fresh sensor stand-ups often ship a minimal core config without one.
+	output := io.Writer(os.Stdout)
+	if configurations.LogsPath != "" {
+		logsFile, err := os.OpenFile(configurations.LogsPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			return err
+		}
+		output = io.MultiWriter(os.Stdout, logsFile)
+		b.logsFile = logsFile
 	}
 
-	log.SetOutput(io.MultiWriter(os.Stdout, logsFile))
+	log.SetOutput(output)
 
 	log.SetFormatter(&log.JSONFormatter{
 		DisableTimestamp: configurations.LogDisableTimestamp,
@@ -76,7 +83,6 @@ func (b *Builder) buildLogger(configurations parser.Logging) error {
 	} else {
 		log.SetLevel(log.InfoLevel)
 	}
-	b.logsFile = logsFile
 	return nil
 }
 
