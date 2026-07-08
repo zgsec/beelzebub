@@ -1,9 +1,0 @@
-# Minimal beelzebub HTTP service config — used as fixture, not deployed.
-apiVersion: "v1"
-protocol: "http"
-address: ":8888"
-description: "mini-fixture-http"
-commands:
-  - regex: "^GET /$"
-    handler: "200 OK"
-    statusCode: 200

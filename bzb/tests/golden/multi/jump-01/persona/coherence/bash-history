@@ -1,2 +1,0 @@
-ssh deploy@web-01.int.multi.test
-psql -h db-01.int.multi.test -U app
