@@ -1018,32 +1018,32 @@ func (s *OllamaStrategy) handlePs(w http.ResponseWriter, r *http.Request, servCo
 	// a loaded model is trivially detectable by polling /api/ps on a fresh
 	// target. Mirror the real behavior: require at least one inference call
 	// from ANY IP within the last 5 minutes to list a model as loaded.
-	running := []map[string]interface{}{}
+	running := []ollamaPsModel{}
 	s.lastInferenceMu.RLock()
 	fresh := !s.lastInferenceAt.IsZero() && time.Since(s.lastInferenceAt) < 5*time.Minute
 	s.lastInferenceMu.RUnlock()
 	if fresh && len(s.models) > 0 {
 		m := s.models[0]
-		running = append(running, map[string]interface{}{
-			"name":           m.Name,
-			"model":          m.Name,
-			"size":           sizeFromParam(m.ParameterSize),
-			"digest":         s.stableDigestHex(m.Name),
-			"expires_at":     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
-			"size_vram":      sizeFromParam(m.ParameterSize),
-			"context_length": 4096,
-			"details": map[string]interface{}{
-				"parent_model":       "",
-				"format":             "gguf",
-				"family":             m.Family,
-				"families":           []string{m.Family},
-				"parameter_size":     m.ParameterSize,
-				"quantization_level": m.QuantizationLevel,
+		running = append(running, ollamaPsModel{
+			Name:   m.Name,
+			Model:  m.Name,
+			Size:   sizeFromParam(m.ParameterSize),
+			Digest: s.stableDigestHex(m.Name),
+			Details: ollamaModelDetails{
+				ParentModel:       "",
+				Format:            "gguf",
+				Family:            m.Family,
+				Families:          []string{m.Family},
+				ParameterSize:     m.ParameterSize,
+				QuantizationLevel: m.QuantizationLevel,
 			},
+			ExpiresAt:     time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+			SizeVRAM:      sizeFromParam(m.ParameterSize),
+			ContextLength: 4096,
 		})
 	}
 
-	resp := map[string]interface{}{"models": running}
+	resp := ollamaPsResponse{Models: running}
 
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
@@ -1510,12 +1510,12 @@ func (s *OllamaStrategy) handleEmbed(w http.ResponseWriter, r *http.Request, ser
 	evalDurNs := int64(50+s.rng.Intn(30)) * 1e6
 	s.rngMu.Unlock()
 
-	resp := map[string]interface{}{
-		"model":             req.Model,
-		"embeddings":        [][]float32{embedding},
-		"total_duration":    loadDurNs + evalDurNs,
-		"load_duration":     loadDurNs,
-		"prompt_eval_count": promptEvalCount,
+	resp := ollamaEmbedResponse{
+		Model:           req.Model,
+		Embeddings:      [][]float32{embedding},
+		TotalDuration:   loadDurNs + evalDurNs,
+		LoadDuration:    loadDurNs,
+		PromptEvalCount: promptEvalCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1596,15 +1596,15 @@ func (s *OllamaStrategy) handlePull(w http.ResponseWriter, r *http.Request, serv
 	// real pulls emit between writing-manifest and success.
 	shortHex := s.stableDigestHex(req.Name)[:12]
 	fullDigest := s.stableDigest(req.Name)
-	stages := []map[string]interface{}{
-		{"status": "pulling manifest"},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 1200000000},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 3500000000},
-		{"status": "pulling " + shortHex, "digest": fullDigest, "total": 4700000000, "completed": 4700000000},
-		{"status": "verifying sha256 digest"},
-		{"status": "writing manifest"},
-		{"status": "removing any unused layers"},
-		{"status": "success"},
+	stages := []ollamaPullProgress{
+		{Status: "pulling manifest"},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 1200000000},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 3500000000},
+		{Status: "pulling " + shortHex, Digest: fullDigest, Total: 4700000000, Completed: 4700000000},
+		{Status: "verifying sha256 digest"},
+		{Status: "writing manifest"},
+		{Status: "removing any unused layers"},
+		{Status: "success"},
 	}
 
 	for _, stage := range stages {
@@ -2012,11 +2012,11 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
-		chunk := map[string]interface{}{
-			"model":      model,
-			"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-			"response":   token,
-			"done":       false,
+		chunk := ollamaGenerateChunk{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Response:  token,
+			Done:      false,
 		}
 		out, _ := json.Marshal(chunk)
 		w.Write(out)
@@ -2035,19 +2035,19 @@ func (s *OllamaStrategy) streamOllamaResponse(w http.ResponseWriter, model, resp
 
 	// Final chunk with stats
 	elapsed := time.Since(start)
-	finalChunk := map[string]interface{}{
-		"model":                model,
-		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
-		"response":             "",
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
-		"context":              ollamaContextArray(promptEvalCount, len(tokens)),
+	finalChunk := ollamaGenerateDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Response:           "",
+		Done:               true,
+		DoneReason:         "stop",
+		Context:            ollamaContextArray(promptEvalCount, len(tokens)),
+		TotalDuration:      elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(tokens),
+		EvalDuration:       elapsed.Nanoseconds(),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -2061,19 +2061,19 @@ func (s *OllamaStrategy) writeOllamaNonStreaming(w http.ResponseWriter, model, r
 	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
 	evalCount := len(response) / 4
-	resp := map[string]interface{}{
-		"model":                model,
-		"created_at":           time.Now().UTC().Format(time.RFC3339Nano),
-		"response":             response,
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           evalCount,
-		"eval_duration":        int64(200e6),
-		"context":              ollamaContextArray(promptEvalCount, evalCount),
+	resp := ollamaGenerateDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Response:           response,
+		Done:               true,
+		DoneReason:         "stop",
+		Context:            ollamaContextArray(promptEvalCount, evalCount),
+		TotalDuration:      int64(timing.LoadDurationMs+200) * 1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          evalCount,
+		EvalDuration:       int64(200e6),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
@@ -2097,14 +2097,11 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	promptEvalCount := promptLen/4 + 1
 
 	for i, token := range tokens {
-		chunk := map[string]interface{}{
-			"model":      model,
-			"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-			"message": map[string]string{
-				"role":    "assistant",
-				"content": token,
-			},
-			"done": false,
+		chunk := ollamaChatChunk{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message:   ollamaChatMessage{Role: "assistant", Content: token},
+			Done:      false,
 		}
 		out, _ := json.Marshal(chunk)
 		w.Write(out)
@@ -2121,21 +2118,18 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 	}
 
 	elapsed := time.Since(start)
-	finalChunk := map[string]interface{}{
-		"model":      model,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"message": map[string]string{
-			"role":    "assistant",
-			"content": "",
-		},
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(tokens),
-		"eval_duration":        elapsed.Nanoseconds(),
+	finalChunk := ollamaChatDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Message:            ollamaChatMessage{Role: "assistant", Content: ""},
+		Done:               true,
+		DoneReason:         "stop",
+		TotalDuration:      elapsed.Nanoseconds() + int64(timing.LoadDurationMs)*1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(tokens),
+		EvalDuration:       elapsed.Nanoseconds(),
 	}
 	out, _ := json.Marshal(finalChunk)
 	w.Write(out)
@@ -2148,21 +2142,18 @@ func (s *OllamaStrategy) streamOllamaChatResponse(w http.ResponseWriter, model, 
 func (s *OllamaStrategy) writeOllamaChatNonStreaming(w http.ResponseWriter, model, response string, promptLen int) {
 	timing := timingForModel(model)
 	promptEvalCount := promptLen/4 + 1
-	resp := map[string]interface{}{
-		"model":      model,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"message": map[string]string{
-			"role":    "assistant",
-			"content": response,
-		},
-		"done":                 true,
-		"done_reason":          "stop",
-		"total_duration":       int64(timing.LoadDurationMs+200) * 1e6,
-		"load_duration":        int64(timing.LoadDurationMs) * 1e6,
-		"prompt_eval_count":    promptEvalCount,
-		"prompt_eval_duration": int64(50e6),
-		"eval_count":           len(response) / 4,
-		"eval_duration":        int64(200e6),
+	resp := ollamaChatDone{
+		Model:              model,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339Nano),
+		Message:            ollamaChatMessage{Role: "assistant", Content: response},
+		Done:               true,
+		DoneReason:         "stop",
+		TotalDuration:      int64(timing.LoadDurationMs+200) * 1e6,
+		LoadDuration:       int64(timing.LoadDurationMs) * 1e6,
+		PromptEvalCount:    promptEvalCount,
+		PromptEvalDuration: int64(50e6),
+		EvalCount:          len(response) / 4,
+		EvalDuration:       int64(200e6),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out, _ := json.Marshal(resp)
