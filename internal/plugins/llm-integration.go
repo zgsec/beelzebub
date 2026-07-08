@@ -572,7 +572,7 @@ func removeQuotes(content string) string {
 var (
 	thinkBlockRe  = regexp.MustCompile(`(?is)<think>.*?</think>`)
 	strayThinkRe  = regexp.MustCompile(`(?i)</?think>`)
-	personaTellRe = regexp.MustCompile(`(?i)\bopenclaw\b|this is a honeypot|honeypot environment|` +
+	personaTellRe = regexp.MustCompile(`(?i)this is a honeypot|honeypot environment|` +
 		`simulated (?:service|environment) for (?:demo|test)|\bhoneypot\b|\bbeelzebub\b`)
 )
 
