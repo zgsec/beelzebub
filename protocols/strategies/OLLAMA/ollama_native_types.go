@@ -1,5 +1,7 @@
 package OLLAMA
 
+import "encoding/json"
+
 // Native /api/* response types. These are DELIBERATE structs (not
 // map[string]interface{}) for the same reason the OpenAI /v1/* types are:
 // Go marshals a map with keys sorted ALPHABETICALLY, but real Ollama (Go
@@ -99,4 +101,57 @@ type ollamaPullProgress struct {
 	Digest    string `json:"digest,omitempty"`
 	Total     int64  `json:"total,omitempty"`
 	Completed int64  `json:"completed,omitempty"`
+}
+
+// ollamaTagsDetails is the /api/tags details block. Unlike /api/ps (6 keys) it
+// carries two MORE keys in 0.31.1: context_length + embedding_length.
+type ollamaTagsDetails struct {
+	ParentModel       string   `json:"parent_model"`
+	Format            string   `json:"format"`
+	Family            string   `json:"family"`
+	Families          []string `json:"families"`
+	ParameterSize     string   `json:"parameter_size"`
+	QuantizationLevel string   `json:"quantization_level"`
+	ContextLength     int      `json:"context_length"`
+	EmbeddingLength   int      `json:"embedding_length"`
+}
+
+type ollamaTagsModel struct {
+	Name         string            `json:"name"`
+	Model        string            `json:"model"`
+	ModifiedAt   string            `json:"modified_at"`
+	Size         int64             `json:"size"`
+	Digest       string            `json:"digest"`
+	Details      ollamaTagsDetails `json:"details"`
+	Capabilities []string          `json:"capabilities"`
+}
+
+type ollamaTagsResponse struct {
+	Models []ollamaTagsModel `json:"models"`
+}
+
+// ollamaShowResponse is the FALLBACK /api/show shape (used only when a model
+// has no baked GGUF metadata — an authoring omission; advertised models should
+// always have a modelmeta/*.json). model_info + tensors are json.RawMessage so
+// the baked path can pass GGUF bytes through untouched and the fallback can emit
+// a derived-but-ordered object. Field order mirrors real Ollama.
+type ollamaShowResponse struct {
+	License      string             `json:"license"`
+	Modelfile    string             `json:"modelfile"`
+	Parameters   string             `json:"parameters"`
+	Template     string             `json:"template"`
+	Details      ollamaModelDetails `json:"details"`
+	ModelInfo    json.RawMessage    `json:"model_info"`
+	Tensors      json.RawMessage    `json:"tensors"`
+	Capabilities []string           `json:"capabilities"`
+	ModifiedAt   string             `json:"modified_at"`
+}
+
+// ollamaFallbackModelInfo is the minimal ordered model_info for the no-baked-
+// metadata fallback (general.* keys only; arch-specific keys need the GGUF).
+type ollamaFallbackModelInfo struct {
+	Architecture   string `json:"general.architecture"`
+	FileType       int    `json:"general.file_type"`
+	ParameterCount int64  `json:"general.parameter_count"`
+	QuantVersion   int    `json:"general.quantization_version"`
 }

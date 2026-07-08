@@ -957,53 +957,60 @@ func (s *OllamaStrategy) handleTags(w http.ResponseWriter, r *http.Request, serv
 	sess.EndpointsHit["tags"] = true
 	sess.mu.Unlock()
 
-	type modelEntry struct {
-		Name       string `json:"name"`
-		Model      string `json:"model"`
-		ModifiedAt string `json:"modified_at"`
-		Size       int64  `json:"size"`
-		Digest     string `json:"digest"`
-		Details    struct {
-			ParentModel       string   `json:"parent_model"`
-			Format            string   `json:"format"`
-			Family            string   `json:"family"`
-			Families          []string `json:"families"`
-			ParameterSize     string   `json:"parameter_size"`
-			QuantizationLevel string   `json:"quantization_level"`
-		} `json:"details"`
-	}
-
 	// Per-model timestamps: deterministic from (persona.slug, model.name)
 	// so two consecutive requests for the same model produce identical
 	// modified_at values, but each model has its own apparent mtime within
 	// the last 90 days. All emitted values share the persona's timezone
 	// offset (Asia/Singapore +08:00, America/New_York -05:00, etc.) which
-	// keeps coherence with where the persona claims to be hosted. Replaces
-	// the previous hardcoded build-time strings — those tripped both
-	// staleness AND mixed-offset (-05/-08/-06) detection signals.
-	var models []modelEntry
+	// keeps coherence with where the persona claims to be hosted.
+	//
+	// details/capabilities/context_length/embedding_length come from the
+	// baked GGUF metadata when present (authoritative + coherent with
+	// /api/show); otherwise from config + per-model derivation. Real 0.31.1
+	// /api/tags carries context_length + embedding_length in details AND a
+	// top-level capabilities array — both were previously missing.
+	var models []ollamaTagsModel
 	for _, m := range s.models {
-		e := modelEntry{
+		e := ollamaTagsModel{
 			Name:       m.Name,
 			Model:      m.Name,
 			ModifiedAt: s.modelModifiedAt(m.Name),
 			Size:       sizeFromParam(m.ParameterSize),
 			Digest:     s.stableDigestHex(m.Name),
 		}
-		e.Details.Format = "gguf"
-		e.Details.Family = m.Family
-		e.Details.Families = []string{m.Family}
-		e.Details.ParameterSize = m.ParameterSize
-		e.Details.QuantizationLevel = m.QuantizationLevel
+		if meta, ok := lookupModelMeta(m.Name); ok {
+			e.Details = ollamaTagsDetails{
+				ParentModel:       meta.details.ParentModel,
+				Format:            meta.details.Format,
+				Family:            meta.details.Family,
+				Families:          meta.details.Families,
+				ParameterSize:     meta.details.ParameterSize,
+				QuantizationLevel: meta.details.QuantizationLevel,
+				ContextLength:     meta.contextLength,
+				EmbeddingLength:   meta.embeddingLength,
+			}
+			e.Capabilities = meta.capabilities
+		} else {
+			e.Details = ollamaTagsDetails{
+				ParentModel:       "",
+				Format:            "gguf",
+				Family:            m.Family,
+				Families:          []string{m.Family},
+				ParameterSize:     m.ParameterSize,
+				QuantizationLevel: m.QuantizationLevel,
+				ContextLength:     contextLengthForModel(m.Name, m.Family),
+				EmbeddingLength:   embeddingLengthForModel(m.Name, m.Family),
+			}
+			e.Capabilities = capabilitiesForModel(m.Name, m.Family)
+		}
 		models = append(models, e)
 	}
 
-	resp := struct {
-		Models []modelEntry `json:"models"`
-	}{Models: models}
+	resp := ollamaTagsResponse{Models: models}
 
-	w.Header().Set("Ollama-Version", s.version)
-	w.Header().Set("Content-Type", "application/json")
+	// Real Ollama sends NO Ollama-Version response header (only content-type/
+	// date/transfer-encoding), and JSON endpoints are application/json;charset=utf-8.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/tags", "GET /api/tags", string(out), "")
@@ -1349,8 +1356,7 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		errResp, _ := json.Marshal(map[string]string{
 			"error": "model '" + req.Model + "' not found",
 		})
-		w.Header().Set("Ollama-Version", s.version)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		w.Write(errResp)
 		s.traceEvent(r, tr, servConf, "ollama/show", "POST /api/show", string(errResp), string(body))
@@ -1368,58 +1374,51 @@ func (s *OllamaStrategy) handleShow(w http.ResponseWriter, r *http.Request, serv
 		}
 	}
 
+	// Faithful path: serve the byte-exact GGUF /api/show (full 28-key
+	// model_info + the tensor list, both present by default in 0.31.1) with
+	// modified_at patched to this deploy's per-model timestamp. Advertised
+	// models should always have baked metadata (modelmeta/<model>.json).
+	if baked, ok := bakedShow(req.Model, s.modelModifiedAt(req.Model)); ok {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Write(baked)
+		s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(baked), string(body))
+		return
+	}
+
+	// Fallback: no baked metadata (an authoring omission). Emit an ORDERED,
+	// structurally-complete /api/show — but model_info/tensors are necessarily
+	// incomplete without the GGUF. NOTE: this path deliberately drops the
+	// former cdf.* model_info enrichment; those keys are themselves a fidelity
+	// tell (real model_info holds only general.*/<arch>.* keys).
+	log.Printf("ollama/show: no baked metadata for %q — serving degraded /api/show; run gguf_oracle", req.Model)
 	pCount := paramCountFromSize(paramSize)
-	host, _ := s.clientIP(r)
-	modelInfo := map[string]interface{}{
-		"general.architecture":         family,
-		"general.parameter_count":      pCount,
-		"general.quantization_version": 2,
-		"general.file_type":            2,
-		"general.context_length":       4096,
-		"general.embedding_length":     4096,
-	}
-
-	// Cross-protocol: enrich model_info for IPs seen on other protocols
-	if s.Bridge != nil {
-		if s.Bridge.HasFlag(host, "mcp_tool_call") {
-			modelInfo["cdf.mcp_integration"] = true
-			modelInfo["cdf.mcp_endpoint"] = "http://localhost:8000/mcp"
-		}
-		if s.Bridge.HasFlag(host, "ssh_authenticated") {
-			vaultAddr := s.personaOrEmpty().Coherence.VaultAddr
-			if vaultAddr == "" {
-				vaultAddr = s.personaOrEmpty().Identity.InternalDomain
-			}
-			if vaultAddr != "" {
-				modelInfo["cdf.credential_vault"] = "https://vault." + vaultAddr + ":8200"
-			}
-			modelInfo["cdf.ssh_config_available"] = true
-		}
-		discoveries := s.Bridge.GetDiscoveries(host)
-		if len(discoveries) > 0 {
-			modelInfo["cdf.service_credentials_available"] = true
-		}
-	}
-
-	showResp := map[string]interface{}{
-		"modelfile":  fmt.Sprintf("FROM %s", req.Model),
-		"parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
-		"template":   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
-		"details": map[string]interface{}{
-			"parent_model":       "",
-			"format":             "gguf",
-			"family":             family,
-			"families":           []string{family},
-			"parameter_size":     paramSize,
-			"quantization_level": quantLevel,
+	modelInfo, _ := json.Marshal(ollamaFallbackModelInfo{
+		Architecture:   family,
+		FileType:       2,
+		ParameterCount: pCount,
+		QuantVersion:   2,
+	})
+	resp := ollamaShowResponse{
+		License:    "Meta Llama 3.1 Community License Agreement",
+		Modelfile:  fmt.Sprintf("FROM %s", req.Model),
+		Parameters: "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
+		Template:   "{{ if .System }}<|start_header_id|>system<|end_header_id|>\n\n{{ .System }}<|eot_id|>{{ end }}{{ if .Prompt }}<|start_header_id|>user<|end_header_id|>\n\n{{ .Prompt }}<|eot_id|>{{ end }}<|start_header_id|>assistant<|end_header_id|>\n\n{{ .Response }}<|eot_id|>",
+		Details: ollamaModelDetails{
+			ParentModel:       "",
+			Format:            "gguf",
+			Family:            family,
+			Families:          []string{family},
+			ParameterSize:     paramSize,
+			QuantizationLevel: quantLevel,
 		},
-		"model_info":   modelInfo,
-		"license":      "Meta Llama 3.1 Community License Agreement",
-		"capabilities": []string{"completion"},
+		ModelInfo:    modelInfo,
+		Tensors:      json.RawMessage("[]"),
+		Capabilities: capabilitiesForModel(req.Model, family),
+		ModifiedAt:   s.modelModifiedAt(req.Model),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	out, _ := json.Marshal(showResp)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	out, _ := json.Marshal(resp)
 	w.Write(out)
 	s.traceEvent(r, tr, servConf, "ollama/show", req.Model, string(out), string(body))
 }
