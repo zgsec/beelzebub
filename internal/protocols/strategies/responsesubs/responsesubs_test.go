@@ -366,8 +366,7 @@ func TestApply_TimeAgo_Minutes(t *testing.T) {
 
 func TestApply_TimeAgo_UnknownDurationLeftAlone(t *testing.T) {
 	// Invalid duration unit should not panic; leaving template intact is
-	// acceptable (a missed-rendering bug will be caught by lure_lint R11
-	// from task 4.2). Just don't panic and don't emit garbage.
+	// acceptable. Just don't panic and don't emit garbage.
 	got, _ := Apply(`{"t":"${time.ago.5x}"}`, nil, nil, nil)
 	// Either left as-is or emitted as null — both acceptable; check no panic.
 	_ = got

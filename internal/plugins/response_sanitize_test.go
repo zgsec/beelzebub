@@ -28,8 +28,8 @@ func TestSanitizeServedResponse(t *testing.T) {
 		},
 		{
 			name:    "scrubs persona-breaking product words",
-			in:      "Running under beelzebub with openclaw diagnostics enabled.",
-			mustNot: []string{"beelzebub", "openclaw"},
+			in:      "Running under beelzebub diagnostics enabled.",
+			mustNot: []string{"beelzebub"},
 		},
 		{
 			name:     "leaves a clean reply untouched",

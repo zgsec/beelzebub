@@ -12,7 +12,7 @@ configurations/services/mcp-8000.yaml:generic-api-key:1128
 configurations/services/ollama-11434.yaml:generic-api-key:103
 
 # Fake AWS canary key in Ollama honeypot test — intentionally fake for deception
-protocols/strategies/OLLAMA/ollama_test.go:aws-access-token:69
+internal/protocols/strategies/OLLAMA/ollama_test.go:aws-access-token:69
 
 # OpenAI/vLLM honeypot lure credentials — all fake, designed to attract attackers
 configurations/services/openai-8001.yaml:private-key:393
@@ -29,45 +29,18 @@ configurations/services/http-8888.yaml:generic-api-key:294
 configurations/services/http-8888.yaml:generic-api-key:355
 configurations/services/http-8888.yaml:jwt:85
 
-# OpenClaw Gateway honeypot lure credentials — fake MCP tokens, fake JWT secret
-configurations/services/openclaw-18789.yaml:generic-api-key:297
-configurations/services/openclaw-18789.yaml:generic-api-key:607
-configurations/services/openclaw-18789.yaml:generic-api-key:619
-configurations/services/openclaw-18789.yaml:generic-api-key:675
-
 # Fake RSA key in MCP WorldState — honeypot filesystem breadcrumb (deploy-key.pem)
-protocols/strategies/MCP/state.go:private-key:516
+internal/protocols/strategies/MCP/state.go:private-key:516
 
 # Shell emulator honeypot lure credentials — all fake/example values for deception
 # Line numbers shift when defaults.go is edited; update fingerprints here.
-protocols/strategies/SSH/shellemulator/defaults.go:private-key:138
-protocols/strategies/SSH/shellemulator/defaults.go:generic-api-key:67
+internal/protocols/strategies/SSH/shellemulator/defaults.go:private-key:138
+internal/protocols/strategies/SSH/shellemulator/defaults.go:generic-api-key:67
 
 # Shell emulator tests — fake canarytoken test values, not real credentials
-protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:51
-protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:56
-protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
+internal/protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:51
+internal/protocols/strategies/SSH/shellemulator/emulator_test.go:aws-access-token:56
+internal/protocols/strategies/SSH/shellemulator/emulator_test.go:generic-api-key:90
 
 # .env.example — documented example values, not real secrets
-configurations/.env.example:generic-api-key:51
-
-# lure_lint.py BANNED_LITERALS — these are the strings the linter scans for
-# in OTHER files. They live here as a defensive blocklist, not as live secrets.
-# Line numbers shift when banned-literal entries are added/removed.
-tools/lure_lint.py:github-pat:353
-tools/lure_lint.py:aws-access-token:347
-
-
-# These are copies of the original service YAML lure content moved to the persona bundle dir.
-
-
-# (same content as configurations/services/openclaw-18789.yaml, all fake)
-
-# Fake MCP session token in openclaw remediation handler — honeypot deception value
-configurations/services/openclaw-18789.yaml:generic-api-key:567
-
-# Format: cdf_prod_2026Q[1-4]-<8 hex>. Intentional fake credentials embedded
-# in lures for the cross-pollination POC. NOT real secrets.
-
-# Placeholder OpenAI key + REDIS_PASSWORD with watermark; both designed to be
-# served to the LLM-driven shell emulator on the wire. NOT real secrets.
+configurations/.env.example:generic-api-key:46
