@@ -106,7 +106,7 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 // constants for cross-sensor consistency.
 //
 // Credential-shaped values (AWS keys, DB password, DNS, web hook URL,
-// Datadog key, Vault token) are loaded from /opt/honeypot-sensor/.env at
+// Datadog key, Vault token) are loaded from the deployment environment at
 // first-substitution time. The MCP service refuses to serve config-driven
 // responses if any are missing — there is no fallback to AWS-documentation
 // example keys, since returning those to an operator immediately blows the
@@ -115,9 +115,8 @@ func (s *MCPStrategy) getOrCreateWorld(ip string) *WorldState {
 // The required-env check runs on every call (see defaultMCPCanaryFallbacks);
 // only the fallback map itself is built lazily via sync.Once.
 //
-// To populate in production: mint canarytokens.org tokens for each variable,
-// add to the sensor's .env, run ops/render-services.sh (which also envsubsts
-// the YAML), then docker compose up.
+// To populate in production: mint canarytokens.org tokens for each variable and
+// provide them via the deployment environment before starting the service.
 var (
 	canaryFallbacksOnce  sync.Once
 	canaryFallbacksCache map[string]string
@@ -155,8 +154,8 @@ func defaultMCPCanaryFallbacks() (map[string]string, error) {
 	// boot. The Once only caches the fallback map, and only once env is present.
 	if missing := missingCanaryEnv(); len(missing) > 0 {
 		return nil, fmt.Errorf("MCP service refusing to substitute canaries: missing "+
-			"required env vars: %v. Populate /opt/honeypot-sensor/.env and "+
-			"re-run ops/render-services.sh before docker compose up", missing)
+			"required env vars: %v. Populate the required environment variables "+
+			"before starting the service", missing)
 	}
 	canaryFallbacksOnce.Do(func() {
 		canaryFallbacksCache = map[string]string{

@@ -14,7 +14,7 @@
 # INTENTIONAL BAIT (preserve):
 #   - `{{ persona.lure_content.service_name | default('platform') }}-prod` in INFO replication role + repl_id
 #   - ${REDIS_CANARY_AWS_KEY} in CONFIG GET masterauth + GET api_key:* values
-#     (substituted at deploy time by ops/render-services.sh from .env)
+#     (substituted at deploy time from the environment)
 #   - Cross-protocol breadcrumbs referencing {{ persona.slug }} platform services
 #   - Keyspace bait: session:*, user:*, api_key:*, config:*
 #
