@@ -15,13 +15,13 @@ everything here builds on — and we aim to be good citizens of it.
   injection, novelty scoring). They are designed to be **opt-in** and
   **backward-compatible** with upstream configs.
 
-## Posture (as of 2026-06)
+## Posture (as of 2026-07)
 
-We are running a **stabilize-now, decide-sync-later** posture:
+We have moved from "stabilize-now, decide-sync-later" to **actively tracking upstream**:
 
-- We are **not** mechanically merging upstream's 40 ahead-commits into the fork
-  right now. The sync/tracking decision is **deliberately deferred** to a focused
-  session — this doc exists so that decision starts from facts, not archaeology.
+- We have **realigned to upstream's current structure** — module path
+  `github.com/beelzebub-labs/beelzebub/v3` and packages under `internal/` — so
+  rebases against upstream apply cleanly instead of needing a full path remap.
 - The `origin` remote points at upstream and `fork` at our copy
   (`zgsec/beelzebub`), so a sync is always one fetch away. Upstream is now
   `beelzebub-labs/beelzebub`; if your `origin` still reads `mariocandela/...`
