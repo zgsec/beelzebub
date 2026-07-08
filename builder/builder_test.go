@@ -44,6 +44,18 @@ func TestBuilderClose_LogFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "file already closed")
 }
 
+func TestBuildLogger_EmptyLogsPath(t *testing.T) {
+	// A service config that omits logsPath must not crash the honeypot on boot:
+	// with no path we log to stdout only, leaving logsFile nil. Regression guard
+	// for fresh sensor stand-ups whose core config doesn't set a logs path.
+	builder := NewBuilder()
+
+	err := builder.buildLogger(parser.Logging{LogsPath: ""})
+
+	assert.NoError(t, err)
+	assert.Nil(t, builder.logsFile)
+}
+
 func TestBuilderClose_NoLogFile(t *testing.T) {
 	// Create a builder without opening a log file
 	builder := NewBuilder()
