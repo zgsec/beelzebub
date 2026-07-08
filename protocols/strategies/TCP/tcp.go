@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mariocandela/beelzebub/v3/agentdetect"
 	"github.com/mariocandela/beelzebub/v3/bridge"
@@ -117,8 +118,16 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 
 	buffer := make([]byte, 1024)
 	command := ""
+	commandRaw := ""
 	if n, err := conn.Read(buffer); err == nil {
-		command = string(buffer[:n])
+		raw := buffer[:n]
+		command = string(raw)
+		// Binary probe against a banner-only lure: preserve byte-exact input in
+		// CommandRaw rather than let string() mangle non-UTF8 bytes to U+FFFD.
+		// Matches the interactive path and upstream #320's raw-byte capture.
+		if !utf8.Valid(raw) {
+			commandRaw = hexEscapeNonPrintable(raw)
+		}
 	}
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
@@ -128,6 +137,7 @@ func handleBannerOnly(conn net.Conn, servConf parser.BeelzebubServiceConfigurati
 		Msg:         "New TCP attempt",
 		Protocol:    tracer.TCP.String(),
 		Command:     command,
+		CommandRaw:  commandRaw,
 		Status:      tracer.Stateless.String(),
 		RemoteAddr:  conn.RemoteAddr().String(),
 		SourceIp:    host,
