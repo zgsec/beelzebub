@@ -2,11 +2,11 @@
 
 **Instrument a honeypot to detect, fingerprint, and study autonomous AI agents in the wild.**
 
-[![CI](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/mariocandela/beelzebub/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/mariocandela/beelzebub/v3)](https://goreportcard.com/report/github.com/mariocandela/beelzebub/v3)
-[![Go Reference](https://pkg.go.dev/badge/github.com/mariocandela/beelzebub/v3.svg)](https://pkg.go.dev/github.com/mariocandela/beelzebub/v3)
+[![CI](https://github.com/beelzebub-labs/beelzebub/actions/workflows/ci.yml/badge.svg)](https://github.com/beelzebub-labs/beelzebub/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/beelzebub-labs/beelzebub/v3)](https://goreportcard.com/report/github.com/beelzebub-labs/beelzebub/v3)
+[![Go Reference](https://pkg.go.dev/badge/github.com/beelzebub-labs/beelzebub/v3.svg)](https://pkg.go.dev/github.com/beelzebub-labs/beelzebub/v3)
 [![Mentioned in Awesome Go](https://awesome.re/mentioned-badge.svg)](https://github.com/avelino/awesome-go)
-![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)
 
 > A **research fork** of [**beelzebub-labs/beelzebub**](https://github.com/beelzebub-labs/beelzebub) — the low-code, LLM-powered honeypot framework created by **Mario Candela** (Beelzebub Labs). Upstream provides an excellent multi-protocol honeypot; this fork builds on that foundation to add the instrumentation needed to **observe AI agents** as they explore, pivot, and act inside deceptive services. See [`UPSTREAM.md`](UPSTREAM.md) for the current fork ↔ upstream relationship and our sync posture.
@@ -630,7 +630,7 @@ Where an addition here is genuinely general-purpose, we'd rather offer it back u
 
 ### Acknowledgements
 
-Built on [**beelzebub-labs/beelzebub**](https://github.com/beelzebub-labs/beelzebub) (formerly `mariocandela/beelzebub`), created by **Mario Candela**. The upstream project provides the core honeypot framework this fork builds on: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. The Go module path (`github.com/mariocandela/beelzebub/v3`) and the CI / Go Report / pkg.go.dev badges above track upstream and are intentionally unchanged.
+Built on [**beelzebub-labs/beelzebub**](https://github.com/beelzebub-labs/beelzebub) (formerly `mariocandela/beelzebub`), created by **Mario Candela**. The upstream project provides the core honeypot framework this fork builds on: YAML-based configuration, LLM integration, multi-protocol support, Prometheus metrics, RabbitMQ tracing, and Docker/Kubernetes deployment. This fork's Go module path is `github.com/beelzebub-labs/beelzebub/v3` and its packages live under `internal/`, mirroring upstream's current layout so rebases against it stay clean.
 
 ## License
 

@@ -5,8 +5,8 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/mariocandela/beelzebub/v3/builder"
-	bzbparser "github.com/mariocandela/beelzebub/v3/parser"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/builder"
+	bzbparser "github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 
 	log "github.com/sirupsen/logrus"
 )
