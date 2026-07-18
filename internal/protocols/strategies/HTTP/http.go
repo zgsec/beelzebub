@@ -194,6 +194,19 @@ func anyBodyRegex(commands []parser.Command) bool {
 }
 
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
+	// Bind the fault injector PER-SERVICE, here, into a local the handler
+	// closure captures — exactly as servConf is captured per service below.
+	//
+	// httpStrategy is a SINGLE instance shared across every HTTP service, and
+	// builder.go sets `.Fault = <injector>` then calls Init for each service in
+	// turn. Reading httpStrategy.Fault at request time (the previous behaviour)
+	// therefore used whichever service was initialised LAST, not the service the
+	// request actually hit — so fault injection configured only on the LLM lure
+	// (with LLM-shaped 5xx bodies) fired on unrelated HTTP lures. Capturing the
+	// value now, while the shared field still holds THIS service's injector,
+	// scopes faults to the service that declared them. nil = no injection.
+	fault := httpStrategy.Fault
+
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
 		httpStrategy.noveltyStore = noveltydetect.NewStore()
@@ -302,13 +315,14 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 		}
 		// Fault injection: apply delay jitter and/or error faults.
-		// The Fault injector is wired by builder.go from the YAML
-		// faultInjection config. Delay faults sleep inside Apply()
-		// (adds realistic latency). Error faults replace the response
-		// with a 503 + Retry-After (simulates real service under load).
+		// `fault` is this service's injector, captured at Init (see top of
+		// Init for why it must not be read off the shared strategy here).
+		// Delay faults sleep inside Apply() (adds realistic latency). Error
+		// faults replace the response with a 503 + Retry-After (simulates a
+		// real service under load).
 		var faultType string
-		if httpStrategy.Fault != nil {
-			faultResp, ft, faulted := httpStrategy.Fault.Apply()
+		if fault != nil {
+			faultResp, ft, faulted := fault.Apply()
 			faultType = ft
 			if faulted && ft != "delay" {
 				resp.StatusCode = 503
