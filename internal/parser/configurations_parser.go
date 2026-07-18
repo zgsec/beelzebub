@@ -347,6 +347,24 @@ type Command struct {
 	// `sessionAction: create` handlers and pollute the cookie store.
 	Method string `yaml:"method,omitempty" json:",omitempty"`
 
+	// BodyRegex (HTTP only) — when set, the request BODY must also match for
+	// this command to fire, on top of Regex (URI) and Method. Empty = body-
+	// agnostic (the prior default; existing configs are unaffected).
+	//
+	// Needed wherever one path+method serves different responses depending on
+	// payload. Two live cases: single-endpoint JSON-RPC method routing (MCP
+	// Streamable-HTTP posts every call to one URL), and the WordPress
+	// `/wp-json/batch/v1` lure, where real WordPress answers 400
+	// rest_missing_callback_param / 400 rest_invalid_param / 207 Multi-Status
+	// to the SAME POST depending solely on the JSON body.
+	//
+	// NOTE: an unknown YAML key is silently ignored by the parser, so a config
+	// written against a build lacking this field degrades into "match every
+	// request with this path+method" rather than erroring — which is how a
+	// bodyRegex-gated rule can silently swallow traffic meant for later rules.
+	BodyRegexStr string         `yaml:"bodyRegex,omitempty" json:",omitempty"`
+	BodyRegex    *regexp.Regexp `yaml:"-" json:"-"` // compiled from BodyRegexStr, not stored in config
+
 	// SessionAction (HTTP only) — "create" generates a fresh cookie and
 	// emits Set-Cookie; "require" demands a valid cookie or 401.
 	// Empty = stateless (no session interaction).
@@ -499,6 +517,8 @@ func (bp configurationsParser) ReadConfigurationsServices() ([]BeelzebubServiceC
 }
 
 // CompileCommandRegex is the method that compiles the regular expression for each configured Command.
+// Both the URI regex and the optional body regex are compiled here; an invalid pattern in either
+// fails the whole config rather than silently disabling the match.
 func (c *BeelzebubServiceConfiguration) CompileCommandRegex() error {
 	for i, command := range c.Commands {
 		if command.RegexStr != "" {
@@ -507,6 +527,13 @@ func (c *BeelzebubServiceConfiguration) CompileCommandRegex() error {
 				return err
 			}
 			c.Commands[i].Regex = rex
+		}
+		if command.BodyRegexStr != "" {
+			rex, err := regexp.Compile(command.BodyRegexStr)
+			if err != nil {
+				return err
+			}
+			c.Commands[i].BodyRegex = rex
 		}
 	}
 	return nil

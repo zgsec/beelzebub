@@ -1,6 +1,7 @@
 package HTTP
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -158,6 +159,40 @@ func applyLLMOfflineResponse(resp *httpResponse, fb *parser.LLMOfflineResponse) 
 	}
 }
 
+// commandMatches reports whether a command fires for a request: its URI regex
+// must match, and its optional Method and optional BodyRegex must also match
+// when set. Empty Method / nil BodyRegex = agnostic, which is the legacy
+// behavior every pre-existing config relies on.
+//
+// Extracted rather than inlined so the matching contract is directly testable —
+// a test that reimplements this logic would assert its own copy, not the code
+// that actually serves requests.
+func commandMatches(command parser.Command, uri, method, body string) bool {
+	if command.Regex == nil || !command.Regex.MatchString(uri) {
+		return false
+	}
+	if command.Method != "" && !strings.EqualFold(command.Method, method) {
+		return false
+	}
+	if command.BodyRegex != nil && !command.BodyRegex.MatchString(body) {
+		return false
+	}
+	return true
+}
+
+// anyBodyRegex reports whether any command in the service needs the request
+// body for matching. When false the handler skips buffering entirely, so
+// configs that don't use bodyRegex — i.e. every pre-existing one — keep the
+// exact prior behavior and pay no extra allocation per request.
+func anyBodyRegex(commands []parser.Command) bool {
+	for _, c := range commands {
+		if c.BodyRegex != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && httpStrategy.noveltyStore == nil {
@@ -221,16 +256,27 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		// to the wire — fixes the 2026-05-23 divergence where corpus showed
 		// "404 Not Found!" while attackers received the configured vLLM envelope.
 		var fireTrace fireTraceFunc
+
+		// Buffer the request body ONLY if some command actually matches on it.
+		// Configs that use no bodyRegex (i.e. every pre-existing one) keep the
+		// old behaviour exactly: the body stays untouched here and is read for
+		// the first time inside buildHTTPResponse.
+		//
+		// When we do buffer, request.Body must be restored — it is a one-shot
+		// stream, and buildHTTPResponse reads it downstream for sessionCapture
+		// / artifactCapture. The restore happens even on a read error, so a
+		// partially-drained body is never handed downstream. Bounded to 1 MiB
+		// to match the limit buildHTTPResponse applies.
+		reqBody := ""
+		if request.Body != nil && anyBodyRegex(servConf.Commands) {
+			b, _ := io.ReadAll(io.LimitReader(request.Body, 1024*1024))
+			reqBody = string(b)
+			request.Body = io.NopCloser(bytes.NewReader(b))
+		}
+
 		for _, command := range servConf.Commands {
 			var err error
-			// URI regex must match. Method, when set, must also match
-			// (case-insensitive). Empty Method = method-agnostic (legacy
-			// behavior; existing configs that don't set Method are
-			// unaffected).
-			if !command.Regex.MatchString(request.RequestURI) {
-				continue
-			}
-			if command.Method != "" && !strings.EqualFold(command.Method, request.Method) {
+			if !commandMatches(command, request.RequestURI, request.Method, reqBody) {
 				continue
 			}
 			matched = true
