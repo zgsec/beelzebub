@@ -381,6 +381,61 @@ type Command struct {
 	// is added to tracer.Event.Captured under "artifact_sha256".
 	// Requires service-level State.ArtifactPath to be set.
 	ArtifactCapture bool `yaml:"artifactCapture,omitempty" json:",omitempty"`
+
+	// Mirror (HTTP only) — drives the ResponseMirror plugin. When set (and
+	// Plugin == "ResponseMirror") the request body is parsed as a batch-style
+	// envelope and one response element is emitted per sub-request, so a
+	// multiplexed N-in request gets an N-out response instead of a single
+	// static body (KI-010). Generic: all product-specific bodies/codes live
+	// in this config, none in the engine. Opt-in; nil = untouched behavior.
+	Mirror *MirrorConfig `yaml:"mirror,omitempty" json:",omitempty"`
+}
+
+// MirrorConfig configures the generic ResponseMirror plugin. It parses a
+// request envelope of the form {"<RequestKey>":[ <sub-request>, ... ]}, maps
+// each sub-request's route to a canned response element via the first matching
+// Rule (else Default), and emits {"<ResponseKey>":[ <element>, ... ]} at
+// WrapStatus. It is deliberately flat: nested sub-request bodies are ignored,
+// matching how a *patched* server (which does not recurse) behaves — the
+// intended fidelity bar. No recursion, no data-dependent execution.
+type MirrorConfig struct {
+	RequestKey     string        `yaml:"requestKey"`               // JSON key of the sub-request array, e.g. "requests"
+	ResponseKey    string        `yaml:"responseKey"`              // JSON key wrapping the response array, e.g. "responses"
+	WrapStatus     int           `yaml:"wrapStatus"`               // outer HTTP status, e.g. 207
+	PathField      string        `yaml:"pathField"`                // sub-request field holding the route, e.g. "path"
+	MethodField    string        `yaml:"methodField"`              // sub-request field holding the method, e.g. "method"
+	MaxItems       int           `yaml:"maxItems,omitempty"`       // guardrail on sub-request count; 0 => 25
+	AllowedMethods []string      `yaml:"allowedMethods,omitempty"` // permitted sub-request methods; empty => no guard
+	Reject         *MirrorReject `yaml:"reject,omitempty"`         // whole-envelope rejection (method-guard / maxItems trip)
+	Rules          []MirrorRule  `yaml:"rules"`                    // first-match wins
+	Default        MirrorElement `yaml:"default"`                  // fallthrough when no Rule matches
+}
+
+// MirrorReject is the whole-response returned (raw, NOT wrapped in the response
+// array) when the envelope fails a guard — e.g. a sub-request method outside
+// AllowedMethods, which a real server rejects with a top-level 400 rather than
+// a per-element error.
+type MirrorReject struct {
+	Status int    `yaml:"status"`
+	Body   string `yaml:"body"` // raw JSON, emitted verbatim as the entire response body
+}
+
+// MirrorRule maps a sub-request route (and optional method) to a response element.
+type MirrorRule struct {
+	PathRegexStr  string         `yaml:"pathRegex"`
+	PathRegex     *regexp.Regexp `yaml:"-" json:"-"` // compiled from PathRegexStr
+	Method        string         `yaml:"method,omitempty"`
+	MirrorElement `yaml:",inline"`
+}
+
+// MirrorElement is one entry of the response array. Body and Headers are raw
+// JSON fragments authored in the config and emitted verbatim (so a body stays a
+// JSON object and headers stay [] or {"Allow":"GET"} — never string-escaped).
+// Both are validated as JSON at load time.
+type MirrorElement struct {
+	Status  int    `yaml:"status"`
+	Body    string `yaml:"body"`              // raw JSON object, e.g. {"code":"rest_no_route",...}
+	Headers string `yaml:"headers,omitempty"` // raw JSON, e.g. "[]" or {"Allow":"GET"}; empty => "[]"
 }
 
 // Tool is the struct that contains the configurations of the MCP Honeypot
@@ -535,6 +590,45 @@ func (c *BeelzebubServiceConfiguration) CompileCommandRegex() error {
 			}
 			c.Commands[i].BodyRegex = rex
 		}
+		if command.Mirror != nil {
+			if err := compileMirror(c.Commands[i].Mirror); err != nil {
+				return fmt.Errorf("command %q mirror: %w", command.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// compileMirror compiles each rule's path regex and validates every raw-JSON
+// fragment (rule bodies/headers, default, reject) at load time, so a malformed
+// template fails the config instead of shipping broken bytes on the wire.
+func compileMirror(m *MirrorConfig) error {
+	validElem := func(where string, e MirrorElement) error {
+		if !json.Valid([]byte(e.Body)) {
+			return fmt.Errorf("%s: body is not valid JSON: %q", where, e.Body)
+		}
+		if e.Headers != "" && !json.Valid([]byte(e.Headers)) {
+			return fmt.Errorf("%s: headers is not valid JSON: %q", where, e.Headers)
+		}
+		return nil
+	}
+	for j := range m.Rules {
+		if m.Rules[j].PathRegexStr != "" {
+			rex, err := regexp.Compile(m.Rules[j].PathRegexStr)
+			if err != nil {
+				return fmt.Errorf("rule %d pathRegex: %w", j, err)
+			}
+			m.Rules[j].PathRegex = rex
+		}
+		if err := validElem(fmt.Sprintf("rule %d", j), m.Rules[j].MirrorElement); err != nil {
+			return err
+		}
+	}
+	if err := validElem("default", m.Default); err != nil {
+		return err
+	}
+	if m.Reject != nil && !json.Valid([]byte(m.Reject.Body)) {
+		return fmt.Errorf("reject: body is not valid JSON: %q", m.Reject.Body)
 	}
 	return nil
 }

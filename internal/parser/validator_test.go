@@ -61,3 +61,29 @@ func TestValidateCore_RabbitMQEnabledWithoutURI(t *testing.T) {
 	res := ValidateCore(cfg, "core.yaml")
 	assert.True(t, hasIssueContaining(allIssues(res), LevelError, "rabbitMQ is enabled but URI is empty"))
 }
+
+func TestValidateCommands_ResponseMirrorPluginAccepted(t *testing.T) {
+	svc := BeelzebubServiceConfiguration{Commands: []Command{{
+		RegexStr: "^/x$", Plugin: "ResponseMirror",
+		Mirror: &MirrorConfig{RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+			Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`}},
+	}}}
+	for _, iss := range validateCommands(svc) {
+		if strings.Contains(iss.Message, "invalid plugin") {
+			t.Fatalf("ResponseMirror should be a valid plugin, got: %s", iss.Message)
+		}
+	}
+}
+
+func TestValidateCommands_ResponseMirrorWithoutConfigWarns(t *testing.T) {
+	svc := BeelzebubServiceConfiguration{Commands: []Command{{
+		RegexStr: "^/x$", Plugin: "ResponseMirror", Handler: "{}", // Mirror nil
+	}}}
+	warned := false
+	for _, iss := range validateCommands(svc) {
+		if iss.Level == LevelWarning && strings.Contains(iss.Message, "no mirror config") {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "expected a warning for ResponseMirror without a mirror block")
+}

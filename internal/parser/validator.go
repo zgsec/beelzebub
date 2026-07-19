@@ -75,9 +75,12 @@ func GetServiceValidators() []ServiceValidator {
 // fork-only (this fork adds an Ollama strategy upstream does not have).
 var validProtocols = []string{"http", "ssh", "tcp", "mcp", "telnet", "ollama"}
 
-var validCommandPlugins = []string{"", "LLMHoneypot", "MazeHoneypot"}
+// Kept in sync with the plugin name constants in internal/plugins (parser
+// cannot import plugins without an import cycle). "ResponseMirror" ==
+// plugins.ResponseMirrorName.
+var validCommandPlugins = []string{"", "LLMHoneypot", "MazeHoneypot", "ResponseMirror"}
 
-var validCommandPluginsDisplay = []string{"(none)", "LLMHoneypot", "MazeHoneypot"}
+var validCommandPluginsDisplay = []string{"(none)", "LLMHoneypot", "MazeHoneypot", "ResponseMirror"}
 
 // Validate checks service configurations and returns all errors and warnings
 func Validate(services []BeelzebubServiceConfiguration, parseIssues []ValidationIssue) ValidateResult {
@@ -181,6 +184,16 @@ func validateCommands(svc BeelzebubServiceConfiguration) []ValidationIssue {
 			issues = append(issues, ValidationIssue{
 				Level:   LevelWarning,
 				Message: fmt.Sprintf("command[%d] has empty handler and no plugin, matched requests will produce no output", j),
+			})
+		}
+
+		// ResponseMirror without a mirror block is a silent no-op: the plugin
+		// returns ok=false for every request and the command degrades to its
+		// static handler. Flag it so a mistyped/omitted `mirror:` is caught.
+		if cmd.Plugin == "ResponseMirror" && cmd.Mirror == nil {
+			issues = append(issues, ValidationIssue{
+				Level:   LevelWarning,
+				Message: fmt.Sprintf("command[%d] uses plugin ResponseMirror but has no mirror config; it will never mirror (falls back to the static handler)", j),
 			})
 		}
 

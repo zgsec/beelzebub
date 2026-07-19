@@ -567,6 +567,21 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 	}
 
+	if command.Plugin == plugins.ResponseMirrorName && command.Mirror != nil {
+		// Multiplexed batch mirror (KI-010): emit one response element per
+		// sub-request so an N-in batch gets an N-out envelope instead of the
+		// fixed single-element static body. bodyBytes is the already-read
+		// request body (no re-read). ok==false means "not a batch we mirror"
+		// — we fall through and return the configured static handler
+		// unchanged, so this is strictly additive.
+		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes); ok {
+			resp.StatusCode = mirrorStatus
+			resp.Body = mirrorBody
+			// resp.Headers stays as the command's configured outer headers.
+			return resp, nil, fireTrace
+		}
+	}
+
 	if command.Plugin == plugins.MazePluginName {
 		// Deterministic infinite-directory tarpit: every path resolves to an
 		// Apache-style listing (more links) or realistic fabricated file
