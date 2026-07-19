@@ -1,0 +1,86 @@
+# =============================================================================
+# gitleaks configuration — PUBLIC repository
+#
+# This repo is public. The threat here is not only credentials: it is any
+# reference to private research infrastructure. On 2026-07-19 three branches
+# were found publicly exposing an internal operator path and a sensor
+# identifier inside an MCP test fixture. Stock secret-scanning would not have
+# caught it, because none of it is a credential.
+#
+# DESIGN NOTE — why these rules are written generically:
+# This file is itself public. Enumerating real hostnames here would leak the
+# very naming scheme the rules exist to protect. Every pattern below is
+# therefore structural (shape-matching) rather than a list of real names.
+# Do not "improve" these rules by pasting in actual infrastructure names.
+#
+# Extends the default gitleaks ruleset; the rules below are additive.
+# =============================================================================
+
+[extend]
+useDefault = true
+
+# --- internal filesystem paths ----------------------------------------------
+# Catches operator home-directory paths embedded in fixtures, comments, and
+# test data. This is the exact shape that leaked on 2026-07-19.
+[[rules]]
+id = "internal-operator-path"
+description = "Internal operator filesystem path (private working tree)"
+regex = '''/home/[a-z][a-z0-9_-]{1,20}/projects/'''
+tags = ["opsec", "internal-path"]
+
+# --- private mesh addressing -------------------------------------------------
+# Tailscale CGNAT range (100.64.0.0/10). Any occurrence in a public repo is a
+# private mesh address and must not ship.
+[[rules]]
+id = "tailscale-cgnat-address"
+description = "Tailscale/CGNAT private mesh address"
+regex = '''\b100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}\b'''
+tags = ["opsec", "internal-address"]
+
+# --- sensor identifiers ------------------------------------------------------
+# Structural match on the deployment's node-naming convention. Written as a
+# shape so this public file does not enumerate live node names.
+[[rules]]
+id = "sensor-node-identifier"
+description = "Deployment node identifier (private fleet naming)"
+regex = '''\bsensor-[a-z]{2,6}\b'''
+tags = ["opsec", "infrastructure"]
+
+# --- private host shortnames -------------------------------------------------
+# Internal hosts follow a <role>-<ordinal> shortname convention.
+[[rules]]
+id = "internal-host-shortname"
+description = "Internal host shortname (private infrastructure)"
+regex = '''\b(research|collector|ingest|analytics)-[0-9]{1,2}\b'''
+tags = ["opsec", "infrastructure"]
+
+# --- capture provenance ------------------------------------------------------
+# Test fixtures derived from real captures must be scrubbed to a neutral
+# provenance string before they can ship publicly. A "_source" pointing at a
+# real path or node is the 2026-07-19 defect exactly.
+#
+# NOTE: no negative lookahead here. gitleaks uses Go's RE2, which does not
+# support (?!...) and PANICS on startup rather than erroring cleanly — a config
+# that crashes the scanner is a disabled scanner. The scrubbed marker needs no
+# exclusion anyway: it contains no path, node name, or .jsonl, so it cannot
+# match this pattern in the first place.
+[[rules]]
+id = "fixture-real-provenance"
+description = "Test fixture citing a real capture source rather than a scrubbed one"
+regex = '''"_source"\s*:\s*"[^"]*(?:/home/|sensor-|\.jsonl)'''
+tags = ["opsec", "fixture"]
+
+[allowlist]
+description = "Non-leaking matches"
+paths = [
+  # This config documents the patterns it matches; it must not match itself.
+  '''\.gitleaks\.toml$''',
+  # Vendored dependencies are upstream code, not our infrastructure.
+  '''^vendor/''',
+]
+regexes = [
+  # The scrubbed provenance marker is the approved replacement value.
+  '''operator-private capture \(off-repo\)''',
+  # Documentation-standard example ranges, not real addressing.
+  '''\b100\.64\.0\.0/10\b''',
+]
