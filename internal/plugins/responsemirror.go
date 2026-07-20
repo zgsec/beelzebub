@@ -330,7 +330,7 @@ func asInt(s string) (int, bool) {
 }
 
 func asStr(s string) (string, bool) {
-	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' && strings.Count(s, "'") == 2 {
 		return s[1 : len(s)-1], true
 	}
 	return "", false

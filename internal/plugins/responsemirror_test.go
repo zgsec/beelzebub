@@ -378,6 +378,9 @@ func TestEvalLiteralBool(t *testing.T) {
 		{"user_id=1", false, false},               // identifier → flat
 		{"", false, false},
 		{"garbage", false, false},
+		{"'z' OR 'z'='z' OR 'z'", false, false}, // connective+string bypass — must fail closed
+		{"'x' OR 'x'='x'", false, false},        // simpler connective+string — must fail closed
+		{"'a''b'='a''b'", false, false},         // embedded/escaped quote (4 quotes) — fail closed
 	}
 	for _, c := range cases {
 		val, lit := evalLiteralBool(c.in)
