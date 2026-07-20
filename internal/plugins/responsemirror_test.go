@@ -438,6 +438,20 @@ func TestMirrorDelayMs(t *testing.T) {
 	if got := MirrorDelayMs(timingMirror(), []byte(wp2shellBody("333536363762613465623235"))); got != 0 {
 		t.Errorf("UNION-marker body must yield 0 delay, got %d", got)
 	}
+
+	// max-not-sum: two SLEEP-bearing nested sub-requests (3s + 7s) → 7000, never 10000
+	twoSleeps := `{"requests":[{"body":{"requests":[` +
+		`{"method":"GET","path":"/wp/v2/categories?author_exclude=SELECT+IF%28%281%3D1%29%2CSLEEP%283%29%2C0%29"},` +
+		`{"method":"GET","path":"/wp/v2/categories?author_exclude=SELECT+IF%28%281%3D1%29%2CSLEEP%287%29%2C0%29"}` +
+		`]},"method":"POST","path":"/wp/v2/posts"}]}`
+	if got := MirrorDelayMs(timingMirror(), []byte(twoSleeps)); got != 7000 {
+		t.Errorf("max-not-sum: MirrorDelayMs = %d, want 7000 (max, not summed)", got)
+	}
+
+	// malformed percent-encoding in the condition → QueryUnescape fails → fail closed (no panic, no delay)
+	if got := MirrorDelayMs(timingMirror(), []byte(sleepBody(`IF%28%ZZ%2CSLEEP%287%29%2C0%29`))); got != 0 {
+		t.Errorf("malformed-cond: MirrorDelayMs = %d, want 0 (fail closed)", got)
+	}
 }
 
 func TestMirrorTiming_YAMLRoundTrip(t *testing.T) {
