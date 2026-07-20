@@ -902,3 +902,63 @@ func TestHTTP_MirrorTimingDelay(t *testing.T) {
 		t.Fatalf("control should be flat, took %v", ctrlElapsed)
 	}
 }
+
+// TestHTTP_MirrorTimingNoDelayOnReject locks the NEW-1 fidelity fix: a batch
+// that trips the whole-envelope method guard is rejected BEFORE dispatch (a
+// real WP server validates the method enum first), so it must return the
+// reject status instantly — even when the rejected envelope also carries a
+// nested literal-true SLEEP(). MirrorDelayMs walks sub-requests independently
+// of the reject guard, so without gating the delay on an actual dispatch
+// (mirrorStatus == WrapStatus) this would sleep ~3s before serving a 400.
+func TestHTTP_MirrorTimingNoDelayOnReject(t *testing.T) {
+	cmd := parser.Command{
+		Name:       "wp/batch",
+		StatusCode: 207,
+		Handler:    "{}",
+		Plugin:     plugins.ResponseMirrorName,
+		Mirror: &parser.MirrorConfig{
+			RequestKey:     "requests",
+			ResponseKey:    "responses",
+			WrapStatus:     207,
+			PathField:      "path",
+			MethodField:    "method",
+			AllowedMethods: []string{"POST", "PUT", "PATCH", "DELETE"},
+			Reject:         &parser.MirrorReject{Status: 400, Body: `{"code":"rest_invalid_param"}`},
+			Default:        parser.MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+			Timing: &parser.MirrorTiming{
+				IfRegex:   regexp.MustCompile(`IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)`),
+				BareRegex: regexp.MustCompile(`SLEEP(?:%28|\()([0-9]+)`),
+			},
+		},
+	}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	tt := &captureTracer{}
+
+	cookieStore := historystore.NewCookieSessionStore(time.Hour)
+	defer cookieStore.Stop()
+	sctx := &sessionContext{cookieStore: cookieStore, cookieName: ".X", ttlSeconds: 1800}
+
+	// Top-level method GET is not in AllowedMethods -> whole envelope
+	// rejected. The nested SLEEP(3) must NOT delay the 400.
+	body := `{"requests":[{"method":"GET","path":"/x?author_exclude=IF%28%281%3D1%29%2CSLEEP%283%29%2C0%29"}]}`
+
+	req := httptest.NewRequest(http.MethodPost, "/?rest_route=/batch/v1", strings.NewReader(body))
+	req.RemoteAddr = "203.0.113.9:1234"
+	ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+		net.Addr(&stubAddr{s: "127.0.0.1:4000"}))
+	req = req.WithContext(ctx)
+
+	start := time.Now()
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("rejected batch should return reject status 400, got %d", resp.StatusCode)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("rejected batch should be instant (pre-dispatch), took %v", elapsed)
+	}
+}

@@ -575,15 +575,20 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// — we fall through and return the configured static handler
 		// unchanged, so this is strictly additive.
 		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes); ok {
-			// Time-based oracle (additive): sleep the implied delay before writing
-			// so an A/B timing probe reads "vulnerable". Capped in the plugin and
-			// again here (defense in depth). Inert: only literal-true conditions
-			// delay; nothing is executed.
-			if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes); d > 0 {
-				if d > plugins.MaxMirrorDelayMs {
-					d = plugins.MaxMirrorDelayMs
+			// Time-based oracle (additive): sleep the implied delay before writing,
+			// but ONLY when the batch actually dispatched (a reject returns
+			// Reject.Status, not WrapStatus). Real WP rejects at validation BEFORE
+			// dispatch — an instant 400 — so delaying a rejected envelope would be
+			// a fidelity tell. Capped in the plugin and again here (defense in
+			// depth). Inert: only literal-true conditions delay; nothing is
+			// executed.
+			if mirrorStatus == command.Mirror.WrapStatus {
+				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes); d > 0 {
+					if d > plugins.MaxMirrorDelayMs {
+						d = plugins.MaxMirrorDelayMs
+					}
+					time.Sleep(time.Duration(d) * time.Millisecond)
 				}
-				time.Sleep(time.Duration(d) * time.Millisecond)
 			}
 			resp.StatusCode = mirrorStatus
 			resp.Body = mirrorBody
