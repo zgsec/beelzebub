@@ -700,3 +700,42 @@ func TestCaptureRequestBody_OmittedHashCodeStable(t *testing.T) {
 		t.Fatalf("HashCode changed by zero-value request-body fields: %s != %s", h1, h2)
 	}
 }
+
+func TestCompileMirrorTiming(t *testing.T) {
+	good := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$",
+			Plugin:   "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Timing: &MirrorTiming{
+					IfRegexStr:   `IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)`,
+					BareRegexStr: `SLEEP(?:%28|\()([0-9]+)`,
+				},
+			},
+		}},
+	}
+	if err := good.CompileCommandRegex(); err != nil {
+		t.Fatalf("good config failed to compile: %v", err)
+	}
+	if good.Commands[0].Mirror.Timing.IfRegex == nil || good.Commands[0].Mirror.Timing.BareRegex == nil {
+		t.Fatal("timing regexes not compiled")
+	}
+
+	badGroups := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$", Plugin: "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Timing:  &MirrorTiming{IfRegexStr: `IF(.+)`, BareRegexStr: `SLEEP(?:%28|\()([0-9]+)`}, // 1 group, want 2
+			},
+		}},
+	}
+	if err := badGroups.CompileCommandRegex(); err == nil {
+		t.Fatal("expected error for ifRegex with wrong capture-group count")
+	}
+}
