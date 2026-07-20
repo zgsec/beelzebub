@@ -492,3 +492,16 @@ commands:
 		t.Fatalf("yaml-built timing: got %d want 7000", got)
 	}
 }
+
+func TestTiming_NoReflectionRegression(t *testing.T) {
+	body := wp2shellBody("333536363762613465623235") // Operator B marker
+	// same golden as TestMirror_VulnReproduction_ByteExact
+	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"35667ba4eb25","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
+	_, got, ok := MirrorRespond(timingMirror(), []byte(body)) // timing armed
+	if !ok || got != want {
+		t.Fatalf("timing-armed reflection bytes changed\n got: %s\nwant: %s", got, want)
+	}
+	if MirrorDelayMs(timingMirror(), []byte(body)) != 0 {
+		t.Fatal("UNION-marker body must imply zero delay")
+	}
+}
