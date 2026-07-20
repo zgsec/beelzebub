@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/beelzebub-labs/beelzebub/v3/internal/artifactstore"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/historystore"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
+	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 )
 
@@ -835,5 +837,68 @@ func TestSetResponseHeaders_PreservesColonsInValue(t *testing.T) {
 		if got != want {
 			t.Errorf("header %q = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// TestHTTP_MirrorTimingDelay locks Task 4's wire: buildHTTPResponse must sleep
+// the MirrorDelayMs implied by a mirrored batch body before writing the mirror
+// response, so an A/B timing probe against the ResponseMirror plugin actually
+// observes a delay on the "true" condition and none on the "false" one. This
+// is the call-site half of the time-based oracle; MirrorDelayMs itself
+// (internal/plugins/responsemirror_test.go) already covers the math.
+func TestHTTP_MirrorTimingDelay(t *testing.T) {
+	cmd := parser.Command{
+		Name:       "wp/batch",
+		StatusCode: 207,
+		Handler:    "{}",
+		Plugin:     plugins.ResponseMirrorName,
+		Mirror: &parser.MirrorConfig{
+			RequestKey:  "requests",
+			ResponseKey: "responses",
+			WrapStatus:  207,
+			PathField:   "path",
+			MethodField: "method",
+			Default:     parser.MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+			Timing: &parser.MirrorTiming{
+				IfRegex:   regexp.MustCompile(`IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)`),
+				BareRegex: regexp.MustCompile(`SLEEP(?:%28|\()([0-9]+)`),
+			},
+		},
+	}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	tt := &captureTracer{}
+
+	invoke := func(t *testing.T, body string) time.Duration {
+		t.Helper()
+		cookieStore := historystore.NewCookieSessionStore(time.Hour)
+		defer cookieStore.Stop()
+		sctx := &sessionContext{cookieStore: cookieStore, cookieName: ".X", ttlSeconds: 1800}
+
+		req := httptest.NewRequest(http.MethodPost, "/?rest_route=/batch/v1", strings.NewReader(body))
+		req.RemoteAddr = "203.0.113.9:1234"
+		ctx := context.WithValue(req.Context(), http.LocalAddrContextKey,
+			net.Addr(&stubAddr{s: "127.0.0.1:4000"}))
+		req = req.WithContext(ctx)
+
+		start := time.Now()
+		_, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return elapsed
+	}
+
+	treatment := `{"requests":[{"method":"GET","path":"/wp/v2/categories?author_exclude=IF%28%281%3D1%29%2CSLEEP%283%29%2C0%29"}]}`
+	control := `{"requests":[{"method":"GET","path":"/wp/v2/categories?author_exclude=IF%28%281%3D0%29%2CSLEEP%283%29%2C0%29"}]}`
+
+	treatElapsed := invoke(t, treatment)
+	ctrlElapsed := invoke(t, control)
+
+	if treatElapsed < 2400*time.Millisecond {
+		t.Fatalf("treatment should delay ~3s, took %v", treatElapsed)
+	}
+	if ctrlElapsed > 500*time.Millisecond {
+		t.Fatalf("control should be flat, took %v", ctrlElapsed)
 	}
 }
