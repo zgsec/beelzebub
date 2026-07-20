@@ -347,3 +347,42 @@ func TestMirror_VulnRecursion_DepthAndBudgetBounded(t *testing.T) {
 		t.Fatalf("expected ok=false (budget exhausted) for pathological nesting")
 	}
 }
+
+func TestEvalLiteralBool(t *testing.T) {
+	cases := []struct {
+		in      string
+		val     bool
+		lit     bool
+	}{
+		{"1=1", true, true},
+		{"1=0", false, true},
+		{"(1=1)", true, true},   // one paren layer stripped
+		{"2=2", true, true},
+		{"1<>2", true, true},
+		{"1!=1", false, true},
+		{"5>3", true, true},
+		{"3>=3", true, true},
+		{"3>5", false, true},
+		{"'a'='a'", true, true},
+		{"'admin'='root'", false, true},
+		{"true", true, true},
+		{"false", false, true},
+		{"1", true, true},
+		{"0", false, true},
+		{"'a'>'b'", false, false},                 // string ordering → flat
+		{"1='1'", false, false},                   // mixed type → flat
+		{"1=1 AND 2=2", false, false},             // connective → flat
+		{"SUBSTRING(user_pass,1,1)='a'", false, false}, // column ref → flat
+		{"ASCII(MID(@@version,1,1))>52", false, false}, // fn+var → flat
+		{"(SELECT 0x41)", false, false},           // subquery → flat
+		{"user_id=1", false, false},               // identifier → flat
+		{"", false, false},
+		{"garbage", false, false},
+	}
+	for _, c := range cases {
+		val, lit := evalLiteralBool(c.in)
+		if lit != c.lit || (lit && val != c.val) {
+			t.Errorf("evalLiteralBool(%q) = (%v,%v), want (%v,%v)", c.in, val, lit, c.val, c.lit)
+		}
+	}
+}

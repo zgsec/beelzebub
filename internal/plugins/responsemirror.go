@@ -3,6 +3,7 @@ package plugins
 import (
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
@@ -264,6 +265,91 @@ func methodAllowed(method string, allowed []string) bool {
 		if strings.EqualFold(a, method) {
 			return true
 		}
+	}
+	return false
+}
+
+// evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal
+// and, if so, its truth value. cond must already be URL-decoded. It is the
+// fidelity boundary of the time-based oracle: we only ever answer a question
+// whose both operands are constants (int or single-quoted string), so the lure
+// never evaluates anything referencing real data. Anything else — identifier,
+// function, subquery, AND/OR, arithmetic, mixed types, parse ambiguity — yields
+// isLiteral=false (fail closed → flat response).
+func evalLiteralBool(cond string) (val bool, isLiteral bool) {
+	s := strings.TrimSpace(cond)
+	// strip exactly one layer of wrapping parens: "(1=1)" -> "1=1"
+	if len(s) >= 2 && s[0] == '(' && s[len(s)-1] == ')' {
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	// bare boolean
+	switch strings.ToLower(s) {
+	case "true", "1":
+		return true, true
+	case "false", "0":
+		return false, true
+	}
+	// comparison: find operator (longest first)
+	ops := []string{"<=", ">=", "<>", "!=", "=", "<", ">"}
+	for _, op := range ops {
+		i := strings.Index(s, op)
+		if i <= 0 || i+len(op) >= len(s) {
+			continue
+		}
+		lhs := strings.TrimSpace(s[:i])
+		rhs := strings.TrimSpace(s[i+len(op):])
+		// reject if rhs itself starts another operator char (e.g. "<=" seen as "<")
+		if strings.ContainsAny(rhs[:1], "=<>!") {
+			return false, false
+		}
+		li, lok := asInt(lhs)
+		ri, rok := asInt(rhs)
+		if lok && rok {
+			return cmpInt(li, ri, op), true
+		}
+		ls, lsok := asStr(lhs)
+		rs, rsok := asStr(rhs)
+		if lsok && rsok {
+			switch op {
+			case "=":
+				return ls == rs, true
+			case "<>", "!=":
+				return ls != rs, true
+			default:
+				return false, false // string ordering not supported
+			}
+		}
+		return false, false // mixed types or a non-literal operand
+	}
+	return false, false
+}
+
+func asInt(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
+func asStr(s string) (string, bool) {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return s[1 : len(s)-1], true
+	}
+	return "", false
+}
+
+func cmpInt(a, b int, op string) bool {
+	switch op {
+	case "=":
+		return a == b
+	case "<>", "!=":
+		return a != b
+	case "<":
+		return a < b
+	case ">":
+		return a > b
+	case "<=":
+		return a <= b
+	case ">=":
+		return a >= b
 	}
 	return false
 }
