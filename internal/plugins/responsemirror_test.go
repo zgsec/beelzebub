@@ -389,3 +389,92 @@ func TestEvalLiteralBool(t *testing.T) {
 		}
 	}
 }
+
+func timingMirror() *parser.MirrorConfig {
+	m := wpVulnMirror() // reuse the shipped vuln config (reflection intact)
+	ifRe := `IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)`
+	bareRe := `SLEEP(?:%28|\()([0-9]+)`
+	m.Timing = &parser.MirrorTiming{
+		IfRegexStr:   ifRe,
+		IfRegex:      regexp.MustCompile(ifRe),
+		BareRegexStr: bareRe,
+		BareRegex:    regexp.MustCompile(bareRe),
+	}
+	return m
+}
+
+// nest an encoded author_exclude fragment into the observed nested-batch shape
+func sleepBody(encFrag string) string {
+	return `{"requests":[{"method":"POST","path":"http://:"},{"body":{"requests":[` +
+		`{"method":"GET","path":"/wp/v2/categories?author_exclude=` + encFrag + `"}` +
+		`]},"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/batch/v1"}]}`
+}
+
+func TestMirrorDelayMs(t *testing.T) {
+	cases := []struct {
+		name string
+		frag string
+		want int
+	}{
+		{"double-paren treatment n=7", `SELECT+IF%28%281%3D1%29%2CSLEEP%287%29%2C0%29`, 7000},
+		{"double-paren control n=7", `SELECT+IF%28%281%3D0%29%2CSLEEP%287%29%2C0%29`, 0},
+		{"single-paren treatment n=3", `SELECT%20IF%281%3D1%2CSLEEP%283%29%2C0%29`, 3000},
+		{"single-paren control n=0", `SELECT%20IF%281%3D0%2CSLEEP%280%29%2C0%29`, 0},
+		{"bare SLEEP n=2", `0%29%20AND%20SLEEP%282%29--%20-`, 2000},
+		{"extraction stays flat", `SELECT+IF%28SUBSTRING%28user_pass%2C1%2C1%29%3D%27a%27%2CSLEEP%287%29%2C0%29`, 0},
+		{"over-cap clamps to 9000", `SELECT+IF%28%281%3D1%29%2CSLEEP%28999%29%2C0%29`, 9000},
+	}
+	for _, c := range cases {
+		got := MirrorDelayMs(timingMirror(), []byte(sleepBody(c.frag)))
+		if got != c.want {
+			t.Errorf("%s: MirrorDelayMs = %d, want %d", c.name, got, c.want)
+		}
+	}
+	// feature off when Timing == nil (shipped reflection config)
+	if got := MirrorDelayMs(wpVulnMirror(), []byte(sleepBody(`SELECT+IF%28%281%3D1%29%2CSLEEP%287%29%2C0%29`))); got != 0 {
+		t.Errorf("Timing==nil must yield 0, got %d", got)
+	}
+	// a UNION-marker body carries no SLEEP -> 0 (reflection path unaffected)
+	if got := MirrorDelayMs(timingMirror(), []byte(wp2shellBody("333536363762613465623235"))); got != 0 {
+		t.Errorf("UNION-marker body must yield 0 delay, got %d", got)
+	}
+}
+
+func TestMirrorTiming_YAMLRoundTrip(t *testing.T) {
+	const y = `
+commands:
+  - regex: "^/x$"
+    plugin: "ResponseMirror"
+    statusCode: 207
+    handler: "{}"
+    mirror:
+      requestKey: requests
+      responseKey: responses
+      wrapStatus: 207
+      pathField: path
+      methodField: method
+      timing:
+        ifRegex: 'IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)'
+        bareRegex: 'SLEEP(?:%28|\()([0-9]+)'
+        maxDelayMs: 9000
+      default:
+        status: 404
+        body: '{"code":"rest_no_route"}'
+        headers: '[]'
+`
+	var conf parser.BeelzebubServiceConfiguration
+	if err := yaml.Unmarshal([]byte(y), &conf); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	if err := conf.CompileCommandRegex(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	m := conf.Commands[0].Mirror
+	if m.Timing == nil || m.Timing.IfRegex == nil || m.Timing.BareRegex == nil {
+		t.Fatal("timing not parsed/compiled from yaml (tag typo?)")
+	}
+	body := `{"requests":[{"method":"GET","path":"/x?author_exclude=IF%28%281%3D1%29%2CSLEEP%287%29%2C0%29"}]}`
+	if got := MirrorDelayMs(m, []byte(body)); got != 7000 {
+		t.Fatalf("yaml-built timing: got %d want 7000", got)
+	}
+}

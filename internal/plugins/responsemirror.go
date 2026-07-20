@@ -3,6 +3,7 @@ package plugins
 import (
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -352,4 +353,93 @@ func cmpInt(a, b int, op string) bool {
 		return a >= b
 	}
 	return false
+}
+
+// MaxMirrorDelayMs is the hard ceiling on any emulated time-based-oracle delay,
+// enforced here and again at the HTTP call site. Also the default when
+// Timing.MaxDelayMs is unset.
+const MaxMirrorDelayMs = 9000
+
+// MirrorDelayMs computes the time-based-oracle delay (ms) implied by a batch
+// body, or 0. Additive and pure: it never affects the mirror body, so the
+// KI-010 reflection path is untouched. It walks the same sub-requests as
+// MirrorRespond (top level + one nesting level), and for each sub-request path
+// (URL-encoded on the wire): tries IfRegex first — IF(<cond>,SLEEP(<n>),0),
+// delaying n*1000 iff evalLiteralBool(decoded cond) is (true,true) — and only if
+// IfRegex does NOT match, tries BareRegex (unconditional SLEEP(<n>)). Envelope
+// delay = max over sub-requests, clamped to the cap.
+func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
+	if cfg == nil || cfg.Timing == nil {
+		return 0
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(reqBody, &top); err != nil {
+		return 0
+	}
+	arrRaw, ok := top[cfg.RequestKey]
+	if !ok {
+		return 0
+	}
+	subs, ok := decodeSubs(arrRaw)
+	if !ok {
+		return 0
+	}
+	delay := timingWalk(cfg, subs, 0)
+
+	cap := cfg.Timing.MaxDelayMs
+	if cap <= 0 || cap > MaxMirrorDelayMs {
+		cap = MaxMirrorDelayMs
+	}
+	if delay > cap {
+		delay = cap
+	}
+	return delay
+}
+
+// timingWalk returns the max per-sub-request delay across one level, recursing
+// one nesting level (matching the observed nested-batch injection site).
+func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int) int {
+	max := 0
+	for _, s := range subs {
+		if depth < 1 {
+			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
+				if d := timingWalk(cfg, nested, depth+1); d > max {
+					max = d
+				}
+			}
+		}
+		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField])); d > max {
+			max = d
+		}
+	}
+	return max
+}
+
+// sleepDelay extracts the delay a single path implies. IfRegex first (so the
+// inner SLEEP of an IF form is not double-counted by BareRegex); BareRegex only
+// if the IF form is absent.
+func sleepDelay(t *parser.MirrorTiming, path string) int {
+	if t.IfRegex != nil {
+		if m := t.IfRegex.FindStringSubmatch(path); len(m) == 3 {
+			cond, err := url.QueryUnescape(m[1])
+			if err != nil {
+				cond = m[1]
+			}
+			val, isLit := evalLiteralBool(cond)
+			if isLit && val {
+				if n, err := strconv.Atoi(m[2]); err == nil {
+					return n * 1000
+				}
+			}
+			return 0 // IF matched but condition false/non-literal → no bare fallthrough
+		}
+	}
+	if t.BareRegex != nil {
+		if m := t.BareRegex.FindStringSubmatch(path); len(m) == 2 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				return n * 1000
+			}
+		}
+	}
+	return 0
 }
