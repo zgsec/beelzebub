@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ var (
 	reUnion       = regexp.MustCompile(`(?i)UNION\s+(?:ALL\s+)?SELECT\s+`)
 	reFields      = regexp.MustCompile(`(?i)[?&]_fields=([^&]*)`)
 	reCommentTail = regexp.MustCompile(`(?is)\s*--[\s+].*$`)
+	reBoolWrap    = regexp.MustCompile(`(?is)^\s*\d+\)\s*(?:AND|OR)\s*(.+?)\s*--[\s+].*$`)
 )
 
 // extractUnionProjection pulls the UNION SELECT column list and the _fields=
@@ -219,6 +221,31 @@ func assembleForgedRow(cols []string, fields string) (map[string]any, bool) {
 	}
 	// require SOMETHING evaluated (a fully-failed projection is not a forge)
 	return row, len(row) > 0
+}
+
+// booleanElement gives a boolean-blind injection its content differential:
+// for a literal-true condition it returns the "row present" batch element
+// (X-WP-Total:1, a minimal forged row); for literal-false the "row absent"
+// element (X-WP-Total:0, empty body). injectedCond is the raw wrapper the
+// attacker sends, e.g. "0) AND (1=1)-- -" — the "<n>) AND|OR <cond> -- -"
+// shape is stripped here to isolate <cond>, but the actual truth evaluation
+// is fully delegated to the shipped evalLiteralBool (fail-closed on any
+// non-constant condition); this function does not reimplement that logic.
+// ok=false when the wrapper doesn't match or the condition isn't a literal
+// constant — the caller falls through in either case.
+func booleanElement(injectedCond string) (json.RawMessage, bool) {
+	m := reBoolWrap.FindStringSubmatch(injectedCond)
+	if m == nil {
+		return nil, false
+	}
+	val, isLit := evalLiteralBool(strings.TrimSpace(m[1])) // reuse shipped constant evaluator
+	if !isLit {
+		return nil, false
+	}
+	if val {
+		return json.RawMessage(`{"body":[{"id":1,"status":"publish"}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":1,"Allow":"GET"}}`), true
+	}
+	return json.RawMessage(`{"body":[],"status":200,"headers":{"X-WP-Total":0,"X-WP-TotalPages":0,"Allow":"GET"}}`), true
 }
 
 // splitTopLevel splits on sep at paren depth 0, ignoring sep inside '...'.

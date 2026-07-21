@@ -1,6 +1,9 @@
 package plugins
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEvalProjection(t *testing.T) {
 	cases := []struct {
@@ -72,6 +75,31 @@ func TestAssembleForgedRow_3158(t *testing.T) {
 	title, _ := row["title"].(map[string]any)
 	if title["rendered"] != "||4F4B||" { // the marker MUST land in title.rendered
 		t.Fatalf("marker placement: title.rendered=%v", title["rendered"])
+	}
+}
+
+func TestBooleanElement(t *testing.T) {
+	// 204.77: author_exclude=0) AND (1=1)-- -  (strip the 0)…-- - wrapper -> (1=1))
+	trueEl, ok := booleanElement("0) AND (1=1)-- -")
+	if !ok || !strings.Contains(string(trueEl), `"X-WP-Total":1`) || !strings.Contains(string(trueEl), `"status":200`) {
+		t.Fatalf("true element: ok=%v el=%s", ok, trueEl)
+	}
+
+	// no-parens / OR / trailing-space comment variant
+	trueEl2, ok2 := booleanElement("0) OR 1=1 -- ")
+	if !ok2 || !strings.Contains(string(trueEl2), `"X-WP-Total":1`) {
+		t.Fatalf("true element (OR variant): ok=%v el=%s", ok2, trueEl2)
+	}
+
+	falseEl, okf := booleanElement("0) AND (1=2)-- -")
+	if !okf || !strings.Contains(string(falseEl), `"X-WP-Total":0`) || !strings.Contains(string(falseEl), `[]`) {
+		t.Fatalf("false element: ok=%v el=%s", okf, falseEl)
+	}
+
+	// non-literal condition -> fail closed, caller falls through
+	_, okNonLit := booleanElement("0) AND user_status-- -")
+	if okNonLit {
+		t.Fatal("non-literal condition must return ok=false")
 	}
 }
 
