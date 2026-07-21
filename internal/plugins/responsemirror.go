@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -128,10 +129,24 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 			}
 		}
 
-		el, reflect := matchMirrorRule(cfg, rawString(s[cfg.PathField]), rawString(s[cfg.MethodField]))
+		path := rawString(s[cfg.PathField])
+
+		// Forge/boolean confirmation channel (opt-in, cfg.Forge != nil): a
+		// structurally-recognized injection in this sub-request's path gets a
+		// content-confirming element in place of the matched rule's static
+		// body. forgeElement is a no-op (ok=false) whenever cfg.Forge is nil
+		// or the path doesn't parse as an injection, so every non-injecting
+		// and every Forge-disabled sub-request falls through to the exact
+		// pre-existing static/reflect behaviour below, untouched.
+		if fe, forged := forgeElement(cfg, path); forged {
+			elems = append(elems, fe)
+			continue
+		}
+
+		el, reflect := matchMirrorRule(cfg, path, rawString(s[cfg.MethodField]))
 		elemBody := el.Body
 		if reflect != nil {
-			elemBody = applyReflect(reflect, rawString(s[cfg.PathField]), elemBody)
+			elemBody = applyReflect(reflect, path, elemBody)
 		}
 		elems = append(elems, mirrorElem{
 			Body:    json.RawMessage(elemBody),
@@ -268,6 +283,70 @@ func methodAllowed(method string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// reAuthorExclude pulls the author_exclude query-parameter value (up to the
+// next & or end of string) out of a URL-decoded path — the wp_posts
+// boolean-blind injection point exercised by booleanElement.
+var reAuthorExclude = regexp.MustCompile(`(?i)[?&]author_exclude=([^&]*)`)
+
+// forgeElement checks a sub-request's (still URL-encoded, as carried on the
+// wire) path for a Forge-recognized injection and, if found, returns the
+// content-confirming element to emit in place of the matched rule's static
+// body. ok=false — meaning the caller must fall through to the existing
+// static/reflect behaviour unchanged — whenever: cfg.Forge is nil; the
+// Collection isn't the one implemented (wp_posts; compileMirror already
+// rejects anything else at load time, this is a defensive belt-and-braces
+// check for configs built directly rather than through the parser); the path
+// fails to URL-decode; there's no UNION projection AND no author_exclude
+// value; or the recognized injection itself fails to evaluate (fail closed,
+// same discipline as evalLiteralBool/evalProjection). It never reimplements
+// forge.go's logic, only wires extractUnionProjection / assembleForgedRow /
+// booleanElement together and shapes their result into a mirrorElem.
+func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
+	if cfg.Forge == nil {
+		return mirrorElem{}, false
+	}
+	collection := cfg.Forge.Collection
+	if collection == "" {
+		collection = "wp_posts"
+	}
+	if collection != "wp_posts" {
+		return mirrorElem{}, false
+	}
+
+	decoded, err := url.QueryUnescape(path)
+	if err != nil {
+		return mirrorElem{}, false
+	}
+
+	if cols, fields, ok := extractUnionProjection(decoded); ok {
+		row, assembled := assembleForgedRow(cols, fields)
+		if !assembled {
+			return mirrorElem{}, false
+		}
+		rowJSON, err := json.Marshal(row)
+		if err != nil {
+			return mirrorElem{}, false
+		}
+		return mirrorElem{
+			Body:    json.RawMessage(`[` + string(rowJSON) + `]`),
+			Status:  200,
+			Headers: json.RawMessage(`{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}`),
+		}, true
+	}
+
+	if m := reAuthorExclude.FindStringSubmatch(decoded); m != nil {
+		if raw, ok := booleanElement(m[1]); ok {
+			var el mirrorElem
+			if err := json.Unmarshal(raw, &el); err != nil {
+				return mirrorElem{}, false
+			}
+			return el, true
+		}
+	}
+
+	return mirrorElem{}, false
 }
 
 // evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal

@@ -1,8 +1,11 @@
 package plugins
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 )
 
 func TestEvalProjection(t *testing.T) {
@@ -15,7 +18,7 @@ func TestEvalProjection(t *testing.T) {
 		// 205.185's marker: COALESCE((SELECT 0x33...3235),'') -> 35667ba4eb25
 		{"COALESCE((SELECT 0x333536363762613465623235),'')", "35667ba4eb25", true},
 		{"0x7075626c697368", "publish", true}, // status constant
-		{"0x706f7374", "post", true},           // type constant
+		{"0x706f7374", "post", true},          // type constant
 		{"'closed'", "closed", true},
 		{"12", "12", true},
 		{"COALESCE((SELECT NULL),'')", "", true}, // all-null -> ''
@@ -116,5 +119,105 @@ func TestAssembleForgedRow_B205_fields(t *testing.T) {
 	}
 	if row["slug"] != "35667ba4eb25" { // marker lands in slug for this tool
 		t.Fatalf("slug=%v", row["slug"])
+	}
+}
+
+// --- Task 6: integration through MirrorRespond (mirrorArray wiring) ---
+//
+// forgeOnlyMirror is a minimal Recurse+Forge config that deliberately carries
+// NO Reflect rule (unlike wpVulnMirror's widgetsMarker). Reusing wpVulnMirror
+// here would let its pre-existing UNION-marker reflection mechanism produce
+// the same marker bytes independent of Forge, masking whether the NEW wiring
+// under test actually fired. With this config, a marker/flip can only come
+// from the forge/boolean path added in this task.
+func forgeOnlyMirror() *parser.MirrorConfig {
+	el := func(status int, body, headers string) parser.MirrorElement {
+		return parser.MirrorElement{Status: status, Body: body, Headers: headers}
+	}
+	rule := func(re, method string, e parser.MirrorElement) parser.MirrorRule {
+		return parser.MirrorRule{PathRegexStr: re, PathRegex: regexp.MustCompile(re), Method: method, MirrorElement: e}
+	}
+	invalidHandler := `{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}}`
+	return &parser.MirrorConfig{
+		RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+		PathField: "path", MethodField: "method", MaxItems: 25,
+		Recurse: &parser.MirrorRecurse{Status: 207, Headers: `{"Allow":"POST"}`},
+		Forge:   &parser.MirrorForge{Collection: "wp_posts"},
+		Rules: []parser.MirrorRule{
+			rule(`/wp/v2/posts$`, "GET", el(500, invalidHandler, `[]`)),
+			rule(`/wp/v2/posts$`, "POST", el(401, `{"code":"rest_cannot_create","message":"Sorry, you are not allowed to create posts as this user.","data":{"status":401}}`, `{"Allow":"GET"}`)),
+		},
+		Default: el(404, `{"code":"rest_no_route","message":"No route was found matching the URL and request method.","data":{"status":404}}`, `[]`),
+	}
+}
+
+// Exact operator batch bodies (see forge_replay.py U3158 / B205 / BTRUE /
+// BFALSE) — copied here as literals per the task brief, not read at test time.
+const (
+	forgeU3158  = `{"requests": [{"method": "POST", "path": "///"}, {"method": "POST", "path": "/wp/v2/posts", "body": {"requests": [{"method": "POST", "path": "///"}, {"method": "GET", "path": "/wp/v2/posts/999999?author_exclude=0%29+UNION+SELECT+999999%2C2%2C0x323032302d30312d30312030303a30303a3030%2C0x323032302d30312d30312030303a30303a3030%2C5%2CCONCAT%280x7c7c%2CHEX%28CAST%28%28SELECT+0x4f4b%29AS+CHAR%29%29%2C0x7c7c%29%2C7%2C0x7075626c697368%2C9%2C10%2C11%2C12%2C13%2C14%2C0x323032302d30312d30312030303a30303a3030%2C0x323032302d30312d30312030303a30303a3030%2C17%2C18%2C19%2C20%2C0x706f7374%2C22%2C23--+-&orderby=none&per_page=500"}, {"method": "GET", "path": "/wp/v2/posts"}]}}, {"method": "POST", "path": "/batch/v1", "body": {"requests": []}}]}`
+	forgeB205   = `{"requests":[{"method":"POST","path":"http://:"},{"body":{"requests":[{"method":"GET","path":"http://:"},{"method":"GET","path":"/wp/v2/widgets?_fields=id%2Cslug%2Ctitle%2Ccontent%2Cguid&author_exclude=1%29+AND+1%3D0+UNION+ALL+SELECT+1922721457%2C1%2C0x323032302d30312d30312030303a30303a3030%2C0x323032302d30312d30312030303a30303a3030%2C%27%27%2C%27%27%2C%27%27%2C0x7075626c697368%2C0x636c6f736564%2C0x636c6f736564%2C%27%27%2CCOALESCE%28%28SELECT+0x333536363762613465623235%29%2C%27%27%29%2C%27%27%2C%27%27%2C0x323032302d30312d30312030303a30303a3030%2C0x323032302d30312d30312030303a30303a3030%2C%27%27%2C0%2C%27%27%2C0%2C0x706f7374%2C%27%27%2C0+--+-&context=view&orderby=none&page=-1&per_page=-1"},{"method":"GET","path":"/wp/v2/posts"}]},"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/batch/v1"}]}`
+	forgeBTrue  = `{"requests": [{"method": "POST", "path": "///"}, {"method": "POST", "path": "/wp/v2/posts", "body": {"requests": [{"method": "POST", "path": "///"}, {"method": "GET", "path": "/wp/v2/users?author_exclude=0%29%20AND%20%281%3D1%29--%20-"}, {"method": "GET", "path": "/wp/v2/posts"}]}}, {"method": "POST", "path": "/batch/v1", "body": {"requests": []}}]}`
+	forgeBFalse = `{"requests": [{"method": "POST", "path": "///"}, {"method": "POST", "path": "/wp/v2/posts", "body": {"requests": [{"method": "POST", "path": "///"}, {"method": "GET", "path": "/wp/v2/users?author_exclude=0%29%20AND%20%281%3D2%29--%20-"}, {"method": "GET", "path": "/wp/v2/posts"}]}}, {"method": "POST", "path": "/batch/v1", "body": {"requests": []}}]}`
+)
+
+func TestForgeIntegration_UnionMarker3158(t *testing.T) {
+	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeU3158))
+	if !ok {
+		t.Fatal("MirrorRespond returned ok=false")
+	}
+	if !strings.Contains(body, "||4F4B||") {
+		t.Fatalf("expected forged ||4F4B|| marker in response, got: %s", body)
+	}
+}
+
+func TestForgeIntegration_UnionMarkerB205(t *testing.T) {
+	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeB205))
+	if !ok {
+		t.Fatal("MirrorRespond returned ok=false")
+	}
+	if !strings.Contains(body, "35667ba4eb25") {
+		t.Fatalf("expected forged 35667ba4eb25 marker in response, got: %s", body)
+	}
+}
+
+func TestForgeIntegration_BooleanTrueFalse(t *testing.T) {
+	_, bodyTrue, okT := MirrorRespond(forgeOnlyMirror(), []byte(forgeBTrue))
+	if !okT {
+		t.Fatal("MirrorRespond (true) returned ok=false")
+	}
+	if !strings.Contains(bodyTrue, `"X-WP-Total":1`) {
+		t.Fatalf("expected X-WP-Total:1 for true condition, got: %s", bodyTrue)
+	}
+
+	_, bodyFalse, okF := MirrorRespond(forgeOnlyMirror(), []byte(forgeBFalse))
+	if !okF {
+		t.Fatal("MirrorRespond (false) returned ok=false")
+	}
+	if !strings.Contains(bodyFalse, `"X-WP-Total":0`) {
+		t.Fatalf("expected X-WP-Total:0 for false condition, got: %s", bodyFalse)
+	}
+}
+
+// TestForgeIntegration_NoRegressionOnGoldenAllTypes proves Forge is strictly
+// additive: armed against a request with no injecting sub-requests at all, it
+// must produce byte-identical output to the shipped Forge==nil golden
+// (goldenAllTypes, defined in responsemirror_test.go).
+func TestForgeIntegration_NoRegressionOnGoldenAllTypes(t *testing.T) {
+	req := `{"requests":[{"method":"POST","path":"http://:"},{"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/wp/v2/users"},{"method":"POST","path":"/wp/v2/block-renderer/core/archives"},{"method":"POST","path":"/batch/v1"},{"method":"POST","path":"/wp/v2/does-not-exist"}]}`
+
+	cfgOff := wpMirror()
+	cfgOn := wpMirror()
+	cfgOn.Forge = &parser.MirrorForge{Collection: "wp_posts"}
+
+	_, bodyOff, okOff := MirrorRespond(cfgOff, []byte(req))
+	_, bodyOn, okOn := MirrorRespond(cfgOn, []byte(req))
+	if !okOff || !okOn {
+		t.Fatalf("ok: off=%v on=%v", okOff, okOn)
+	}
+	if bodyOn != bodyOff {
+		t.Fatalf("Forge altered a non-injecting response\n off: %s\n on:  %s", bodyOff, bodyOn)
+	}
+	if bodyOn != goldenAllTypes {
+		t.Fatalf("byte mismatch against shipped golden\n got:  %s\nwant: %s", bodyOn, goldenAllTypes)
 	}
 }
