@@ -413,6 +413,7 @@ type MirrorConfig struct {
 	MaxDepth       int            `yaml:"maxDepth,omitempty"`       // recursion depth cap; 0 => 3
 	MaxTotal       int            `yaml:"maxTotal,omitempty"`       // total element budget across recursion; 0 => 200
 	Timing         *MirrorTiming  `yaml:"timing,omitempty"`         // opt-in: time-based SQLi oracle emulation
+	Forge          *MirrorForge   `yaml:"forge,omitempty"`          // opt-in: structural UNION-projection forge + boolean-content channel
 }
 
 // MirrorRecurse enables reproducing a *vulnerable* server that re-dispatches a
@@ -473,6 +474,16 @@ type MirrorTiming struct {
 	BareRegexStr string         `yaml:"bareRegex"`
 	BareRegex    *regexp.Regexp `yaml:"-" json:"-"`
 	MaxDelayMs   int            `yaml:"maxDelayMs,omitempty"` // 0 => plugin ceiling 9000
+}
+
+// MirrorForge enables (Forge != nil) the structural UNION-projection forge and
+// the boolean-content channel together: the plugin parses a sub-request's
+// projection structurally rather than via regex, and answers a mixed-oracle
+// probe consistently across both channels. Collection selects which table's
+// field-map applies; the only field-map that currently exists is "wp_posts".
+// nil => both channels off.
+type MirrorForge struct {
+	Collection string `yaml:"collection,omitempty"` // supported: "wp_posts" (default when empty)
 }
 
 // MirrorElement is one entry of the response array. Body and Headers are raw
@@ -707,6 +718,14 @@ func compileMirror(m *MirrorConfig) error {
 				return fmt.Errorf("timing bareRegex must have exactly one capture group (n), has %d", rex.NumSubexp())
 			}
 			m.Timing.BareRegex = rex
+		}
+	}
+	if m.Forge != nil {
+		if m.Forge.Collection == "" {
+			m.Forge.Collection = "wp_posts"
+		}
+		if m.Forge.Collection != "wp_posts" {
+			return fmt.Errorf("forge: unsupported collection %q", m.Forge.Collection)
 		}
 	}
 	if err := validElem("default", m.Default); err != nil {
