@@ -739,3 +739,57 @@ func TestCompileMirrorTiming(t *testing.T) {
 		t.Fatal("expected error for ifRegex with wrong capture-group count")
 	}
 }
+
+func TestCompileMirrorForge(t *testing.T) {
+	withForge := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$",
+			Plugin:   "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Forge:    &MirrorForge{Collection: "wp_posts"},
+			},
+		}},
+	}
+	if err := withForge.CompileCommandRegex(); err != nil {
+		t.Fatalf("config with forge failed to compile: %v", err)
+	}
+	if withForge.Commands[0].Mirror.Forge == nil || withForge.Commands[0].Mirror.Forge.Collection != "wp_posts" {
+		t.Fatal("forge not populated as expected")
+	}
+
+	noForge := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$",
+			Plugin:   "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+			},
+		}},
+	}
+	if err := noForge.CompileCommandRegex(); err != nil {
+		t.Fatalf("config without forge failed to compile: %v", err)
+	}
+	if noForge.Commands[0].Mirror.Forge != nil {
+		t.Fatal("expected Forge to be nil when no forge block is configured")
+	}
+
+	badCollection := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$", Plugin: "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Forge:    &MirrorForge{Collection: "bogus_table"},
+			},
+		}},
+	}
+	if err := badCollection.CompileCommandRegex(); err == nil {
+		t.Fatal("expected error for unsupported forge collection")
+	}
+}
