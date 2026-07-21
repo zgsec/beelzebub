@@ -166,6 +166,61 @@ func isIdentByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
+// wpPostsRestFields maps the 23 wp_posts columns (UNION order) to REST field
+// paths. "" = column with no REST surface (dropped). Nested title/guid etc.
+// are rendered as {"rendered": <val>} objects to match the controller output.
+var wpPostsRestFields = []string{
+	"id", "author", "date", "date_gmt", "content", "title", "excerpt", "status",
+	"comment_status", "ping_status", "password", "slug", "", "", "modified",
+	"modified_gmt", "", "parent", "guid", "menu_order", "type", "", "",
+}
+var wpRenderedFields = map[string]bool{"title": true, "content": true, "excerpt": true, "guid": true}
+
+// assembleForgedRow maps an attacker's UNION SELECT projection onto the
+// wp_posts REST field order and builds the forged post object the plugin
+// serves back — the inert response that confirms the SQLi to the operator's
+// tool. ok=false only when nothing at all evaluated (a fully-failed
+// projection is not a forge); a single non-marker column failing to evaluate
+// just renders as empty (inert), it does not fail the whole row.
+func assembleForgedRow(cols []string, fields string) (map[string]any, bool) {
+	row := map[string]any{}
+	for i, expr := range cols {
+		if i >= len(wpPostsRestFields) {
+			break
+		}
+		f := wpPostsRestFields[i]
+		if f == "" {
+			continue
+		}
+		v, ok := evalProjection(expr)
+		if !ok {
+			// a data reference in a NON-marker slot renders as empty (real WP
+			// returns the column value; we serve inert empty). The marker slot
+			// (title/slug) failing is fatal — the tool would not confirm.
+			v = ""
+		}
+		if wpRenderedFields[f] {
+			row[f] = map[string]any{"rendered": v}
+		} else {
+			row[f] = v
+		}
+	}
+	// _fields projection filter
+	if fields != "" {
+		keep := map[string]bool{}
+		for _, k := range strings.Split(fields, ",") {
+			keep[strings.TrimSpace(k)] = true
+		}
+		for k := range row {
+			if !keep[k] {
+				delete(row, k)
+			}
+		}
+	}
+	// require SOMETHING evaluated (a fully-failed projection is not a forge)
+	return row, len(row) > 0
+}
+
 // splitTopLevel splits on sep at paren depth 0, ignoring sep inside '...'.
 func splitTopLevel(s string, sep byte) []string {
 	var out []string
