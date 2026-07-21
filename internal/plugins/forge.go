@@ -2,9 +2,40 @@ package plugins
 
 import (
 	"encoding/hex"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var (
+	reUnion       = regexp.MustCompile(`(?i)UNION\s+(?:ALL\s+)?SELECT\s+`)
+	reFields      = regexp.MustCompile(`(?i)[?&]_fields=([^&]*)`)
+	reCommentTail = regexp.MustCompile(`(?is)\s*--[\s+].*$`)
+)
+
+// extractUnionProjection pulls the UNION SELECT column list and the _fields=
+// value out of an attacker's injected sub-request path. Input must be
+// URL-decoded. ok=false when there is no UNION [ALL] SELECT in the path
+// (e.g. a boolean-only injection like "AND (1=1)" is not a UNION and must
+// not parse as one).
+func extractUnionProjection(pathDecoded string) ([]string, string, bool) {
+	loc := reUnion.FindStringIndex(pathDecoded)
+	if loc == nil {
+		return nil, "", false
+	}
+	// projection runs from after SELECT to the comment tail (or & param break)
+	rest := pathDecoded[loc[1]:]
+	if amp := strings.IndexByte(rest, '&'); amp >= 0 {
+		rest = rest[:amp]
+	}
+	rest = reCommentTail.ReplaceAllString(rest, "")
+	cols := splitTopLevel(strings.TrimSpace(rest), ',')
+	fields := ""
+	if m := reFields.FindStringSubmatch(pathDecoded); m != nil {
+		fields = m[1]
+	}
+	return cols, fields, len(cols) > 0
+}
 
 // evalProjection evaluates a UNION-projection expression to the string a real
 // server renders, IFF it is composed entirely of constants. ok=false (fail
