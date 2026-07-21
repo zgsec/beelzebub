@@ -76,8 +76,8 @@ commands:
 
 // wpMirror builds the WordPress-6.9.5 (patched) rule table used by the tests.
 // The bodies/statuses/headers are the byte-exact values captured from a real
-// wordpress:6.9.4 container updated to 6.9.5 (tools/oracle-diff in honeypot-
-// research). Regexes are compiled here directly rather than through the parser
+// wordpress:6.9.4 container updated to 6.9.5. Regexes are compiled here directly
+// rather than through the parser
 // so the test targets MirrorRespond's assembly precisely.
 func wpMirror() *parser.MirrorConfig {
 	rule := func(re, method string, status int, body, headers string) parser.MirrorRule {
@@ -143,9 +143,9 @@ func TestMirror_SingleElementAndNoTrailingNewline(t *testing.T) {
 	}
 }
 
-// The Operator A seq6 payload (also the byte-identical 31.58.244.30 body):
-// nested sub-request bodies must be IGNORED (flat / patched behaviour).
-func TestMirror_OperatorA_seq6_FlatIgnoresNested(t *testing.T) {
+// A batch whose top-level sub-requests each carry their own nested body: those
+// nested bodies must be IGNORED (flat / patched-6.9.5 behaviour).
+func TestMirror_FlatIgnoresNestedBodies(t *testing.T) {
 	req := `{"requests":[{"method":"POST","path":"http://:"},{"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/wp/v2/block-renderer/core/archives"},{"method":"POST","path":"/batch/v1","body":{"requests":[]}}]}`
 	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"code":"rest_cannot_create","message":"Sorry, you are not allowed to create posts as this user.","data":{"status":401}},"status":401,"headers":{"Allow":"GET"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":{"Allow":"POST"}}]}`
 	status, body, ok := MirrorRespond(wpMirror(), []byte(req))
@@ -154,9 +154,9 @@ func TestMirror_OperatorA_seq6_FlatIgnoresNested(t *testing.T) {
 	}
 }
 
-// Operator B (wp2shell) UNION payload: the nested widgets SQLi is ignored; the
-// top-level shape is [scheme, /wp/v2/posts, /batch/v1].
-func TestMirror_OperatorB_wp2shell(t *testing.T) {
+// A batch with a nested widgets-UNION SQLi sub-request: the nested SQLi is
+// ignored; the top-level shape is [scheme, /wp/v2/posts, /batch/v1].
+func TestMirror_NestedUnionIgnored(t *testing.T) {
 	req := `{"requests":[{"method":"POST","path":"http://:"},{"body":{"requests":[{"method":"GET","path":"/wp/v2/widgets?author_exclude=1) UNION ALL SELECT ..."}]},"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/batch/v1"}]}`
 	status, body, ok := MirrorRespond(wpMirror(), []byte(req))
 	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"code":"rest_cannot_create","message":"Sorry, you are not allowed to create posts as this user.","data":{"status":401}},"status":401,"headers":{"Allow":"GET"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":{"Allow":"POST"}}]}`
@@ -243,9 +243,9 @@ func TestMirror_ParserValidatesJSON(t *testing.T) {
 }
 
 // wpVulnMirror is the VULNERABLE-6.9.4 rule table: recurse nested batches and
-// reflect a wp2shell UNION marker into the forged row, so a marker-checking
-// scanner sees "success" and proceeds to its next stage. Byte-exact target =
-// tools/oracle-diff/wordpress-6.9.4/exploit_B_union_marker.txt (honeypot-research).
+// reflect a UNION marker into the forged row, so a marker-checking
+// scanner sees "success" and proceeds to its next stage. Byte-exact against a
+// captured WordPress 6.9.4 UNION-marker exploitation attempt.
 func wpVulnMirror() *parser.MirrorConfig {
 	el := func(status int, body, headers string) parser.MirrorElement {
 		return parser.MirrorElement{Status: status, Body: body, Headers: headers}
@@ -281,15 +281,16 @@ func wpVulnMirror() *parser.MirrorConfig {
 	}
 }
 
-// the verbatim wp2shell B1 request body (marker 35667ba4eb25), and B2 (c94504763929)
-func wp2shellBody(markerHex string) string {
+// A nested UNION-marker SQLi request body. markerHex is hex-of-ASCII; it is
+// reflected verbatim into the forged row's slug (proves dynamic reflection).
+func unionMarkerBody(markerHex string) string {
 	return `{"requests":[{"method":"POST","path":"http://:"},{"body":{"requests":[{"method":"GET","path":"http://:"},{"method":"GET","path":"/wp/v2/widgets?_fields=id%2Cslug%2Ctitle%2Ccontent%2Cguid&author_exclude=1%29+AND+1%3D0+UNION+ALL+SELECT+1922721457%2C1%2C0x30%2C0x30%2C%27%27%2C%27%27%2C%27%27%2C0x7075626c697368%2C0x636c6f736564%2C0x636c6f736564%2C%27%27%2CCOALESCE%28%28SELECT+0x` + markerHex + `%29%2C%27%27%29%2C%27%27%2C%27%27%2C0x30%2C0x30%2C%27%27%2C0%2C%27%27%2C0%2C0x706f7374%2C%27%27%2C0+--+-&context=view&orderby=none&page=-1&per_page=-1"},{"method":"GET","path":"/wp/v2/posts"}]},"method":"POST","path":"/wp/v2/posts"},{"method":"POST","path":"/batch/v1"}]}`
 }
 
 func TestMirror_VulnReproduction_ByteExact(t *testing.T) {
-	// marker 35667ba4eb25 hex-encoded == 0x333536363762613465623235
-	body := wp2shellBody("333536363762613465623235")
-	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"35667ba4eb25","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
+	// marker aabbccddeeff hex-encoded == 0x616162626363646465656666
+	body := unionMarkerBody("616162626363646465656666")
+	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"aabbccddeeff","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
 	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(body))
 	if !ok || status != 207 {
 		t.Fatalf("ok=%v status=%d", ok, status)
@@ -300,15 +301,15 @@ func TestMirror_VulnReproduction_ByteExact(t *testing.T) {
 }
 
 func TestMirror_VulnReflection_IsDynamicNotHardcoded(t *testing.T) {
-	// A DIFFERENT marker (c94504763929) must reflect that value, not a constant.
-	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(wp2shellBody("633934353034373633393239")))
+	// A DIFFERENT marker (0123456789ab) must reflect that value, not a constant.
+	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(unionMarkerBody("303132333435363738396162")))
 	if !ok || status != 207 {
 		t.Fatalf("ok=%v status=%d", ok, status)
 	}
-	if !strings.Contains(got, `"slug":"c94504763929"`) {
-		t.Fatalf("expected reflected marker c94504763929 in slug, got: %s", got)
+	if !strings.Contains(got, `"slug":"0123456789ab"`) {
+		t.Fatalf("expected reflected marker 0123456789ab in slug, got: %s", got)
 	}
-	if strings.Contains(got, "35667ba4eb25") {
+	if strings.Contains(got, "aabbccddeeff") {
 		t.Fatalf("stale/hardcoded marker leaked")
 	}
 }
@@ -317,7 +318,7 @@ func TestMirror_VulnReflection_HostileMarkerIsSafe(t *testing.T) {
 	// A marker that hex-decodes to JSON-breaking bytes must be escaped, keeping
 	// the response valid JSON (no injection via the reflection).
 	// 0x22 = '"'  -> would break the string if not escaped.
-	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(wp2shellBody("22")))
+	status, got, ok := MirrorRespond(wpVulnMirror(), []byte(unionMarkerBody("22")))
 	if !ok || status != 207 {
 		t.Fatalf("ok=%v status=%d", ok, status)
 	}
@@ -435,7 +436,7 @@ func TestMirrorDelayMs(t *testing.T) {
 		t.Errorf("Timing==nil must yield 0, got %d", got)
 	}
 	// a UNION-marker body carries no SLEEP -> 0 (reflection path unaffected)
-	if got := MirrorDelayMs(timingMirror(), []byte(wp2shellBody("333536363762613465623235"))); got != 0 {
+	if got := MirrorDelayMs(timingMirror(), []byte(unionMarkerBody("616162626363646465656666"))); got != 0 {
 		t.Errorf("UNION-marker body must yield 0 delay, got %d", got)
 	}
 
@@ -494,9 +495,9 @@ commands:
 }
 
 func TestTiming_NoReflectionRegression(t *testing.T) {
-	body := wp2shellBody("333536363762613465623235") // Operator B marker
+	body := unionMarkerBody("616162626363646465656666")
 	// same golden as TestMirror_VulnReproduction_ByteExact
-	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"35667ba4eb25","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
+	want := `{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":{"responses":[{"body":{"code":"parse_path_failed","message":"Could not parse the path.","data":{"status":400}},"status":400,"headers":[]},{"body":[{"id":1922721457,"guid":{"rendered":""},"slug":"aabbccddeeff","title":{"rendered":""},"content":{"rendered":"","protected":false}}],"status":200,"headers":{"X-WP-Total":1,"X-WP-TotalPages":-1,"Allow":"GET"}},{"body":{"code":"rest_invalid_handler","message":"The handler for the route is invalid","data":{"status":500}},"status":500,"headers":[]}]},"status":207,"headers":{"Allow":"POST"}},{"body":{"code":"rest_batch_not_allowed","message":"The requested route does not support batch requests.","data":{"status":400}},"status":400,"headers":[]}]}`
 	_, got, ok := MirrorRespond(timingMirror(), []byte(body)) // timing armed
 	if !ok || got != want {
 		t.Fatalf("timing-armed reflection bytes changed\n got: %s\nwant: %s", got, want)
