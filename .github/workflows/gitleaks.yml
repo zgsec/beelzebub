@@ -1,0 +1,92 @@
+name: Gitleaks
+
+# Secret + OPSEC scanning for the PUBLIC fork.
+#
+# This repo was the only one of the three without secret scanning, and the only
+# public one. On 2026-07-19 three branches were found exposing an internal
+# operator path and a node identifier in an MCP test fixture. main had been
+# scrubbed; the side branches never were, and nothing scanned them.
+#
+# WHY THIS SCANS INCREMENTALLY, NOT FULL HISTORY
+# A full-history scan reports ~110 findings, because the 2026-07-19 exposure is
+# permanent in pushed history and was accepted rather than rewritten (rewriting
+# would mean force-pushing a public repo and would not retract existing clones).
+# A job that is red on every run is a job everyone learns to ignore — the same
+# failure this workflow exists to prevent. gitleaks' usual answer, a committed
+# --baseline-path file, is unusable here: the baseline would itself republish
+# the leaked strings in a public repo.
+#
+# So: scan only what each push or PR introduces. New leaks fail loudly; the
+# accepted historical findings stay out of the signal.
+#
+# Rules live in .gitleaks.toml — default secret rules PLUS OPSEC rules for
+# internal paths, mesh addressing, node identifiers, and fixture provenance.
+# Credential scanning alone would NOT have caught the 2026-07-19 leak.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks (incremental)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so the introduced-commit range can be resolved.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.22.0
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gl.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gl.tar.gz -C /tmp gitleaks
+          sudo install -m755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Resolve commit range
+        id: range
+        # Untrusted values (refs, SHAs) are passed via env and quoted, never
+        # interpolated into the script body.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            RANGE="${BASE_SHA}..${HEAD_SHA}"
+          elif [ "$PUSH_BEFORE" = "$ZERO" ] || ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            # New branch, or a force-push whose predecessor is unreachable:
+            # scan only the tip commit rather than silently scanning nothing.
+            RANGE="${PUSH_AFTER}~1..${PUSH_AFTER}"
+          else
+            RANGE="${PUSH_BEFORE}..${PUSH_AFTER}"
+          fi
+          echo "range=$RANGE" >> "$GITHUB_OUTPUT"
+          echo "Scanning range: $RANGE"
+
+      - name: Scan introduced commits
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -euo pipefail
+          # --redact: never echo a matched secret into public CI logs.
+          gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --log-opts="$RANGE" \
+            --redact \
+            --verbose \
+            --no-banner
