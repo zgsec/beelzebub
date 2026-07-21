@@ -3,6 +3,8 @@ package plugins
 import (
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
@@ -266,4 +268,178 @@ func methodAllowed(method string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal
+// and, if so, its truth value. cond must already be URL-decoded. It is the
+// fidelity boundary of the time-based oracle: we only ever answer a question
+// whose both operands are constants (int or single-quoted string), so the lure
+// never evaluates anything referencing real data. Anything else — identifier,
+// function, subquery, AND/OR, arithmetic, mixed types, parse ambiguity — yields
+// isLiteral=false (fail closed → flat response).
+func evalLiteralBool(cond string) (val bool, isLiteral bool) {
+	s := strings.TrimSpace(cond)
+	// strip exactly one layer of wrapping parens: "(1=1)" -> "1=1"
+	if len(s) >= 2 && s[0] == '(' && s[len(s)-1] == ')' {
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	// bare boolean
+	switch strings.ToLower(s) {
+	case "true", "1":
+		return true, true
+	case "false", "0":
+		return false, true
+	}
+	// comparison: find operator (longest first)
+	ops := []string{"<=", ">=", "<>", "!=", "=", "<", ">"}
+	for _, op := range ops {
+		i := strings.Index(s, op)
+		if i <= 0 || i+len(op) >= len(s) {
+			continue
+		}
+		lhs := strings.TrimSpace(s[:i])
+		rhs := strings.TrimSpace(s[i+len(op):])
+		// reject if rhs itself starts another operator char (e.g. "<=" seen as "<")
+		if strings.ContainsAny(rhs[:1], "=<>!") {
+			return false, false
+		}
+		li, lok := asInt(lhs)
+		ri, rok := asInt(rhs)
+		if lok && rok {
+			return cmpInt(li, ri, op), true
+		}
+		ls, lsok := asStr(lhs)
+		rs, rsok := asStr(rhs)
+		if lsok && rsok {
+			switch op {
+			case "=":
+				return ls == rs, true
+			case "<>", "!=":
+				return ls != rs, true
+			default:
+				return false, false // string ordering not supported
+			}
+		}
+		return false, false // mixed types or a non-literal operand
+	}
+	return false, false
+}
+
+func asInt(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
+func asStr(s string) (string, bool) {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' && strings.Count(s, "'") == 2 {
+		return s[1 : len(s)-1], true
+	}
+	return "", false
+}
+
+func cmpInt(a, b int, op string) bool {
+	switch op {
+	case "=":
+		return a == b
+	case "<>", "!=":
+		return a != b
+	case "<":
+		return a < b
+	case ">":
+		return a > b
+	case "<=":
+		return a <= b
+	case ">=":
+		return a >= b
+	}
+	return false
+}
+
+// MaxMirrorDelayMs is the hard ceiling on any emulated time-based-oracle delay,
+// enforced here and again at the HTTP call site. Also the default when
+// Timing.MaxDelayMs is unset.
+const MaxMirrorDelayMs = 9000
+
+// MirrorDelayMs computes the time-based-oracle delay (ms) implied by a batch
+// body, or 0. Additive and pure: it never affects the mirror body, so the
+// KI-010 reflection path is untouched. It walks the same sub-requests as
+// MirrorRespond (top level + one nesting level), and for each sub-request path
+// (URL-encoded on the wire): tries IfRegex first — IF(<cond>,SLEEP(<n>),0),
+// delaying n*1000 iff evalLiteralBool(decoded cond) is (true,true) — and only if
+// IfRegex does NOT match, tries BareRegex (unconditional SLEEP(<n>)). Envelope
+// delay = max over sub-requests, clamped to the cap.
+func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
+	if cfg == nil || cfg.Timing == nil {
+		return 0
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(reqBody, &top); err != nil {
+		return 0
+	}
+	arrRaw, ok := top[cfg.RequestKey]
+	if !ok {
+		return 0
+	}
+	subs, ok := decodeSubs(arrRaw)
+	if !ok {
+		return 0
+	}
+	delay := timingWalk(cfg, subs, 0)
+
+	cap := cfg.Timing.MaxDelayMs
+	if cap <= 0 || cap > MaxMirrorDelayMs {
+		cap = MaxMirrorDelayMs
+	}
+	if delay > cap {
+		delay = cap
+	}
+	return delay
+}
+
+// timingWalk returns the max per-sub-request delay across one level, recursing
+// one nesting level (matching the observed nested-batch injection site).
+func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int) int {
+	max := 0
+	for _, s := range subs {
+		if depth < 1 {
+			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
+				if d := timingWalk(cfg, nested, depth+1); d > max {
+					max = d
+				}
+			}
+		}
+		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField])); d > max {
+			max = d
+		}
+	}
+	return max
+}
+
+// sleepDelay extracts the delay a single path implies. IfRegex first (so the
+// inner SLEEP of an IF form is not double-counted by BareRegex); BareRegex only
+// if the IF form is absent.
+func sleepDelay(t *parser.MirrorTiming, path string) int {
+	if t.IfRegex != nil {
+		if m := t.IfRegex.FindStringSubmatch(path); len(m) == 3 {
+			cond, err := url.QueryUnescape(m[1])
+			if err != nil {
+				cond = m[1]
+			}
+			val, isLit := evalLiteralBool(cond)
+			if isLit && val {
+				if n, err := strconv.Atoi(m[2]); err == nil {
+					return n * 1000
+				}
+			}
+			return 0 // IF matched but condition false/non-literal → no bare fallthrough
+		}
+	}
+	if t.BareRegex != nil {
+		if m := t.BareRegex.FindStringSubmatch(path); len(m) == 2 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				return n * 1000
+			}
+		}
+	}
+	return 0
 }

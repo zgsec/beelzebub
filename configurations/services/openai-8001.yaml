@@ -60,10 +60,9 @@ commands:
   # =========================================================================
   # Phase C — Chain 1: tier-1 discovery chain (4 stages)
   #
-  # Designed: docs/strategy/2026-05-12-ws11-phase-c-tier1-chain-design.md
+  # Designed: internal tier-1 discovery-chain design.
   # Unlock at stage 4: OPENAI_TIER1_AWS_KEY / OPENAI_TIER1_AWS_SECRET
-  # (minted 2026-05-12 — reminders ewr-openai-tier1-aws-v2-202604 +
-  # fra-openai-tier1-aws-v2-202604).
+  # (external use triggers an alert).
   #
   # Auth-gate is sessionAction:create (stage 3) + require (stage 4) —
   # the design's "X-Internal-Token" header is breadcrumb-only; cookie
@@ -223,7 +222,7 @@ commands:
   # =========================================================================
   # Phase D Chain D2-1 — CVE-bait: vLLM tokenizer path traversal
   #
-  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §2.2
+  # Designed: internal realism/hardening design.
   #
   # Real vLLM has admin endpoints for hot-reloading custom tokenizers.
   # CVE-2024-10973 (and analogous path-traversal vulns) exploit the
@@ -336,7 +335,7 @@ commands:
   # =========================================================================
 
   # =========================================================================
-  # Merged from overlay: mcp-elicitation-8000-overlay (2026-03-01)
+  # Merged from an internal overlay.
   # =========================================================================
 
   - regex: "^/mcp/prompts/list$"
@@ -388,7 +387,7 @@ commands:
 
 
   # =========================================================================
-  # Merged from overlay: mcp-vllm-8000-overlay (2026-03-01)
+  # Merged from an internal overlay.
   # =========================================================================
 
   - regex: "^/mcp$"
@@ -450,7 +449,7 @@ commands:
 
 
   # =========================================================================
-  # Merged from overlay: vllm-infra-discovery-8000-overlay (2026-03-01)
+  # Merged from an internal overlay.
   # =========================================================================
 
   - regex: "^/config\\.json$"
@@ -582,7 +581,7 @@ commands:
   # =========================================================================
   # Phase D Chain D4-B — capability-discovery trap (anti-agent)
   #
-  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §4.3
+  # Designed: internal realism/hardening design.
   #
   # Agents that enumerate /mcp/tools/list see _cluster_security.agent_handshake_required.
   # Compliant agents POST their context to /mcp/agent-handshake (stage 1,

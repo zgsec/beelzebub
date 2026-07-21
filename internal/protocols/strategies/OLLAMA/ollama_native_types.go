@@ -8,7 +8,7 @@ import "encoding/json"
 // structs) emits a FIXED field order. A map-based response is a byte-level
 // Censys/Shodan banner signature on every multi-key endpoint. Field order
 // here mirrors real Ollama api/types.go, captured byte-exact in the 0.31.1
-// oracle (tools/oracle-diff/ollama-0.31.1/fixtures).
+// oracle (captured offline from a real Ollama 0.31.1 instance).
 
 type ollamaGenerateChunk struct {
 	Model     string `json:"model"`

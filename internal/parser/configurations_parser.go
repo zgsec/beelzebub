@@ -292,7 +292,7 @@ type BeelzebubServiceConfiguration struct {
 	// store. Nil (default) = stateless. Pointer so json omitempty skips
 	// the field entirely when nil, keeping HashCode() stable for existing
 	// services that don't use the stateful-HTTP feature.
-	// Spec: docs/superpowers/specs/2026-04-30-stateful-http-cve-lure-framework-design.md.
+	// Spec: internal stateful-HTTP CVE-lure framework design.
 	State *State `yaml:"state,omitempty" json:",omitempty"`
 	// LLMOfflineResponse configures the response shape returned when ExecuteModel
 	// errors (missing API key, network error, rate limit). Nil (default)
@@ -412,6 +412,7 @@ type MirrorConfig struct {
 	Recurse        *MirrorRecurse `yaml:"recurse,omitempty"`        // opt-in: mirror a sub-request's own nested envelope
 	MaxDepth       int            `yaml:"maxDepth,omitempty"`       // recursion depth cap; 0 => 3
 	MaxTotal       int            `yaml:"maxTotal,omitempty"`       // total element budget across recursion; 0 => 200
+	Timing         *MirrorTiming  `yaml:"timing,omitempty"`         // opt-in: time-based SQLi oracle emulation
 }
 
 // MirrorRecurse enables reproducing a *vulnerable* server that re-dispatches a
@@ -460,6 +461,18 @@ type MirrorReflect struct {
 	Decode       string         `yaml:"decode,omitempty"`      // "" (verbatim) | "hex"
 	Placeholder  string         `yaml:"placeholder,omitempty"` // token to replace in Body; default "${reflect}"
 	MaxLen       int            `yaml:"maxLen,omitempty"`      // cap on the reflected value; 0 => 64
+}
+
+// MirrorTiming arms the time-based blind-SQLi oracle: when a sub-request path
+// carries a SLEEP shape the plugin delays the response so an A/B timing probe
+// reads "vulnerable". IfRegex captures (cond, n) for IF(<cond>,SLEEP(<n>),0);
+// BareRegex captures (n) for an unconditional SLEEP(<n>). nil => feature off.
+type MirrorTiming struct {
+	IfRegexStr   string         `yaml:"ifRegex"`
+	IfRegex      *regexp.Regexp `yaml:"-" json:"-"`
+	BareRegexStr string         `yaml:"bareRegex"`
+	BareRegex    *regexp.Regexp `yaml:"-" json:"-"`
+	MaxDelayMs   int            `yaml:"maxDelayMs,omitempty"` // 0 => plugin ceiling 9000
 }
 
 // MirrorElement is one entry of the response array. Body and Headers are raw
@@ -672,6 +685,28 @@ func compileMirror(m *MirrorConfig) error {
 				return fmt.Errorf("rule %d reflect decode must be \"\" or \"hex\", got %q", j, r.Decode)
 			}
 			m.Rules[j].Reflect.FromRegex = rex
+		}
+	}
+	if m.Timing != nil {
+		if m.Timing.IfRegexStr != "" {
+			rex, err := regexp.Compile(m.Timing.IfRegexStr)
+			if err != nil {
+				return fmt.Errorf("timing ifRegex: %w", err)
+			}
+			if rex.NumSubexp() != 2 {
+				return fmt.Errorf("timing ifRegex must have exactly two capture groups (cond, n), has %d", rex.NumSubexp())
+			}
+			m.Timing.IfRegex = rex
+		}
+		if m.Timing.BareRegexStr != "" {
+			rex, err := regexp.Compile(m.Timing.BareRegexStr)
+			if err != nil {
+				return fmt.Errorf("timing bareRegex: %w", err)
+			}
+			if rex.NumSubexp() != 1 {
+				return fmt.Errorf("timing bareRegex must have exactly one capture group (n), has %d", rex.NumSubexp())
+			}
+			m.Timing.BareRegex = rex
 		}
 	}
 	if err := validElem("default", m.Default); err != nil {

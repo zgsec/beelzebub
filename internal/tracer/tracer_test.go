@@ -187,9 +187,8 @@ func TestEvent_CapturedFieldSerializes(t *testing.T) {
 }
 
 // TestEvent_RequestResponseBodyJSONContract locks in the cross-repo JSON tag
-// contract for the WS-4 Slice B follow-on body-bytes fields. The
-// honeypot.observer exporter's RawEvent struct (exporter/models/models.go,
-// PR-2b 2026-05-25) parses these JSON keys verbatim:
+// contract for the follow-on body-bytes fields. The downstream
+// exporter's RawEvent struct parses these JSON keys verbatim:
 //
 //	RequestBody  string `json:"RequestBody,omitempty"`
 //	ResponseBody string `json:"ResponseBody,omitempty"`
