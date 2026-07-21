@@ -77,7 +77,7 @@ func ndjsonLines(s string) []string {
 	return out
 }
 
-// Real 0.31.1 wire orders, captured in tools/oracle-diff/ollama-0.31.1/fixtures.
+// Real 0.31.1 wire orders, captured offline from a real instance.
 var (
 	wantGenerateChunk = []string{"model", "created_at", "response", "done"}
 	wantGenerateDone  = []string{"model", "created_at", "response", "done", "done_reason", "context",

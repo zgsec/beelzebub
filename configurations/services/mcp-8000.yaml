@@ -753,10 +753,9 @@ commands:
   # =========================================================================
   # Phase C — Chain 2: tier-1 discovery chain (MCP gated tool)
   #
-  # Designed: docs/strategy/2026-05-12-ws11-phase-c-tier1-chain-design.md
+  # Designed: internal tier-1 discovery-chain design.
   # Unlock at stage 4: MCP_KUBECONFIG_DNS (kubeconfig api-server URL is the
-  # canarytoken; minted 2026-05-12 — reminders ewr-mcp-kubeconfig-dns-v2-
-  # 202604 + fra-mcp-kubeconfig-dns-v2-202604).
+  # canarytoken (external use triggers an alert).
   #
   # Stage 1 is the existing /.well-known/mcp.json (modified above to add
   # platform_admin tool hint + session_token_required_for).
@@ -815,7 +814,7 @@ commands:
   # =========================================================================
   # Phase D Chain D4-A — anti-agent fake-error-recovery
   #
-  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §4.3
+  # Designed: internal realism/hardening design.
   #
   # Adversarial pattern: trains compliant LLM agents that submitting their
   # full operational context to a 'recovery' endpoint is the correct response
@@ -925,7 +924,7 @@ commands:
   # =========================================================================
   # Phase D Chain D2-2 — CVE-bait: MCP admin session replay
   #
-  # Designed: docs/strategy/2026-05-13-ws11-phase-d-and-realism.md §2.2
+  # Designed: internal realism/hardening design.
   #
   # Real MCP gateways expose admin endpoints for session management.
   # CVE-2025-MCP-SESS (hypothetical predictable session-ID hijack) would

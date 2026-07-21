@@ -11,7 +11,7 @@ import (
 // model_info (28 keys) plus the tensor list (292 entries for llama-8B) BY
 // DEFAULT in 0.31.1 — data that cannot be derived from the handful of config
 // fields. These files are the byte-exact /api/show reconstructed offline by
-// tools/oracle-diff/gguf_oracle.py (validated byte-for-byte vs a real 0.31.1
+// an offline GGUF-metadata oracle (validated byte-for-byte vs a real 0.31.1
 // instance) with modified_at as a "1970-..." placeholder we patch per deploy.
 // They are public registry metadata — safe to embed in the binary. Generate
 // one per advertised model at persona-authoring time; the emulator then serves

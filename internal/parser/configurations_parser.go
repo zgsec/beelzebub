@@ -292,7 +292,7 @@ type BeelzebubServiceConfiguration struct {
 	// store. Nil (default) = stateless. Pointer so json omitempty skips
 	// the field entirely when nil, keeping HashCode() stable for existing
 	// services that don't use the stateful-HTTP feature.
-	// Spec: docs/superpowers/specs/2026-04-30-stateful-http-cve-lure-framework-design.md.
+	// Spec: internal stateful-HTTP CVE-lure framework design.
 	State *State `yaml:"state,omitempty" json:",omitempty"`
 	// LLMOfflineResponse configures the response shape returned when ExecuteModel
 	// errors (missing API key, network error, rate limit). Nil (default)
