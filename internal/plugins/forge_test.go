@@ -106,6 +106,23 @@ func TestBooleanElement(t *testing.T) {
 	}
 }
 
+// TestForge_BenignAuthorExclude_FailsClosed pins fail-closed behavior for the
+// BENIGN author_exclude shapes a real WP client actually sends (a single id,
+// or a comma-separated id list) — neither is a "<n>) AND|OR <cond> -- -"
+// boolean wrapper nor a UNION SELECT, so both the boolean and UNION forge
+// paths must decline rather than fire on ordinary traffic.
+func TestForge_BenignAuthorExclude_FailsClosed(t *testing.T) {
+	if _, ok := booleanElement("5"); ok {
+		t.Fatal("booleanElement(\"5\") must return ok=false — no AND|OR/-- wrapper present")
+	}
+	if _, ok := booleanElement("1,2,3"); ok {
+		t.Fatal("booleanElement(\"1,2,3\") must return ok=false — no AND|OR/-- wrapper present")
+	}
+	if _, _, ok := extractUnionProjection("/wp/v2/posts?author_exclude=5&orderby=date"); ok {
+		t.Fatal("extractUnionProjection must return ok=false — no UNION present")
+	}
+}
+
 func TestAssembleForgedRow_B205_fields(t *testing.T) {
 	// widgets endpoint, _fields=id,slug,title,content,guid — already URL-decoded.
 	decoded := "/wp/v2/widgets?_fields=id,slug,title,content,guid&author_exclude=1) AND 1=0 UNION ALL SELECT 1922721457,1,0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,'','','',0x7075626c697368,0x636c6f736564,0x636c6f736564,'',COALESCE((SELECT 0x333536363762613465623235),''),'','',0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,'',0,'',0,0x706f7374,'',0 -- -&context=view&orderby=none&page=-1&per_page=-1"

@@ -196,9 +196,11 @@ func assembleForgedRow(cols []string, fields string) (map[string]any, bool) {
 		}
 		v, ok := evalProjection(expr)
 		if !ok {
-			// a data reference in a NON-marker slot renders as empty (real WP
-			// returns the column value; we serve inert empty). The marker slot
-			// (title/slug) failing is fatal — the tool would not confirm.
+			// a column whose evalProjection fails (a data reference, not a
+			// constant) renders as an empty string — inert, never leaked.
+			// This applies to every slot including the marker; a failed
+			// marker simply yields an empty title/slug, so the tool sees
+			// no confirmation (fail-closed).
 			v = ""
 		}
 		if wpRenderedFields[f] {
