@@ -749,7 +749,7 @@ func TestCompileMirrorForge(t *testing.T) {
 				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
 				PathField: "path", MethodField: "method",
 				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
-				Forge:    &MirrorForge{Collection: "wp_posts"},
+				Forge:   &MirrorForge{Collection: "wp_posts"},
 			},
 		}},
 	}
@@ -785,7 +785,7 @@ func TestCompileMirrorForge(t *testing.T) {
 				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
 				PathField: "path", MethodField: "method",
 				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
-				Forge:    &MirrorForge{Collection: "bogus_table"},
+				Forge:   &MirrorForge{Collection: "bogus_table"},
 			},
 		}},
 	}
