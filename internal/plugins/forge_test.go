@@ -54,3 +54,39 @@ func TestExtractUnionProjection(t *testing.T) {
 		t.Fatal("boolean-only path must not parse as UNION")
 	}
 }
+
+func TestAssembleForgedRow_3158(t *testing.T) {
+	// posts endpoint, no _fields — already URL-decoded injected path.
+	decoded := "/wp/v2/posts/999999?author_exclude=0) UNION SELECT 999999,2,0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,5,CONCAT(0x7c7c,HEX(CAST((SELECT 0x4f4b)AS CHAR)),0x7c7c),7,0x7075626c697368,9,10,11,12,13,14,0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,17,18,19,20,0x706f7374,22,23-- -&orderby=none&per_page=500"
+	cols, fields, ok := extractUnionProjection(decoded)
+	if !ok {
+		t.Fatal("extractUnionProjection did not parse the fixture path")
+	}
+	row, assembled := assembleForgedRow(cols, fields)
+	if !assembled {
+		t.Fatal("forge did not assemble")
+	}
+	if row["id"] != "999999" || row["status"] != "publish" || row["type"] != "post" {
+		t.Fatalf("id/status/type: %v/%v/%v", row["id"], row["status"], row["type"])
+	}
+	title, _ := row["title"].(map[string]any)
+	if title["rendered"] != "||4F4B||" { // the marker MUST land in title.rendered
+		t.Fatalf("marker placement: title.rendered=%v", title["rendered"])
+	}
+}
+
+func TestAssembleForgedRow_B205_fields(t *testing.T) {
+	// widgets endpoint, _fields=id,slug,title,content,guid — already URL-decoded.
+	decoded := "/wp/v2/widgets?_fields=id,slug,title,content,guid&author_exclude=1) AND 1=0 UNION ALL SELECT 1922721457,1,0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,'','','',0x7075626c697368,0x636c6f736564,0x636c6f736564,'',COALESCE((SELECT 0x333536363762613465623235),''),'','',0x323032302d30312d30312030303a30303a3030,0x323032302d30312d30312030303a30303a3030,'',0,'',0,0x706f7374,'',0 -- -&context=view&orderby=none&page=-1&per_page=-1"
+	cols, fields, ok := extractUnionProjection(decoded)
+	if !ok {
+		t.Fatal("extractUnionProjection did not parse the fixture path")
+	}
+	row, _ := assembleForgedRow(cols, fields)
+	if _, has := row["status"]; has {
+		t.Fatal("_fields must filter out status")
+	}
+	if row["slug"] != "35667ba4eb25" { // marker lands in slug for this tool
+		t.Fatalf("slug=%v", row["slug"])
+	}
+}
