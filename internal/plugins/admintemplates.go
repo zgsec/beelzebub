@@ -268,6 +268,62 @@ func ServeActivateStage(sess *ChainSession) (status int, headers map[string]stri
 	return 200, nil, out, true
 }
 
+// ServeCommandStage is S9: the response to the exploit's first command POST
+// against the fake shell route its uploaded plugin (S7) registers —
+// /wp2shell/v1/<random-route>, reached either through WordPress's
+// ?rest_route= query-string dispatcher or the /wp-json/ pretty-permalink
+// path (both forms are matched by the caller,
+// internal/protocols/strategies/HTTP/http.go's isWP2ShellCommandRequest, not
+// here). Gated on sess.uploadOpen — the checkpoint ServeUploadStage (S7)
+// sets — so a command sent before any plugin was ever uploaded gets
+// handled=false and falls through to whatever ordinary behavior the caller
+// serves for the route.
+//
+// We never ran the attacker's plugin: its .zip is captured and stored
+// content-addressably (ServeUploadStage's doc comment) but never
+// opened/unzipped/executed, so the actual marker string the plugin embeds
+// in its own response only exists inside code we never execute — there is
+// no way for this function to know it. The marker returned here is
+// therefore fabricated. poc.py's own marker-match check will fail against
+// it and it will report failure and stop, but by then both artifacts this
+// stage exists to bank are already on disk: the uploaded .zip (S7,
+// ServeUploadStage) and the raw command body, which the caller captures via
+// chainArtifactStore.Write BEFORE this function is even invoked. A failed
+// marker check on the exploit's side costs us nothing — the capture already
+// happened.
+//
+// This function does not decode, execute, or otherwise interpret the
+// command in any way — it doesn't even receive it. It only reads
+// sess.uploadOpen and returns a canned JSON string built from crypto/rand
+// hex tokens plus a static, generic output line.
+func ServeCommandStage(sess *ChainSession) (status int, headers map[string]string, body string, handled bool) {
+	if sess == nil {
+		return 0, nil, "", false
+	}
+
+	var uploadOpen bool
+	sess.mutate(func(cs *ChainSession) {
+		uploadOpen = cs.uploadOpen
+	})
+	if !uploadOpen {
+		return 0, nil, "", false
+	}
+
+	// 12 bytes -> 24 hex chars: plausible length for an opaque marker
+	// string, but fabricated — see the doc comment above for why we can't
+	// know the real one. output is a static, generic line in the shape a
+	// low-privilege web-server command (e.g. `id`) would actually produce,
+	// chosen for plausibility only; it carries no real system information.
+	// Both fields are our own fixed-shape trusted strings (hex digits, or a
+	// constant with no quote/backslash characters), so direct
+	// interpolation into the JSON literal below can't break its structure.
+	marker := randomHexToken(12)
+	const output = "uid=33(www-data) gid=33(www-data) groups=33(www-data)"
+	respBody := fmt.Sprintf(`{"marker":"%s","output":"%s"}`, marker, output)
+	headers = map[string]string{"Content-Type": "application/json"}
+	return 200, headers, respBody, true
+}
+
 // sanitizeSlug turns an attacker-controlled upload filename into a safe,
 // WordPress-plugin-slug-shaped string: strips a leading path component (a
 // filename can't legally carry one, but nothing here trusts that), strips

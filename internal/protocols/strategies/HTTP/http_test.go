@@ -1548,6 +1548,227 @@ func TestHTTP_ChainWiring_UploadStage_NilChainStoreUnchanged(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 9: S9 command-capture sink (fake shell route registered by the S7
+// plugin upload). commandStageBody is the exact shape poc.py POSTs:
+// {"c":"<base64-encoded command>"}. The base64 payload here (aWQK) is only
+// ever treated as opaque bytes by anything under test — nothing on this
+// path decodes it, and these tests don't either.
+// ---------------------------------------------------------------------------
+
+const commandStageBody = `{"c":"aWQK"}`
+
+// armCommandStageSession drives srcIP's chain session all the way through
+// escalation (adminCreated) and a plugin upload (uploadOpen) — the
+// prerequisite state for ServeCommandStage to answer anything. Mirrors
+// escalateChainSession + the upload POST from
+// TestHTTP_ChainWiring_UploadStage_S7S8_CapturesZipAndServesActivateFlow.
+func armCommandStageSession(t *testing.T, chainStore *plugins.ChainStore, tt *captureTracer, servConf parser.BeelzebubServiceConfiguration, srcIP, username string) {
+	t.Helper()
+	escalateChainSession(t, chainStore, tt, servConf, srcIP, username)
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	contentType, body := buildPluginUploadMultipart(t, "sgio-wp2shell-cmdstage.zip", []byte("PK\x03\x04-cmd-stage-setup-zip"))
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploadResp.StatusCode != 200 {
+		t.Fatalf("setup: upload stage did not serve 200, got %d: %s", uploadResp.StatusCode, uploadResp.Body)
+	}
+}
+
+// assertCommandStageJSON checks resp carries the S9 canned response: 200,
+// application/json, and a body containing both "marker" and "output" keys.
+func assertCommandStageJSON(t *testing.T, resp httpResponse) {
+	t.Helper()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected ServeCommandStage's 200, got %d: %s", resp.StatusCode, resp.Body)
+	}
+	if !strings.Contains(strings.Join(resp.Headers, "\n"), "Content-Type: application/json") {
+		t.Errorf("expected a Content-Type: application/json header, got %v", resp.Headers)
+	}
+	if !strings.Contains(resp.Body, `"marker"`) || !strings.Contains(resp.Body, `"output"`) {
+		t.Errorf("expected the response body to contain both \"marker\" and \"output\", got: %s", resp.Body)
+	}
+}
+
+// TestHTTP_ChainWiring_CommandStage_QueryForm_CapturesBodyAndServesMarkerJSON
+// is the end-to-end lock for Task 9's poc.py-shaped request: the
+// ?rest_route=/wp2shell/v1/<route> query-string form. Asserts the raw
+// {"c":"aWQK"} body reached the artifact store byte-for-byte (never
+// base64-decoded, never touched by anything else) and the response carries
+// the canned marker+output JSON.
+func TestHTTP_ChainWiring_CommandStage_QueryForm_CapturesBodyAndServesMarkerJSON(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.150"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0 /* no size limit */)
+
+	armCommandStageSession(t, chainStore, tt, servConf, srcIP, "w2s_cmd_query_test")
+
+	cmdCmd := parser.Command{
+		Name: "wp2shell-command", StatusCode: 404,
+		Handler: `{"code":"rest_no_route"}`,
+	}
+	cmdReq := newChainTestRequest(t, http.MethodPost,
+		"/?rest_route=/wp2shell/v1/deadbeef01", commandStageBody, srcIP+":8888")
+	cmdReq.Header.Set("Content-Type", "application/json")
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandStageJSON(t, resp)
+
+	sum := sha256.Sum256([]byte(commandStageBody))
+	wantSHA := hex.EncodeToString(sum[:])
+	binPath := strings.Join([]string{dir, wantSHA + ".bin"}, string(os.PathSeparator))
+	gotBytes, statErr := os.ReadFile(binPath)
+	if statErr != nil {
+		t.Fatalf("artifact .bin file not found at %s: %v", binPath, statErr)
+	}
+	if string(gotBytes) != commandStageBody {
+		t.Fatalf("captured artifact bytes differ from the raw command body: got %q, want %q", gotBytes, commandStageBody)
+	}
+}
+
+// TestHTTP_ChainWiring_CommandStage_PrettyPathForm_CapturesBodyAndServesMarkerJSON
+// is the same lock as the query-form test above, but for the
+// pretty-permalink /wp-json/wp2shell/v1/<route> path form — proving the
+// sink isn't fragile to which of WordPress's two REST dispatch shapes a
+// target uses.
+func TestHTTP_ChainWiring_CommandStage_PrettyPathForm_CapturesBodyAndServesMarkerJSON(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.151"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0)
+
+	armCommandStageSession(t, chainStore, tt, servConf, srcIP, "w2s_cmd_pretty_test")
+
+	cmdCmd := parser.Command{
+		Name: "wp2shell-command", StatusCode: 404,
+		Handler: `{"code":"rest_no_route"}`,
+	}
+	cmdReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-json/wp2shell/v1/deadbeef02", commandStageBody, srcIP+":8889")
+	cmdReq.Header.Set("Content-Type", "application/json")
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCommandStageJSON(t, resp)
+
+	sum := sha256.Sum256([]byte(commandStageBody))
+	wantSHA := hex.EncodeToString(sum[:])
+	binPath := strings.Join([]string{dir, wantSHA + ".bin"}, string(os.PathSeparator))
+	if _, statErr := os.ReadFile(binPath); statErr != nil {
+		t.Fatalf("artifact .bin file not found at %s: %v", binPath, statErr)
+	}
+}
+
+// TestHTTP_ChainWiring_CommandStage_GateNotUploadOpenFallsThrough is the
+// NOT-handled half: the session is armed (adminCreated) but never went
+// through the upload stage, so sess.uploadOpen is false and
+// plugins.ServeCommandStage must return handled=false — the request falls
+// through to the command's ordinary configured (here: static 404) response.
+// Mirrors TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough's
+// shape for the layer above.
+//
+// Same intentional two-tier contract as Task 8: CAPTURE is still gated only
+// on sess != nil (armed), independent of uploadOpen — so this test also
+// asserts the raw command body reached the artifact store even though the
+// response fell through, same pattern as
+// TestHTTP_ChainWiring_UploadStage_BroadCapture_NonAdminCreatedStillCaptures.
+func TestHTTP_ChainWiring_CommandStage_GateNotUploadOpenFallsThrough(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.152"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0)
+
+	// Escalated to adminCreated, but no upload — uploadOpen stays false.
+	escalateChainSession(t, chainStore, tt, servConf, srcIP, "w2s_cmd_gate_test")
+
+	cmdCmd := parser.Command{
+		Name: "wp2shell-command", StatusCode: 404,
+		Handler: `{"code":"rest_no_route"}`,
+	}
+	cmdReq := newChainTestRequest(t, http.MethodPost,
+		"/?rest_route=/wp2shell/v1/deadbeef03", commandStageBody, srcIP+":8890")
+	cmdReq.Header.Set("Content-Type", "application/json")
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 404 || resp.Body != `{"code":"rest_no_route"}` {
+		t.Fatalf("expected the command's static fallback for a not-uploadOpen session, got %d: %s", resp.StatusCode, resp.Body)
+	}
+	if strings.Contains(resp.Body, `"marker"`) {
+		t.Fatalf("non-uploadOpen session must not receive the S9 command-stage response, got: %s", resp.Body)
+	}
+
+	sum := sha256.Sum256([]byte(commandStageBody))
+	wantSHA := hex.EncodeToString(sum[:])
+	binPath := strings.Join([]string{dir, wantSHA + ".bin"}, string(os.PathSeparator))
+	if _, statErr := os.ReadFile(binPath); statErr != nil {
+		t.Fatalf("expected the command body to be captured even without uploadOpen, but artifact .bin not found at %s: %v", binPath, statErr)
+	}
+}
+
+// TestHTTP_ChainWiring_CommandStage_NilChainStoreUnchanged is the
+// zero-regression half: chainStore == nil means sess is never looked up, so
+// the wp2shell command-stage routing added in Task 9 must be a complete
+// no-op — including never touching artifactStore, even for a well-formed,
+// correctly-routed command POST.
+func TestHTTP_ChainWiring_CommandStage_NilChainStoreUnchanged(t *testing.T) {
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0)
+
+	cmdCmd := parser.Command{
+		Name: "wp2shell-command", StatusCode: 404,
+		Handler: `{"code":"rest_no_route"}`,
+	}
+	cmdReq := newChainTestRequest(t, http.MethodPost,
+		"/?rest_route=/wp2shell/v1/deadbeef04", commandStageBody, "203.0.113.153:8891")
+	cmdReq.Header.Set("Content-Type", "application/json")
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, nil /* chainStore */, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 404 || resp.Body != `{"code":"rest_no_route"}` {
+		t.Fatalf("chainStore==nil must leave command-stage routing untouched, got %d: %s", resp.StatusCode, resp.Body)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("chainStore==nil must never write to artifactStore, found %d entries in %s", len(entries), dir)
+	}
+}
+
 // TestFindMirrorChain locks Init's arming decision: a Command (main or
 // fallback) whose Mirror config carries a Chain block is found regardless of
 // position; no command with a Chain block returns nil.

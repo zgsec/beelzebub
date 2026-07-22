@@ -274,6 +274,31 @@ func extractPluginZipPart(contentType string, body []byte) (filename string, dat
 	}
 }
 
+// wp2ShellRestRoutePrefix and wp2ShellPrettyPathPrefix are the two shapes
+// the S9 command POST against the fake shell route (registered by the S7
+// plugin upload) can arrive in: poc.py's own form dispatches through
+// WordPress's ?rest_route= query-string router (request.URL.Path stays
+// "/"), while a pretty-permalink WordPress instance would expose the same
+// REST route under /wp-json/... instead.
+const (
+	wp2ShellRestRoutePrefix  = "/wp2shell/v1/"
+	wp2ShellPrettyPathPrefix = "/wp-json/wp2shell/v1/"
+)
+
+// isWP2ShellCommandRequest reports whether request is the exploit's S9
+// command POST against the fake shell route, in either form. Neither form
+// is a single, static path, so this can't be folded into the exact-match
+// switch below the way S4-S8 are — it's checked separately.
+func isWP2ShellCommandRequest(request *http.Request) bool {
+	if request.Method != http.MethodPost {
+		return false
+	}
+	if strings.HasPrefix(request.URL.Query().Get("rest_route"), wp2ShellRestRoutePrefix) {
+		return true
+	}
+	return strings.HasPrefix(request.URL.Path, wp2ShellPrettyPathPrefix)
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Bind the fault injector PER-SERVICE, here, into a local the handler
 	// closure captures — exactly as servConf is captured per service below.
@@ -737,6 +762,52 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 					resp.Headers = headers
 					return resp, nil, fireTrace
 				}
+			}
+		}
+
+		// S9 (Task 9): the first command the exploit POSTs to the fake shell
+		// route its S7-uploaded plugin registers (/wp2shell/v1/<route>,
+		// either the ?rest_route= query form or the /wp-json/ pretty-
+		// permalink form — see isWP2ShellCommandRequest). Neither form is a
+		// single static path, so it can't be a case in the switch above;
+		// it's matched separately here, still inside the sess != nil guard.
+		//
+		// Same intentional two-tier contract as S7's upload capture (see
+		// the /wp-admin/update.php case's comment above): CAPTURE is gated
+		// only on sess != nil (any armed service), independent of
+		// sess.uploadOpen — capture-first, so a command sent before (or
+		// instead of) a completed upload is still banked as intel. The
+		// RESPONSE is gated on sess.uploadOpen inside
+		// plugins.ServeCommandStage itself, same pattern as
+		// ServeUploadStage/ServeActivateStage above.
+		//
+		// The captured bytes are the raw {"c":"<base64 command>"} JSON body
+		// exactly as sent, handed ONLY to chainArtifactStore.Write — never
+		// base64-decoded, never passed to os/exec or a shell, never
+		// interpreted at all. That's also true inside
+		// plugins.ServeCommandStage: it never receives the body, only
+		// sess.uploadOpen, and returns a canned JSON string.
+		if isWP2ShellCommandRequest(request) {
+			if chainArtifactStore != nil {
+				host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+				if splitErr != nil {
+					host = request.RemoteAddr
+				}
+				_, _ = chainArtifactStore.Write(bodyBytes, map[string]any{
+					"stage":   "command",
+					"src_ip":  host,
+					"session": host,
+				})
+			}
+			if status, hdrs, cmdBody, handled := plugins.ServeCommandStage(sess); handled {
+				resp.StatusCode = status
+				resp.Body = cmdBody
+				headers := make([]string, 0, len(hdrs))
+				for k, v := range hdrs {
+					headers = append(headers, k+": "+v)
+				}
+				resp.Headers = headers
+				return resp, nil, fireTrace
 			}
 		}
 	}

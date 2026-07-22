@@ -374,6 +374,91 @@ func TestServeUploadStage_Gate_RequiresArmedSession(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// Task 9: S9 (first command POST to the fake shell route). ServeCommandStage
+// never receives the command itself — capturing it is http.go's job, see
+// http_test.go's TestHTTP_ChainWiring_CommandStage_* — so these tests only
+// exercise the response contract: canned marker+output JSON, gated on
+// sess.uploadOpen.
+// ---------------------------------------------------------------------------
+
+var commandStageJSONRe = regexp.MustCompile(`^\{"marker":"([0-9a-f]{24})","output":"([^"]*)"\}$`)
+
+func TestServeCommandStage_S9_ReturnsCannedMarkerAndOutput(t *testing.T) {
+	sess := armedAdminSession("w2s_probe")
+	if _, _, _, handled := ServeUploadStage(sess, "sgio-wp2shell-cmdtest.zip"); !handled {
+		t.Fatalf("setup: ServeUploadStage did not handle")
+	}
+
+	status, headers, body, handled := ServeCommandStage(sess)
+	if !handled {
+		t.Fatalf("S9: handled = false, want true")
+	}
+	if status != 200 {
+		t.Errorf("S9 status = %d, want 200", status)
+	}
+	if ct := headers["Content-Type"]; ct != "application/json" {
+		t.Errorf("S9 Content-Type = %q, want application/json", ct)
+	}
+
+	m := commandStageJSONRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("S9 body = %q, want JSON matching %s", body, commandStageJSONRe)
+	}
+	if m[2] == "" {
+		t.Errorf("S9 output field is empty, want a benign non-empty placeholder")
+	}
+}
+
+// TestServeCommandStage_MarkerIsFabricatedNotDerived locks the documented
+// behavior: since the plugin's zip is never opened/executed, there is no way
+// to recover the marker the attacker's own plugin actually embeds, so two
+// calls against sessions armed with different (attacker-controlled)
+// filenames/slugs must not produce the same marker by some shared
+// derivation — each call mints its own via crypto/rand.
+func TestServeCommandStage_MarkerIsFabricatedNotDerived(t *testing.T) {
+	sess := armedAdminSession("w2s_probe")
+	if _, _, _, handled := ServeUploadStage(sess, "sgio-wp2shell-a.zip"); !handled {
+		t.Fatalf("setup: ServeUploadStage did not handle")
+	}
+
+	_, _, body1, _ := ServeCommandStage(sess)
+	_, _, body2, _ := ServeCommandStage(sess)
+	m1 := commandStageJSONRe.FindStringSubmatch(body1)
+	m2 := commandStageJSONRe.FindStringSubmatch(body2)
+	if m1 == nil || m2 == nil {
+		t.Fatalf("expected both responses to match the canned JSON shape: %q / %q", body1, body2)
+	}
+	if m1[1] == m2[1] {
+		t.Errorf("two ServeCommandStage calls returned the identical marker %q, want independently fabricated markers", m1[1])
+	}
+}
+
+func TestServeCommandStage_Gate_RequiresUploadOpen(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		if _, _, _, handled := ServeCommandStage(nil); handled {
+			t.Errorf("handled = true with sess=nil, want false")
+		}
+	})
+
+	t.Run("session never reached uploadOpen", func(t *testing.T) {
+		sess := armedAdminSession("w2s_probe") // adminCreated, but never uploaded
+		if _, _, _, handled := ServeCommandStage(sess); handled {
+			t.Errorf("handled = true with uploadOpen=false, want false")
+		}
+	})
+
+	t.Run("armed via upload", func(t *testing.T) {
+		sess := armedAdminSession("w2s_probe")
+		if _, _, _, handled := ServeUploadStage(sess, "sgio-wp2shell-armed.zip"); !handled {
+			t.Fatalf("setup: ServeUploadStage did not handle")
+		}
+		if _, _, _, handled := ServeCommandStage(sess); !handled {
+			t.Errorf("handled = false after uploadOpen was set, want true")
+		}
+	})
+}
+
 func TestServeActivateStage_S8_RequiresUploadOpen(t *testing.T) {
 	t.Run("nil session", func(t *testing.T) {
 		if _, _, _, handled := ServeActivateStage(nil); handled {
