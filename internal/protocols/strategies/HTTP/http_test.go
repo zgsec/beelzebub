@@ -1366,6 +1366,75 @@ func TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough(t *testing
 	}
 }
 
+// TestHTTP_ChainWiring_UploadStage_BroadCapture_NonAdminCreatedStillCaptures
+// locks the intentional two-tier contract flagged in Task 8 review: capture
+// is scoped to "armed" (sess != nil, i.e. chainStore configured), NOT to
+// "adminCreated" — capture-first, we would rather record a plugin .zip from
+// a source that never completed the forge chain than silently miss a
+// backdoor drop. This is the SAME request shape as
+// TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough (armed,
+// well-formed upload, adminCreated never reached) but additionally asserts
+// on the artifact store's contents — that test only checked the response
+// fell through; this one proves the broader claim: the zip reaches
+// chainArtifactStore.Write byte-for-byte EVEN THOUGH the response is not
+// the S7 success/activate page. Response-gated (adminCreated) and
+// capture-gated (armed) are deliberately different gates; this test is what
+// makes that intentional, not an oversight.
+func TestHTTP_ChainWiring_UploadStage_BroadCapture_NonAdminCreatedStillCaptures(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.103"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0 /* no size limit */)
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	zipBytes := []byte("PK\x03\x04-broad-capture-non-admincreated-test-bytes")
+	contentType, body := buildPluginUploadMultipart(t, "sgio-wp2shell-broadcap.zip", zipBytes)
+
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":7777")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	// No escalateChainSession call: this source IP's chain session is
+	// freshly created by chainStore.Get inside buildHTTPResponse and never
+	// reaches adminCreated. sess != nil (armed) is still true, which is the
+	// only thing the capture branch checks.
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Response half of the contract: not adminCreated -> ServeUploadStage
+	// returns handled=false -> the command's ordinary static response, NOT
+	// the S7 success/activate page.
+	if resp.StatusCode != 404 || resp.Body != `{"code":"not_found"}` {
+		t.Fatalf("expected the command's static fallback for a fresh (not-adminCreated) session, got %d: %s",
+			resp.StatusCode, resp.Body)
+	}
+	if strings.Contains(resp.Body, "plugins.php?action=activate") {
+		t.Fatalf("non-adminCreated session must not receive the S7 activate-flow response, got: %s", resp.Body)
+	}
+
+	// Capture half of the contract: the zip reached the artifact store
+	// anyway, byte-for-byte, keyed by its own sha256 — proving capture is
+	// gated on "armed", not on "adminCreated".
+	sum := sha256.Sum256(zipBytes)
+	wantSHA := hex.EncodeToString(sum[:])
+	binPath := strings.Join([]string{dir, wantSHA + ".bin"}, string(os.PathSeparator))
+	gotBytes, statErr := os.ReadFile(binPath)
+	if statErr != nil {
+		t.Fatalf("expected the zip to be captured even without adminCreated, but artifact .bin file not found at %s: %v", binPath, statErr)
+	}
+	if !bytes.Equal(gotBytes, zipBytes) {
+		t.Fatalf("captured artifact bytes differ from the uploaded zip: got %q, want %q", gotBytes, zipBytes)
+	}
+}
+
 // TestHTTP_ChainWiring_UploadStage_NilArtifactStoreStillServesSuccess
 // verifies the "no-store path" from Task 8's contract: an armed session but
 // a nil artifactStore (ArtifactPath not configured for this service) must

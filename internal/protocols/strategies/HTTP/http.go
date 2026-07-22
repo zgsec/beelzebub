@@ -675,6 +675,26 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// plugins.ServeUploadStage re-checks sess.adminCreated itself, so
 		// a request that reaches here without having cleared T4 still
 		// falls through unhandled, same as the S4-S6 case above.
+		//
+		// Intentional two-tier contract (Task 8 review finding — do not
+		// "fix" this by adding an adminCreated check to the capture below
+		// to match the response gate; that would be a regression):
+		//   - CAPTURE is gated only on sess != nil, i.e. it fires for ANY
+		//     armed service (chainStore configured) regardless of whether
+		//     this session ever reached adminCreated. Deliberately broader
+		//     than the response gate: capture-first — we would rather
+		//     record a plugin .zip from a source that never completed the
+		//     forge chain than silently miss a backdoor drop. The artifact
+		//     is inert (content-addressable storage only, never executed —
+		//     see the paragraph above), so over-capturing costs nothing.
+		//   - The SUCCESS/activate RESPONSE, and the uploadOpen checkpoint
+		//     ServeUploadStage sets, stay scoped to sess.adminCreated —
+		//     only an operator who actually completed T1-T4 gets served
+		//     the S7/S8 activate-flow illusion. A capture with no matching
+		//     adminCreated checkpoint still reaches chainArtifactStore.Write
+		//     below, but ServeUploadStage returns handled=false and the
+		//     request falls through to the command's ordinary configured
+		//     response, same as any other not-yet-escalated hit here.
 		case "/wp-admin/update.php":
 			if request.Method == http.MethodPost && request.URL.Query().Get("action") == "upload-plugin" {
 				if filename, zipBytes, parseErr := extractPluginZipPart(request.Header.Get("Content-Type"), bodyBytes); parseErr == nil {
