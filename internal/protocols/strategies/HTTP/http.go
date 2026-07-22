@@ -302,10 +302,23 @@ func isWP2ShellCommandRequest(request *http.Request) bool {
 // path so a .zip that is exactly the cap size isn't clipped by the multipart
 // envelope around it; the artifact store's own maxBodyBytes stays the authority
 // on whether the extracted part is oversize.
+//
+// maxConcurrentUploadReads bounds how many enlarged plugin-upload bodies may be
+// buffered at once. The enlarged read (up to the artifact cap) is reachable by
+// ANY request shaped like the S7 upload — capture is deliberately capture-first
+// and NOT auth-gated — and the container runs under a hard mem_limit. Without a
+// bound, an attacker spraying large uploads could OOM the whole sensor. Excess
+// uploads fall back to the 1 MiB budget (their capture is dropped as oversize —
+// honest — rather than risking the process). Peak enlarged-buffer memory is
+// therefore bounded by maxConcurrentUploadReads × ~2 × cap (the buffered body
+// plus the extracted part), independent of attacker concurrency.
 const (
 	defaultBodyReadBudget    = 1024 * 1024
 	multipartFramingHeadroom = 64 * 1024
+	maxConcurrentUploadReads = 4
 )
+
+var uploadReadSlots = make(chan struct{}, maxConcurrentUploadReads)
 
 // isPluginUploadRequest reports whether request is the S7 plugin-.zip upload
 // POST — the only path that legitimately carries a multi-MiB body. Mirrors the
@@ -317,16 +330,26 @@ func isPluginUploadRequest(request *http.Request) bool {
 		request.URL.Query().Get("action") == "upload-plugin"
 }
 
-// bodyReadBudget returns the max bytes to read from this request's body.
-// Default 1 MiB; the plugin-upload path on an armed service (artifactStore
-// non-nil) expands to the configured artifact cap plus multipart headroom, so
-// a real plugin .zip is captured whole instead of truncated at 1 MiB. Never
-// smaller than the default.
-func bodyReadBudget(request *http.Request, artifactStore *artifactstore.Store) int64 {
-	if artifactStore != nil && isPluginUploadRequest(request) {
-		if m := artifactStore.MaxBodyBytes(); m > defaultBodyReadBudget {
-			return int64(m) + multipartFramingHeadroom
-		}
+// acquireUploadReadSlot tries, without blocking, to reserve one enlarged-upload
+// -read slot. On success it returns a release func (call once, when the
+// buffered bytes are no longer needed) and true. On failure it returns a no-op
+// release and false, and the caller MUST use the default 1 MiB budget.
+func acquireUploadReadSlot() (release func(), ok bool) {
+	select {
+	case uploadReadSlots <- struct{}{}:
+		return func() { <-uploadReadSlots }, true
+	default:
+		return func() {}, false
+	}
+}
+
+// enlargedUploadBudget is the read budget for a captured plugin upload: the
+// configured artifact cap plus multipart framing headroom, so a real .zip is
+// captured whole instead of truncated at 1 MiB. Never smaller than the default;
+// the store's own maxBodyBytes stays the authority on oversize.
+func enlargedUploadBudget(artifactStore *artifactstore.Store) int64 {
+	if m := artifactStore.MaxBodyBytes(); m > defaultBodyReadBudget {
+		return int64(m) + multipartFramingHeadroom
 	}
 	return int64(defaultBodyReadBudget)
 }
@@ -443,10 +466,28 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		// .zip is captured WHOLE rather than silently truncated. Command
 		// matching still only sees a bounded 1 MiB prefix — we never run a
 		// regex over a multi-MiB upload.
+		// preBody holds the single buffered copy of the request body, handed to
+		// buildHTTPResponse so it never re-reads the stream — one buffer, not
+		// two (an earlier double-read held ~2× the enlarged budget resident).
 		reqBody := ""
+		var preBody []byte
 		if request.Body != nil && (anyBodyRegex(servConf.Commands) || isPluginUploadRequest(request)) {
-			budget := bodyReadBudget(request, artifactStore)
+			budget := int64(defaultBodyReadBudget)
+			// The upload-capture path may read up to the configured artifact cap
+			// so a real .zip is captured whole. That read is memory-amplifying
+			// and reachable without auth, so it runs only while holding one of a
+			// bounded pool of slots; when the pool is saturated we keep the 1 MiB
+			// budget (capture dropped as oversize — honest — never an OOM). The
+			// slot is held for the whole request (buildHTTPResponse still holds
+			// preBody), released by defer when the handler returns.
+			if artifactStore != nil && isPluginUploadRequest(request) {
+				if release, ok := acquireUploadReadSlot(); ok {
+					defer release()
+					budget = enlargedUploadBudget(artifactStore)
+				}
+			}
 			b, _ := io.ReadAll(io.LimitReader(request.Body, budget))
+			preBody = b
 			request.Body = io.NopCloser(bytes.NewReader(b))
 			matchPrefix := b
 			if len(matchPrefix) > defaultBodyReadBudget {
@@ -462,7 +503,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore, preBody)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -475,7 +516,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore, preBody)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -580,7 +621,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store) (httpResponse, error, fireTraceFunc) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store, preBody []byte) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// trace fire (covers static-handler + LLM plugin paths uniformly).
 	// Trace fires from the caller AFTER all resp modifications complete.
@@ -592,11 +633,18 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		StatusCode: command.StatusCode,
 	}
 
-	// Limit body read to bound DoS. Default 1 MiB; the plugin-upload path on an
-	// armed service expands to the configured artifact cap (+ framing headroom)
-	// so a real .zip is captured whole, not truncated. bodyBytes is reused for
-	// sessionCapture regex and artifactCapture — read only once.
-	bodyBytes, err := io.ReadAll(io.LimitReader(request.Body, bodyReadBudget(request, chainArtifactStore)))
+	// Body bytes. When the caller already buffered the body (preBody != nil —
+	// the bodyRegex and plugin-upload paths, where the enlarged, slot-bounded
+	// read happened once, under the DoS/memory guard), reuse that single buffer
+	// rather than re-reading the stream. Otherwise read here, bounded to 1 MiB.
+	// bodyBytes feeds sessionCapture regex and artifactCapture — one buffer only.
+	var bodyBytes []byte
+	var err error
+	if preBody != nil {
+		bodyBytes = preBody
+	} else {
+		bodyBytes, err = io.ReadAll(io.LimitReader(request.Body, defaultBodyReadBudget))
+	}
 	body := ""
 	if err == nil {
 		body = string(bodyBytes)
@@ -745,10 +793,13 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// There is no os.Open/exec/unzip anywhere on this path, and never
 		// will be: the zip is never written under a name or path a
 		// webserver would execute, and this function does nothing else
-		// with its contents. A Write failure (including
-		// artifactstore.ErrOversize) is swallowed deliberately — capture
-		// is best-effort telemetry, not a gate on the exploit's forward
-		// progress, so the success page below is served either way.
+		// with its contents. A Write failure never gates the exploit's
+		// forward progress (capture is best-effort telemetry — the success
+		// page below is served either way), but it is LOGGED, not silently
+		// swallowed: ErrOversize means the cap refused a too-large part (so
+		// an operator porting artifacts knows a capture was dropped and can
+		// widen the cap), and any other error (disk full, bad artifact dir)
+		// must not fail silently on a capture surface.
 		//
 		// plugins.ServeUploadStage re-checks sess.adminCreated itself, so
 		// a request that reaches here without having cleared T4 still
@@ -794,6 +845,8 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 							"filename": filename,
 						}); errors.Is(werr, artifactstore.ErrOversize) {
 							log.Warnf("wp2shell plugin-upload capture from %s exceeded artifact cap — not stored (%d bytes, filename %q)", host, len(zipBytes), filename)
+						} else if werr != nil {
+							log.Warnf("wp2shell plugin-upload capture from %s failed to store: %v", host, werr)
 						}
 					}
 					if status, hdrs, uploadBody, handled := plugins.ServeUploadStage(sess, filename); handled {
