@@ -112,6 +112,17 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession)
 // into nested envelopes when configured. Returns ok=false if the element budget
 // is exhausted (hostile amplification) or an assembled element is not valid JSON.
 func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int, sess *chainSession) (json.RawMessage, bool) {
+	// Escalation+admin-creation checkpoint (Task 4 / S3): scanned once per
+	// level, over the SAME sub-request list a `POST /wp/v2/users` sibling
+	// would appear in — so the checkpoint below requires BOTH signals in the
+	// same batch. A lone `POST /wp/v2/users` probe with no accompanying
+	// escalation UNION anywhere in this subs slice must never trip it (a
+	// separate, later-arriving escalation forge — a different mirrorArray
+	// call, different subs slice — doesn't count either). sess == nil
+	// short-circuits before the scan, so a nil session sees zero behavioural
+	// or performance difference from before this task.
+	escalationSeen := sess != nil && batchHasEscalationForge(cfg, subs)
+
 	elems := make([]mirrorElem, 0, len(subs))
 	for _, s := range subs {
 		*budget--
@@ -133,6 +144,24 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 					Headers: rawHeaders(cfg.Recurse.Headers),
 				})
 				continue
+			}
+		}
+
+		// Admin-creation confirmation (Task 4 / S3): only armed when the
+		// escalation forge was seen elsewhere in THIS batch (escalationSeen,
+		// above). A `POST /wp/v2/users` with no accompanying escalation UNION
+		// in the batch falls through untouched to the existing static/reflect
+		// behaviour below — same as every sub-request when sess == nil.
+		if escalationSeen {
+			if username, ok := extractAdminUsername(cfg, s); ok {
+				if ce, built := adminCreatedElement(username); built {
+					sess.mutate(func(cs *chainSession) {
+						cs.adminCreated = true
+						cs.username = username
+					})
+					elems = append(elems, ce)
+					continue
+				}
 			}
 		}
 
@@ -342,6 +371,16 @@ func forgeElement(cfg *parser.MirrorConfig, path string, sess *chainSession) (mi
 		if !assembled {
 			return mirrorElem{}, false
 		}
+		// Seed checkpoint (Task 4 / S2): a UNION-forged row whose content
+		// carries the oembed seed shortcodes ("[embed ...][/embed]") is the
+		// chain's seed-post signal — record it so later stages can gate on
+		// "seeding happened" without re-parsing every forge. Purely additive:
+		// the served row/status/headers below are unchanged either way.
+		if sess != nil && seedRowContainsEmbedSeed(row) {
+			sess.mutate(func(cs *chainSession) {
+				cs.seeded = true
+			})
+		}
 		rowJSON, err := json.Marshal(row)
 		if err != nil {
 			return mirrorElem{}, false
@@ -414,6 +453,139 @@ func booleanFictionElement(result bool) mirrorElem {
 		Status:  200,
 		Headers: json.RawMessage(`{"X-WP-Total":0,"X-WP-TotalPages":0,"Allow":"GET"}`),
 	}
+}
+
+// customizeChangesetHexMarker is the hex-encoded post_type literal
+// ("customize_changeset") the WP2Shell escalation UNION plants on one of its
+// forged rows, alongside a `POST /wp/v2/users` sub-request in the same
+// batch. Presence of this exact hex string in a UNION-carrying, decoded
+// sub-request path is the escalation-forge signal (Task 4 / S3) —
+// isEscalationForgePath/batchHasEscalationForge are the only two callers.
+const customizeChangesetHexMarker = "0x637573746f6d697a655f6368616e6765736574"
+
+// isEscalationForgePath reports whether a decoded sub-request path carries
+// the WP2Shell escalation UNION: a UNION [ALL] SELECT projection (same
+// prefix extractUnionProjection requires) that also references
+// customize_changeset via its hex literal. It deliberately does NOT
+// reimplement extractUnionProjection's column parsing — presence of the
+// marker anywhere in a UNION-carrying path is enough to recognize the
+// escalation stage; the actual forged content is still built by the
+// existing assembleForgedRow path in forgeElement, unchanged by this task.
+func isEscalationForgePath(decoded string) bool {
+	if !reUnion.MatchString(decoded) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(decoded), customizeChangesetHexMarker)
+}
+
+// batchHasEscalationForge reports whether any sub-request in this batch
+// LEVEL (the same subs slice one mirrorArray call processes — see its
+// escalationSeen doc comment) carries the escalation UNION forge. Scoped to
+// cfg.Forge != nil, the same gate forgeElement itself applies, so a mirror
+// config with forging disabled can never arm the admin-creation checkpoint.
+// A path that fails to URL-decode is skipped (fail closed), not treated as a
+// match.
+func batchHasEscalationForge(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage) bool {
+	if cfg.Forge == nil {
+		return false
+	}
+	for _, s := range subs {
+		decoded, err := url.QueryUnescape(rawString(s[cfg.PathField]))
+		if err != nil {
+			continue
+		}
+		if isEscalationForgePath(decoded) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractAdminUsername reports whether sub is a `POST .../wp/v2/users`
+// sub-request carrying a non-empty "username" in its JSON body — the S3
+// admin-creation signal (Task 4). method/path are read via the same
+// cfg.MethodField/cfg.PathField keys every other sub-request field in this
+// file uses; "body" is the same fixed key nestedSubs already relies on (this
+// plugin has no configurable body-field knob). A missing/non-object body, or
+// a body with no (or empty) "username", returns ok=false — the caller then
+// falls through to the existing static/reflect behaviour for this
+// sub-request, same as any non-recognized path.
+func extractAdminUsername(cfg *parser.MirrorConfig, sub map[string]json.RawMessage) (string, bool) {
+	if !strings.EqualFold(rawString(sub[cfg.MethodField]), "POST") {
+		return "", false
+	}
+	path := strings.ToLower(rawString(sub[cfg.PathField]))
+	if !strings.Contains(path, "/wp/v2/users") {
+		return "", false
+	}
+	bodyRaw, ok := sub["body"]
+	if !ok {
+		return "", false
+	}
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(bodyRaw, &body); err != nil || body.Username == "" {
+		return "", false
+	}
+	return body.Username, true
+}
+
+// seedRowContainsEmbedSeed reports whether a forged wp_posts row's rendered
+// content carries the oembed seed shortcodes ("[embed ...][/embed]") the
+// exploit's S2 stage plants — the WP2Shell chain's seed-post signal (Task
+// 4). Only the "content" field (wrapped {"rendered": ...} per
+// wpRenderedFields) is inspected; every other forged field is ignored, and a
+// row shaped unexpectedly (no content, non-string rendered value) simply
+// reports false rather than panicking.
+func seedRowContainsEmbedSeed(row map[string]any) bool {
+	content, ok := row["content"].(map[string]any)
+	if !ok {
+		return false
+	}
+	rendered, ok := content["rendered"].(string)
+	if !ok {
+		return false
+	}
+	return strings.Contains(rendered, "[embed")
+}
+
+// adminCreatedTemplate is the byte shape of a successful `POST /wp/v2/users`
+// response element for a freshly forged administrator, pinned to the real
+// WordPress REST response captured in
+// tools/oracle-diff/wordpress-6.9.4/chain_capture.jsonl (seq 90, status 201).
+// "${username}" is substituted (JSON-escaped) with the attacker-supplied
+// login the same sub-request carried; every other byte is static,
+// non-attacker-controlled boilerplate (the standard WP administrator
+// capability set) — no real site or user data is disclosed. The exploit
+// itself never parses this response (poc.py proceeds straight to
+// wp-login.php after sending the batch), so exact field-for-field parity
+// with the capture (avatar_urls, _links, Location header — all of which
+// embed the real site's hostname) isn't required; this shape is plausible
+// enough to read as a genuine "user created" success.
+const adminCreatedTemplate = `{"body":{"id":2,"username":"${username}","name":"${username}","first_name":"","last_name":"","email":"${username}@example.com","url":"","description":"","nickname":"${username}","slug":"${username}","roles":["administrator"],"registered_date":"2020-01-01T00:00:00+00:00","capabilities":{"switch_themes":true,"edit_themes":true,"activate_plugins":true,"edit_plugins":true,"edit_users":true,"edit_files":true,"manage_options":true,"moderate_comments":true,"manage_categories":true,"manage_links":true,"upload_files":true,"import":true,"unfiltered_html":true,"edit_posts":true,"edit_others_posts":true,"edit_published_posts":true,"publish_posts":true,"edit_pages":true,"read":true,"level_10":true,"level_9":true,"level_8":true,"level_7":true,"level_6":true,"level_5":true,"level_4":true,"level_3":true,"level_2":true,"level_1":true,"level_0":true,"edit_others_pages":true,"edit_published_pages":true,"publish_pages":true,"delete_pages":true,"delete_others_pages":true,"delete_published_pages":true,"delete_posts":true,"delete_others_posts":true,"delete_published_posts":true,"delete_private_posts":true,"edit_private_posts":true,"read_private_posts":true,"delete_private_pages":true,"edit_private_pages":true,"read_private_pages":true,"delete_users":true,"create_users":true,"unfiltered_upload":true,"edit_dashboard":true,"update_plugins":true,"delete_plugins":true,"install_plugins":true,"update_themes":true,"install_themes":true,"update_core":true,"list_users":true,"remove_users":true,"promote_users":true,"edit_theme_options":true,"delete_themes":true,"export":true,"administrator":true},"extra_capabilities":{"administrator":true}},"status":201,"headers":{"Allow":"GET, POST"}}`
+
+// adminCreatedElement builds the "user created" batch element for username,
+// JSON-escaping it into adminCreatedTemplate the same way applyReflect
+// escapes a reflected token (marshal, then strip the surrounding quotes) —
+// username is attacker-supplied (the exploit's own JSON body), so it must
+// never be substituted raw into the template. built=false (fail closed) only
+// if the substituted template somehow fails to parse as a mirrorElem, which
+// cannot happen for any username value since JSON-escaping guarantees a
+// valid string literal; kept for the same defensive discipline the rest of
+// this file uses around json.Marshal/Unmarshal.
+func adminCreatedElement(username string) (mirrorElem, bool) {
+	escaped, err := json.Marshal(username)
+	inner := ""
+	if err == nil && len(escaped) >= 2 {
+		inner = string(escaped[1 : len(escaped)-1])
+	}
+	raw := strings.ReplaceAll(adminCreatedTemplate, "${username}", inner)
+	var el mirrorElem
+	if err := json.Unmarshal([]byte(raw), &el); err != nil {
+		return mirrorElem{}, false
+	}
+	return el, true
 }
 
 // stripOneParenLayer removes exactly one layer of wrapping parens ("(x)" ->
