@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"encoding/hex"
 	"hash/crc32"
 	"regexp"
 	"strconv"
@@ -365,59 +366,203 @@ func splitTopLevelArgs(s string) []string {
 	return append(args, s[start:])
 }
 
-// The three blind-read signatures below are lifted verbatim from the
-// exploit's own subqueries: a hex-encoded table-suffix probe against
-// INFORMATION_SCHEMA.TABLES, a hex-encoded serialized-capabilities probe
-// against usermeta, and a hex-encoded (post_type, post_name) lookup against
-// the oEmbed cache row the chain minted. Matching is substring-based and
-// case-insensitive — these are literal hex/string signatures the exploit
-// emits verbatim, not a general SQL parse.
+// ---------------------------------------------------------------------------
+// recognizeBlindRead recognizes the chain's three read INTENTS by semantic
+// token co-occurrence, not by one PoC's exact strings. A real blind-SQLi
+// tool (sqlmap, Havij, a hand-rolled script) phrases "does this table name
+// end in _posts" or "is there an administrator flag here" a dozen different
+// ways — RIGHT(...,6)= vs LIKE '%...' vs SUBSTRING(...)= vs INSTR(...), hex
+// literals vs quoted strings, comments/whitespace dropped in by a WAF-evasion
+// tamper. The lure fails closed on anything it doesn't recognize, so a
+// recognizer that only matches one phrasing silently drops every operator
+// whose tool phrases the read differently. Below, each intent is recognized
+// by the co-occurrence of its semantic anchors, not by a single verbatim
+// signature.
+// ---------------------------------------------------------------------------
+
+// pctQuoteRe matches ONLY the two percent-encoded quote characters (%27 = ',
+// %22 = "), case-insensitively. Used to loosely URL-decode a cond before
+// token matching, so a tool that ships its SQL literal quotes url-encoded
+// (e.g. the "_posts" marker as %27_posts%27, or the administrator marker's
+// quotes as %22) still surfaces the plain-text token our regexes look for.
+//
+// Deliberately narrow: a generic %XX-decoder would also decode e.g. "%ad"
+// inside the entirely unrelated SQL literal '%administrator%' (LIKE
+// wildcard syntax) as byte 0xAD, corrupting "administrator" mid-word and
+// causing a real, in-scope phrasing to fail closed. Quotes are the only
+// url-encoded form the three intents need to tolerate, so only %27/%22 are
+// touched — every other percent-escape (and any malformed one) passes
+// through unchanged.
+var pctQuoteRe = regexp.MustCompile(`(?i)%27|%22`)
+
+func urlDecodeLoose(s string) string {
+	return pctQuoteRe.ReplaceAllStringFunc(s, func(m string) string {
+		if strings.EqualFold(m, "%27") {
+			return "'"
+		}
+		return `"`
+	})
+}
+
+// normalizeReadCond applies the same obfuscation-defeat discipline
+// containsSideEffect uses for the side-effect screen: strip SQL block
+// comments (so "RIGHT/**/(x,6)" collapses to "RIGHT(x,6)"), loosely
+// URL-decode percent-escapes, then lowercase for case-insensitive token
+// matching. Every step is total over any input string; this never panics.
+func normalizeReadCond(cond string) string {
+	stripped := sqlBlockCommentRe.ReplaceAllString(cond, "")
+	decoded := urlDecodeLoose(stripped)
+	return strings.ToLower(decoded)
+}
+
+// ---- Intent 1: table prefix -----------------------------------------------
+//
+// The tool is reading a table name ending in "_posts" out of the schema
+// catalog. Recognized by: a reference to INFORMATION_SCHEMA.TABLES or
+// .COLUMNS, co-occurring with a suffix filter expressed as RIGHT(...,6)=,
+// LIKE '%_posts', SUBSTRING/SUBSTR/MID(...)=, or INSTR(...,'_posts') —
+// matched against the hex marker 0x5f706f737473 ("_posts") or the quoted
+// literal (url-encoded forms are collapsed by normalizeReadCond first).
+
 const (
-	// hexPostsSuffix is 0x5f706f737473, the hex encoding of "_posts".
-	hexPostsSuffix = "0x5f706f737473"
-	// hexAdminFlag is the hex encoding of the serialized capabilities
-	// fragment s:13:"administrator";b:1;
-	hexAdminFlag = "0x733a31333a2261646d696e6973747261746f72223b623a313b"
-	// hexOembedCache is the hex encoding of the post_type "oembed_cache".
-	hexOembedCache = "0x6f656d6265645f6361636865"
+	postsSuffixHex     = "0x5f706f737473"   // hex("_posts")
+	postsSuffixLikeHex = "0x255f706f737473" // hex("%_posts") — LIKE wildcard form
+	postsSuffixLiteral = `'_posts'`
+	postsSuffixLikeLit = `'%_posts'`
 )
 
-// rePostName pulls the hex-encoded post_name value (itself the ASCII bytes
-// of an md5 digest) out of a cache-id read predicate, e.g.
-// "post_name=0x666f6f..." -> "666f6f...".
-var rePostName = regexp.MustCompile(`(?i)post_name\s*=\s*0x([0-9a-f]+)`)
+var (
+	infoSchemaRe = regexp.MustCompile(`information_schema\s*\.\s*(tables|columns)`)
+
+	postsRightFilterRe = regexp.MustCompile(
+		`\bright\s*\([^)]*,\s*6\s*\)\s*=\s*(` + postsSuffixHex + `|` + postsSuffixLiteral + `)`)
+	postsLikeFilterRe = regexp.MustCompile(
+		`\blike\s*(` + postsSuffixLikeHex + `|` + postsSuffixLikeLit + `)`)
+	postsSubstrFilterRe = regexp.MustCompile(
+		`\b(substring|substr|mid)\s*\([^)]*\)\s*=\s*(` + postsSuffixHex + `|` + postsSuffixLiteral + `)`)
+	postsInstrFilterRe = regexp.MustCompile(
+		`\binstr\s*\([^,]*,\s*(` + postsSuffixHex + `|` + postsSuffixLiteral + `)\s*\)`)
+)
+
+// hasPostsSuffixFilter reports whether c (already normalized) contains any
+// of the recognized phrasings of the "_posts" suffix filter. Never panics:
+// regexp matching over a string is total.
+func hasPostsSuffixFilter(c string) bool {
+	return postsRightFilterRe.MatchString(c) ||
+		postsLikeFilterRe.MatchString(c) ||
+		postsSubstrFilterRe.MatchString(c) ||
+		postsInstrFilterRe.MatchString(c)
+}
+
+// ---- Intent 2: administrator id --------------------------------------------
+//
+// The tool is reading the first administrator's user id. Recognized by: a
+// reference to usermeta/capabilities/user_level/wp_user_roles, co-occurring
+// with the administrator marker — the serialized-capabilities fragment
+// s:13:"administrator";b:1; (hex or literal, quotes optionally
+// url/hex-encoded), or a bare INSTR/LIKE probe against the word
+// "administrator".
+
+const (
+	adminSerializedHex     = "0x733a31333a2261646d696e6973747261746f72223b623a313b"
+	adminSerializedLiteral = `s:13:"administrator";b:1;`
+)
+
+var adminInstrLikeRe = regexp.MustCompile(`\b(instr\s*\([^)]*administrator|like\s*'%administrator%')`)
+
+// hasAdminContext reports whether c references one of the columns/values an
+// administrator-flag read is scoped against.
+func hasAdminContext(c string) bool {
+	return strings.Contains(c, "usermeta") ||
+		strings.Contains(c, "capabilities") ||
+		strings.Contains(c, "user_level") ||
+		strings.Contains(c, "wp_user_roles")
+}
+
+// hasAdminMarker reports whether c carries the administrator marker in any
+// recognized form.
+func hasAdminMarker(c string) bool {
+	return strings.Contains(c, adminSerializedHex) ||
+		strings.Contains(c, adminSerializedLiteral) ||
+		adminInstrLikeRe.MatchString(c)
+}
+
+// ---- Intent 3: oEmbed cache row id -----------------------------------------
+//
+// The tool is reading an oembed_cache post's id by its post_name md5.
+// Recognized by: post_type= the oembed_cache marker (hex or literal) AND a
+// post_name= lookup (hex-encoded ASCII of the md5 hex string, or the md5
+// hex string itself as a quoted literal). The md5 is extracted and used as
+// a stable cache key so the same underlying object — however the tool
+// phrases the lookup — resolves to the same fabricated id.
+
+const (
+	oembedCacheHex     = "0x6f656d6265645f6361636865"
+	oembedCacheLiteral = `'oembed_cache'`
+)
+
+var (
+	postTypeOembedRe = regexp.MustCompile(
+		`\bpost_type\s*=\s*(` + oembedCacheHex + `|` + oembedCacheLiteral + `)`)
+
+	// postNameHexRe pulls the hex-encoded post_name value (itself the ASCII
+	// bytes of an md5 digest) out of a cache-id read predicate, e.g.
+	// "post_name=0x666f6f..." -> "666f6f...".
+	postNameHexRe = regexp.MustCompile(`\bpost_name\s*=\s*0x([0-9a-f]+)`)
+	// postNameLiteralRe matches the same lookup expressed as a plain quoted
+	// md5-hex literal instead of a hex-encoded string: post_name='<md5hex>'.
+	postNameLiteralRe = regexp.MustCompile(`\bpost_name\s*=\s*'([0-9a-f]{32})'`)
+)
+
+// extractCacheKey pulls the underlying md5 out of a post_name lookup,
+// regardless of whether the tool hex-encoded it or wrote it as a quoted
+// literal, so both phrasings of the same object resolve to the same cache
+// key. Never panics: hex.DecodeString errors are handled, not asserted.
+func extractCacheKey(c string) (string, bool) {
+	if m := postNameHexRe.FindStringSubmatch(c); m != nil {
+		if decoded, err := hex.DecodeString(m[1]); err == nil && len(decoded) > 0 {
+			return string(decoded), true
+		}
+		return m[1], true // fallback: raw hex text is still a stable key
+	}
+	if m := postNameLiteralRe.FindStringSubmatch(c); m != nil {
+		return m[1], true
+	}
+	return "", false
+}
 
 // recognizeBlindRead inspects an operator's blind-SQLi read predicate and
 // identifies which of the three values the WP gadget chain reads via blind
-// SQLi (from the exploit's own poc.py): the live table prefix, the
-// administrator's user id, or one of the three oEmbed-cache row ids the
-// chain needs to reference consistently across requests. On a match it
-// returns a fabricated fictionValue standing in for the real read; the
-// cache-id case derives a value deterministic per-md5 and stores the
-// assignment on sess so repeat reads for the same object resolve to the
-// same fabricated id. Anything that doesn't match one of the three exact
-// signatures fails closed: (fictionValue{}, false) — this function never
-// guesses at an unrecognized predicate shape.
+// SQLi: the live table prefix, the administrator's user id, or an
+// oEmbed-cache row id the chain needs to reference consistently across
+// requests. Recognition is by semantic-token co-occurrence (see the three
+// "Intent" sections above), tolerant of whitespace, SQL comments, case, and
+// hex-vs-literal phrasing — not a single verbatim signature — so a tool
+// that phrases the same read differently from the exploit's own poc.py is
+// still recognized. On a match it returns a fabricated fictionValue standing
+// in for the real read; the cache-id case derives a value deterministic
+// per-md5 and stores the assignment on sess (inside a single sess.mutate
+// call — cacheIDs is a plain map and must never be touched outside one) so
+// repeat reads for the same object resolve to the same fabricated id.
+// Anything that doesn't match one of the three intents fails closed:
+// (fictionValue{}, false), with no distinctive error and no panic on any
+// input — every regex match and index is total/guarded.
 func recognizeBlindRead(cond string, sess *chainSession) (fictionValue, bool) {
-	c := strings.ToLower(cond)
+	c := normalizeReadCond(cond)
 
-	// 1. Table prefix: SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES ...
-	// RIGHT(TABLE_NAME,6)=0x5f706f737473 ("_posts").
-	if strings.Contains(c, "information_schema.tables") && strings.Contains(c, hexPostsSuffix) {
+	// 1. Table prefix.
+	if infoSchemaRe.MatchString(c) && hasPostsSuffixFilter(c) {
 		return fictionValue{s: "wp_posts"}, true
 	}
 
-	// 2. Administrator id: usermeta/capabilities row carrying the serialized
-	// s:13:"administrator";b:1; flag.
-	if (strings.Contains(c, "usermeta") || strings.Contains(c, "capabilities")) && strings.Contains(c, hexAdminFlag) {
+	// 2. Administrator id.
+	if hasAdminContext(c) && hasAdminMarker(c) {
 		return fictionValue{n: 1, isInt: true}, true
 	}
 
-	// 3. oEmbed cache row id: post_type=0x6f656d6265645f6361636865
-	// ("oembed_cache") AND post_name=0x<hex-encoded md5>.
-	if strings.Contains(c, hexOembedCache) {
-		if m := rePostName.FindStringSubmatch(c); m != nil {
-			key := m[1] // hex-encoded md5, lowercased by c already being lowercase
+	// 3. oEmbed cache row id.
+	if postTypeOembedRe.MatchString(c) {
+		if key, ok := extractCacheKey(c); ok {
 			var id int64
 			sess.mutate(func(cs *chainSession) {
 				if existing, ok := cs.cacheIDs[key]; ok {

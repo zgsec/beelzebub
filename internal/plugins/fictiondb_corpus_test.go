@@ -1,6 +1,11 @@
 package plugins
 
-import "testing"
+import (
+	"crypto/md5"
+	"encoding/hex"
+	"sync"
+	"testing"
+)
 
 // fictiondb_corpus_test.go is the grading oracle for evalBlindPredicate's
 // broadened grammar: the technique-variation space a real blind-SQLi tool
@@ -229,4 +234,349 @@ func truncateForLog(s string) string {
 		return s
 	}
 	return s[:max] + "...(truncated)"
+}
+
+// ---------------------------------------------------------------------------
+// TestReadIntentCorpus is the grading oracle for recognizeBlindRead's
+// broadened grammar: the same three read INTENTS (table prefix, admin id,
+// oEmbed cache id) phrased the way real blind-SQLi tools phrase them —
+// RIGHT() vs LIKE vs SUBSTRING vs INSTR, hex vs quoted literal, whitespace
+// and /* comment */ noise a WAF-evasion tamper injects — not just the one
+// exact-hex shape the original exploit's poc.py happens to emit. Every
+// phrasing of a given intent must resolve to the SAME fabricated value.
+// ---------------------------------------------------------------------------
+
+// md5HexOf returns the lowercase hex digest of seed, matching how the real
+// gadget chain names its oEmbed cache rows (post_name = md5(url)).
+func md5HexOf(seed string) string {
+	sum := md5.Sum([]byte(seed))
+	return hex.EncodeToString(sum[:])
+}
+
+// hexEncodeASCII hex-encodes the ASCII bytes of s, the way a blind-SQLi
+// tool avoids embedding quotes in its payload (0x-notation instead of a
+// quoted string literal).
+func hexEncodeASCII(s string) string {
+	return hex.EncodeToString([]byte(s))
+}
+
+// cachePostNameHexCond builds a cache-id predicate using the fully
+// hex-encoded phrasing (post_type and post_name both 0x-notation) — the
+// exploit's own poc.py shape.
+func cachePostNameHexCond(seed string) string {
+	return "COALESCE((SELECT ID FROM `wp_posts` WHERE post_type=0x6f656d6265645f6361636865 " +
+		"AND post_name=0x" + hexEncodeASCII(md5HexOf(seed)) + " ORDER BY ID DESC LIMIT 1),0) >= 1"
+}
+
+// cachePostNameLiteralCond builds the same cache-id predicate using plain
+// quoted-literal phrasing instead of hex-notation — a tool that doesn't
+// bother hex-encoding because the target doesn't filter quotes.
+func cachePostNameLiteralCond(seed string) string {
+	return "SELECT ID FROM wp_posts WHERE post_type='oembed_cache' " +
+		"AND post_name='" + md5HexOf(seed) + "' ORDER BY ID DESC LIMIT 1"
+}
+
+// cachePostNameMixedCond builds a cache-id predicate mixing hex post_type
+// with a literal post_name — tools are not internally consistent about
+// which columns they bother hex-encoding.
+func cachePostNameMixedCond(seed string) string {
+	return "SELECT ID FROM wp_posts WHERE post_type=0x6f656d6265645f6361636865 " +
+		"AND post_name='" + md5HexOf(seed) + "' ORDER BY ID DESC LIMIT 1"
+}
+
+type readIntentCase struct {
+	name    string
+	cond    string
+	wantVal fictionValue
+	wantOK  bool
+}
+
+// tablePrefixCases: every phrasing must resolve to fictionValue{s:"wp_posts"}.
+var tablePrefixCases = []readIntentCase{
+	{
+		"RIGHT + hex (exploit's own phrasing)",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() " +
+			"AND RIGHT(TABLE_NAME,6)=0x5f706f737473 LIMIT 1",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"LIKE + literal wildcard",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%_posts' LIMIT 1",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"LIKE + hex wildcard",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE 0x255f706f737473 LIMIT 1",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"INSTR + literal, against INFORMATION_SCHEMA.COLUMNS",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE INSTR(TABLE_NAME,'_posts')>0 LIMIT 1",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"INSTR + hex",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE INSTR(TABLE_NAME,0x5f706f737473)>0",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"SUBSTRING + literal",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE SUBSTRING(TABLE_NAME,-6)='_posts'",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"SUBSTR + hex",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE SUBSTR(TABLE_NAME,-6)=0x5f706f737473",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"MID + literal",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE MID(TABLE_NAME,-6)='_posts'",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"whitespace + comment obfuscation between RIGHT and its paren",
+		"select table_name from information_schema.tables where right/**/( table_name , 6 )\t=\t0x5f706f737473",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"url-encoded literal quotes",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE RIGHT(TABLE_NAME,6)=%27_posts%27",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"spaced dot in INFORMATION_SCHEMA . TABLES",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA . TABLES WHERE RIGHT(TABLE_NAME,6)=0x5f706f737473",
+		fictionValue{s: "wp_posts"}, true,
+	},
+	{
+		"mixed case",
+		"Select Table_Name From Information_Schema.Tables Where Right(Table_Name,6)=0x5f706f737473",
+		fictionValue{s: "wp_posts"}, true,
+	},
+}
+
+// adminIDCases: every phrasing must resolve to fictionValue{n:1, isInt:true}.
+var adminIDCases = []readIntentCase{
+	{
+		"usermeta context + hex serialized marker (exploit's own phrasing)",
+		"SELECT u.ID FROM `wp_users` u JOIN `wp_usermeta` m ON m.user_id=u.ID " +
+			"WHERE m.meta_key=0x77705f6361706162696c6974696573 " +
+			"AND INSTR(m.meta_value,0x733a31333a2261646d696e6973747261746f72223b623a313b)>0 LIMIT 1",
+		fictionValue{n: 1, isInt: true}, true,
+	},
+	{
+		"capabilities context + literal serialized marker",
+		`SELECT ID FROM wp_usermeta WHERE meta_key='wp_capabilities' AND meta_value LIKE '%s:13:"administrator";b:1;%'`,
+		fictionValue{n: 1, isInt: true}, true,
+	},
+	{
+		"user_level context + INSTR against bare 'administrator'",
+		"SELECT ID FROM wp_usermeta WHERE meta_key='user_level' AND INSTR(meta_value,'administrator')>0",
+		fictionValue{n: 1, isInt: true}, true,
+	},
+	{
+		"wp_user_roles context + LIKE '%administrator%'",
+		"SELECT ID FROM wp_options WHERE option_name='wp_user_roles' AND option_value LIKE '%administrator%'",
+		fictionValue{n: 1, isInt: true}, true,
+	},
+	{
+		"usermeta context + url-encoded quotes in serialized literal",
+		"SELECT ID FROM wp_usermeta WHERE meta_key='capabilities' AND meta_value LIKE '%s:13:%22administrator%22;b:1;%'",
+		fictionValue{n: 1, isInt: true}, true,
+	},
+	{
+		"capabilities context + hex marker with comment obfuscation",
+		"select id from wp_usermeta where meta_key='capabilities' and instr/**/(meta_value,0x733a31333a2261646d696e6973747261746f72223b623a313b)>0",
+		fictionValue{n: 1, isInt: true}, true,
+	},
+}
+
+func TestReadIntentCorpus(t *testing.T) {
+	all := append([]readIntentCase{}, tablePrefixCases...)
+	all = append(all, adminIDCases...)
+	for _, c := range all {
+		t.Run(c.name, func(t *testing.T) {
+			sess := newChainSession()
+			got, ok := recognizeBlindRead(c.cond, sess)
+			if got != c.wantVal || ok != c.wantOK {
+				t.Fatalf("recognizeBlindRead(%q) = (%+v,%v), want (%+v,%v)", c.cond, got, ok, c.wantVal, c.wantOK)
+			}
+		})
+	}
+}
+
+// TestReadIntentCorpus_CacheIDPhrasings asserts every phrasing of the
+// cache-id read (hex/hex, literal/literal, hex/literal mixed) for the SAME
+// underlying md5 resolves to the SAME fabricated id — proving the
+// recognizer keys on the semantic md5, not the literal request bytes.
+func TestReadIntentCorpus_CacheIDPhrasings(t *testing.T) {
+	seed := "https://example.com/embed/one"
+	phrasings := map[string]string{
+		"hex/hex":           cachePostNameHexCond(seed),
+		"literal/literal":   cachePostNameLiteralCond(seed),
+		"hex/literal mixed": cachePostNameMixedCond(seed),
+	}
+
+	sess := newChainSession()
+	var first fictionValue
+	haveFirst := false
+	for name, cond := range phrasings {
+		got, ok := recognizeBlindRead(cond, sess)
+		if !ok || !got.isInt {
+			t.Fatalf("phrasing %s: recognizeBlindRead(%q) = (%+v,%v), want an int value, true", name, cond, got, ok)
+		}
+		if !haveFirst {
+			first = got
+			haveFirst = true
+			continue
+		}
+		if got != first {
+			t.Errorf("phrasing %s: got %+v, want same as first phrasing %+v (same underlying md5)", name, got, first)
+		}
+	}
+}
+
+// TestReadIntentCorpus_CacheIDDistinct asserts distinct md5s (across
+// distinct phrasings, for good measure) still produce distinct ids.
+func TestReadIntentCorpus_CacheIDDistinct(t *testing.T) {
+	sess := newChainSession()
+	a, ok := recognizeBlindRead(cachePostNameHexCond("https://example.com/embed/one"), sess)
+	if !ok {
+		t.Fatalf("cache A: unrecognized")
+	}
+	b, ok := recognizeBlindRead(cachePostNameLiteralCond("https://example.com/embed/two"), sess)
+	if !ok {
+		t.Fatalf("cache B: unrecognized")
+	}
+	c, ok := recognizeBlindRead(cachePostNameMixedCond("https://example.com/embed/three"), sess)
+	if !ok {
+		t.Fatalf("cache C: unrecognized")
+	}
+	if a == b || a == c || b == c {
+		t.Fatalf("expected 3 distinct cache ids, got a=%+v b=%+v c=%+v", a, b, c)
+	}
+}
+
+// TestReadIntentCorpus_FailClosed asserts reads outside the three
+// recognized intents — including a plausible-looking credential read that
+// must NOT be mistaken for one of them — always fail closed with no
+// distinctive tell and no panic.
+func TestReadIntentCorpus_FailClosed(t *testing.T) {
+	cases := []string{
+		// A credential read: syntactically similar (wp_users, WHERE, quoted
+		// literal) but not one of the three recognized intents. Must fail
+		// closed, not be swept in by an over-broad admin-context match.
+		"SELECT user_pass FROM wp_users WHERE ID=1",
+		"COALESCE((SELECT user_pass FROM wp_users ORDER BY ID LIMIT 1),0) >= 1",
+		// A generic version probe, nothing to do with any of the three reads.
+		"COALESCE((SELECT @@version),0) >= 1",
+		"(SELECT @@version) >= 1",
+		// INFORMATION_SCHEMA reference present but no _posts suffix filter
+		// at all -> must not over-trigger the table-prefix intent.
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES LIMIT 1",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='wp_options'",
+		// usermeta context present but no administrator marker at all.
+		"SELECT ID FROM wp_usermeta WHERE meta_key='nickname'",
+		"SELECT ID FROM wp_usermeta WHERE meta_key='wp_capabilities' AND meta_value LIKE '%subscriber%'",
+		// oembed_cache post_type present but no post_name lookup at all.
+		"SELECT ID FROM wp_posts WHERE post_type='oembed_cache'",
+		"SELECT ID FROM wp_posts WHERE post_type=0x6f656d6265645f6361636865",
+		// Malformed / degenerate input.
+		"",
+		"   ",
+		"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE RIGHT(TABLE_NAME,6",
+		"post_type=0x6f656d6265645f6361636865 AND post_name=0x",
+		"post_type=0x6f656d6265645f6361636865 AND post_name=",
+	}
+	for _, cond := range cases {
+		t.Run(truncateForLog(cond), func(t *testing.T) {
+			sess := newChainSession()
+			got, ok := recognizeBlindRead(cond, sess)
+			if ok || got != (fictionValue{}) {
+				t.Fatalf("recognizeBlindRead(%q) = (%+v,%v), want ({},false)", cond, got, ok)
+			}
+		})
+	}
+}
+
+// TestReadIntentCorpus_NoPanic feeds adversarial/malformed strings (plus
+// the whole read-intent corpus, re-run) at recognizeBlindRead and asserts
+// it only ever returns, never panics.
+func TestReadIntentCorpus_NoPanic(t *testing.T) {
+	adversarial := []string{
+		"", " ", "(", ")", "((((((((((", "))))))))))",
+		"post_type=0x", "post_name=0x", "post_name='", "post_type=''",
+		"RIGHT(,6)=0x5f706f737473", "RIGHT(x,)=0x5f706f737473",
+		"INSTR(,0x5f706f737473)", "INSTR(x,)",
+		"\x00\x00\x00INFORMATION_SCHEMA.TABLES\x00RIGHT(x,6)=0x5f706f737473\x00",
+		"日本語INFORMATION_SCHEMA.TABLES RIGHT(x,6)=0x5f706f737473日本語",
+		"%%%%%25%2%zz%",
+		strRepeat("(", 5000) + "information_schema.tables" + strRepeat(")", 5000),
+		strRepeat("/**/", 2000) + "RIGHT(x,6)=0x5f706f737473",
+		strRepeat("random garbage bytes \xff\xfe\xfd not utf8 ", 200),
+	}
+	for _, cond := range append(adversarial, func() []string {
+		var conds []string
+		for _, c := range tablePrefixCases {
+			conds = append(conds, c.cond)
+		}
+		for _, c := range adminIDCases {
+			conds = append(conds, c.cond)
+		}
+		return conds
+	}()...) {
+		cond := cond
+		t.Run("", func(t *testing.T) {
+			sess := newChainSession()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("recognizeBlindRead panicked on %q: %v", truncateForLog(cond), r)
+				}
+			}()
+			recognizeBlindRead(cond, sess)
+		})
+	}
+}
+
+// TestReadIntentCorpus_ConcurrentCacheAccess exercises the T5 concurrency
+// contract directly: many goroutines calling recognizeBlindRead against the
+// SAME chainSession concurrently, all resolving cache-id reads (the only
+// intent that touches sess.cacheIDs). Run with -race: the contract requires
+// every touch of sess fields go through sess.mutate, so a violation here is
+// either a data race under -race or a fatal concurrent-map panic — this
+// test is only meaningful with -race enabled.
+func TestReadIntentCorpus_ConcurrentCacheAccess(t *testing.T) {
+	sess := newChainSession()
+	const n = 64
+	var wg sync.WaitGroup
+	results := make([]fictionValue, n)
+	oks := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Every 3rd goroutine repeats the same seed as i%3==0's peers,
+			// so we also exercise the get-or-assign race, not just the
+			// assign race.
+			seed := "seed-" + string(rune('A'+(i%5)))
+			results[i], oks[i] = recognizeBlindRead(cachePostNameHexCond(seed), sess)
+		}(i)
+	}
+	wg.Wait()
+
+	byMod := make(map[int]fictionValue)
+	for i := 0; i < n; i++ {
+		if !oks[i] {
+			t.Fatalf("goroutine %d: recognizeBlindRead unrecognized", i)
+		}
+		m := i % 5
+		if prev, seen := byMod[m]; seen {
+			if prev != results[i] {
+				t.Errorf("goroutine %d: same seed group %d got different ids: %+v vs %+v", i, m, results[i], prev)
+			}
+		} else {
+			byMod[m] = results[i]
+		}
+	}
 }
