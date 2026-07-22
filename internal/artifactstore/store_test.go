@@ -94,3 +94,12 @@ func TestStore_DoesNotMutateCallerCaptures(t *testing.T) {
 		t.Fatal("embedded_urls leaked into caller map")
 	}
 }
+
+func TestMaxBodyBytes(t *testing.T) {
+	if got := New(t.TempDir(), 52428800).MaxBodyBytes(); got != 52428800 {
+		t.Fatalf("MaxBodyBytes: got %d, want 52428800", got)
+	}
+	if got := New(t.TempDir(), 0).MaxBodyBytes(); got != 0 {
+		t.Fatalf("MaxBodyBytes(unbounded): got %d, want 0", got)
+	}
+}
