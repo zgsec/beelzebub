@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"regexp"
@@ -110,6 +112,38 @@ type HTTPStrategy struct {
 	// Stateful HTTP session correlation (nil when servConf.State == nil or CookieName == "")
 	cookieStore   *historystore.CookieSessionStore
 	artifactStore *artifactstore.Store
+
+	// WP gadget-chain session store (Task 7). nil unless some command's
+	// ResponseMirror config carries an enabled Chain block — see
+	// findMirrorChain and its call site in Init. nil here is the gate that
+	// keeps every armed-chain code path (the auth-stage routing branch and
+	// the sess argument to MirrorRespond/MirrorDelayMs) a complete no-op for
+	// every service that hasn't opted in.
+	chainStore *plugins.ChainStore
+}
+
+// chainStoreEntryCap bounds the WP gadget-chain session store passed into
+// plugins.NewChainStore — the single cap for that store; package plugins
+// itself defines no cap of its own. An attacker rotating source IPs across
+// chain attempts evicts old idle sessions instead of growing the map
+// without bound.
+const chainStoreEntryCap = 4096
+
+// findMirrorChain scans a service's commands (main + fallback) for the
+// first ResponseMirror config carrying a Chain block, so Init can decide
+// whether to arm the WP gadget-chain session store for this service.
+// Returns nil when no command's mirror config has Chain set — the default
+// for every service that hasn't added a `chain:` key to its mirror YAML.
+func findMirrorChain(servConf parser.BeelzebubServiceConfiguration) *parser.MirrorChain {
+	for _, c := range servConf.Commands {
+		if c.Mirror != nil && c.Mirror.Chain != nil {
+			return c.Mirror.Chain
+		}
+	}
+	if servConf.FallbackCommand.Mirror != nil && servConf.FallbackCommand.Mirror.Chain != nil {
+		return servConf.FallbackCommand.Mirror.Chain
+	}
+	return nil
 }
 
 // sessionContext bundles per-request stateful HTTP context so it can be
@@ -193,6 +227,78 @@ func anyBodyRegex(commands []parser.Command) bool {
 	return false
 }
 
+// extractPluginZipPart pulls the "pluginzip" file part out of a
+// multipart/form-data body — the shape poc.py's upload-plugin POST uses
+// (name="pluginzip"; filename="<slug>.zip"). contentType is the request's
+// raw Content-Type header value, which carries the multipart boundary as a
+// parameter; body is the already-buffered (and already 1MiB-capped, see
+// buildHTTPResponse's bodyBytes read) request body. Returns an error if
+// contentType isn't multipart, has no boundary, the body doesn't parse, or
+// no part named "pluginzip" is present — callers treat any of those as
+// "not a request this stage handles" and fall through unchanged.
+//
+// This function only ever reads the part into memory and returns its
+// bytes; it never writes them to disk itself (that's chainArtifactStore.Write,
+// the sole consumer of its return value) and never opens, unzips, or
+// executes anything.
+func extractPluginZipPart(contentType string, body []byte) (filename string, data []byte, err error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", nil, fmt.Errorf("extractPluginZipPart: parse content-type: %w", err)
+	}
+	if !strings.HasPrefix(mediaType, "multipart/") {
+		return "", nil, fmt.Errorf("extractPluginZipPart: not multipart (%s)", mediaType)
+	}
+	boundary, ok := params["boundary"]
+	if !ok || boundary == "" {
+		return "", nil, fmt.Errorf("extractPluginZipPart: no multipart boundary")
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, partErr := reader.NextPart()
+		if partErr == io.EOF {
+			return "", nil, fmt.Errorf("extractPluginZipPart: no pluginzip part found")
+		}
+		if partErr != nil {
+			return "", nil, fmt.Errorf("extractPluginZipPart: %w", partErr)
+		}
+		if part.FormName() != "pluginzip" {
+			continue
+		}
+		zipBytes, readErr := io.ReadAll(part)
+		if readErr != nil {
+			return "", nil, fmt.Errorf("extractPluginZipPart: reading pluginzip part: %w", readErr)
+		}
+		return part.FileName(), zipBytes, nil
+	}
+}
+
+// wp2ShellRestRoutePrefix and wp2ShellPrettyPathPrefix are the two shapes
+// the S9 command POST against the fake shell route (registered by the S7
+// plugin upload) can arrive in: poc.py's own form dispatches through
+// WordPress's ?rest_route= query-string router (request.URL.Path stays
+// "/"), while a pretty-permalink WordPress instance would expose the same
+// REST route under /wp-json/... instead.
+const (
+	wp2ShellRestRoutePrefix  = "/wp2shell/v1/"
+	wp2ShellPrettyPathPrefix = "/wp-json/wp2shell/v1/"
+)
+
+// isWP2ShellCommandRequest reports whether request is the exploit's S9
+// command POST against the fake shell route, in either form. Neither form
+// is a single, static path, so this can't be folded into the exact-match
+// switch below the way S4-S8 are — it's checked separately.
+func isWP2ShellCommandRequest(request *http.Request) bool {
+	if request.Method != http.MethodPost {
+		return false
+	}
+	if strings.HasPrefix(request.URL.Query().Get("rest_route"), wp2ShellRestRoutePrefix) {
+		return true
+	}
+	return strings.HasPrefix(request.URL.Path, wp2ShellPrettyPathPrefix)
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Bind the fault injector PER-SERVICE, here, into a local the handler
 	// closure captures — exactly as servConf is captured per service below.
@@ -229,6 +335,17 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 				servConf.State.ArtifactMaxBytes,
 			)
 		}
+	}
+
+	// WP gadget-chain session store (Task 7): armed only when some command's
+	// ResponseMirror config carries an enabled Chain block. Chain.Enabled
+	// (not just Chain != nil) gates arming here, so `chain: {enabled: false}`
+	// — a config that opted into the block but explicitly turned it off —
+	// leaves chainStore nil same as no `chain:` key at all. compileMirror
+	// has already defaulted CheckpointTTLSecs (>0) by the time Init runs, so
+	// no additional zero-guard is needed here.
+	if chain := findMirrorChain(servConf); chain != nil && chain.Enabled {
+		httpStrategy.chainStore = plugins.NewChainStore(time.Duration(chain.CheckpointTTLSecs)*time.Second, chainStoreEntryCap)
 	}
 
 	startHTTPSessionCleanup()
@@ -294,7 +411,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -307,7 +424,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -412,7 +529,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext) (httpResponse, error, fireTraceFunc) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// trace fire (covers static-handler + LLM plugin paths uniformly).
 	// Trace fires from the caller AFTER all resp modifications complete.
@@ -516,6 +633,186 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	}
 
 	// -------------------------------------------------------------------------
+	// WP gadget-chain session lookup + auth-stage routing (Task 7)
+	// -------------------------------------------------------------------------
+
+	// sess is the (nil-safe) per-source-IP chain session for this request.
+	// chainStore == nil (no command's mirror config has an enabled Chain
+	// block — see findMirrorChain in Init) means sess stays nil for every
+	// request, which is what keeps MirrorRespond/MirrorDelayMs below and the
+	// auth-stage routing that follows byte-identical to pre-Task-7 behavior.
+	// Same RemoteAddr-host extraction the LLM plugin branch and traceRequest
+	// already use, so the chain session is keyed on the same source identity
+	// every other per-IP mechanism in this file uses.
+	var sess *plugins.ChainSession
+	if chainStore != nil {
+		host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+		if splitErr != nil {
+			host = request.RemoteAddr
+		}
+		sess = chainStore.Get(host)
+	}
+
+	// Auth-stage routing: once the forge chain (T1-T4, driven through the
+	// ResponseMirror plugin below) has minted a fabricated administrator on
+	// this session, the exploit's S4-S6 reads — wp-login.php, wp-admin/
+	// users.php, wp-admin/plugin-install.php — need answers that carry that
+	// forged state (the auth cookie, the username, the upload nonce) instead
+	// of whichever static/404 response this service's command configured
+	// for those paths. ServeAuthStage itself gates on sess.adminCreated, so
+	// a chain that hasn't reached that checkpoint yet (or sess == nil, i.e.
+	// chainStore == nil) returns handled=false and every existing behavior
+	// for these paths is untouched.
+	if sess != nil {
+		switch request.URL.Path {
+		case "/wp-login.php", "/wp-admin/", "/wp-admin/users.php", "/wp-admin/plugin-install.php":
+			if status, hdrs, authBody, handled := plugins.ServeAuthStage(request.RequestURI, sess); handled {
+				resp.StatusCode = status
+				resp.Body = authBody
+				headers := make([]string, 0, len(hdrs))
+				for k, v := range hdrs {
+					headers = append(headers, k+": "+v)
+				}
+				resp.Headers = headers
+				return resp, nil, fireTrace
+			}
+
+		// S7 (Task 8): the plugin .zip the exploit uploads once it has an
+		// admin session + S6's nonce. WordPress overloads update.php for
+		// dozens of unrelated admin actions via ?action=, so both the
+		// method and the exact action value are checked before this branch
+		// touches the request body — a GET, or a POST with any other
+		// action, falls straight through to the command's ordinary
+		// configured response.
+		//
+		// The uploaded bytes are parsed out of the multipart body and
+		// handed ONLY to chainArtifactStore.Write (a content-addressable,
+		// inert capture — see internal/artifactstore/store.go's package
+		// doc: "a research artifact pipeline, not a malware dropbox").
+		// There is no os.Open/exec/unzip anywhere on this path, and never
+		// will be: the zip is never written under a name or path a
+		// webserver would execute, and this function does nothing else
+		// with its contents. A Write failure (including
+		// artifactstore.ErrOversize) is swallowed deliberately — capture
+		// is best-effort telemetry, not a gate on the exploit's forward
+		// progress, so the success page below is served either way.
+		//
+		// plugins.ServeUploadStage re-checks sess.adminCreated itself, so
+		// a request that reaches here without having cleared T4 still
+		// falls through unhandled, same as the S4-S6 case above.
+		//
+		// Intentional two-tier contract (Task 8 review finding — do not
+		// "fix" this by adding an adminCreated check to the capture below
+		// to match the response gate; that would be a regression):
+		//   - CAPTURE is gated only on sess != nil, i.e. it fires for ANY
+		//     armed service (chainStore configured) regardless of whether
+		//     this session ever reached adminCreated. Deliberately broader
+		//     than the response gate: capture-first — we would rather
+		//     record a plugin .zip from a source that never completed the
+		//     forge chain than silently miss a backdoor drop. The artifact
+		//     is inert (content-addressable storage only, never executed —
+		//     see the paragraph above), so over-capturing costs nothing.
+		//   - The SUCCESS/activate RESPONSE, and the uploadOpen checkpoint
+		//     ServeUploadStage sets, stay scoped to sess.adminCreated —
+		//     only an operator who actually completed T1-T4 gets served
+		//     the S7/S8 activate-flow illusion. A capture with no matching
+		//     adminCreated checkpoint still reaches chainArtifactStore.Write
+		//     below, but ServeUploadStage returns handled=false and the
+		//     request falls through to the command's ordinary configured
+		//     response, same as any other not-yet-escalated hit here.
+		case "/wp-admin/update.php":
+			if request.Method == http.MethodPost && request.URL.Query().Get("action") == "upload-plugin" {
+				if filename, zipBytes, parseErr := extractPluginZipPart(request.Header.Get("Content-Type"), bodyBytes); parseErr == nil {
+					if chainArtifactStore != nil {
+						host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+						if splitErr != nil {
+							host = request.RemoteAddr
+						}
+						_, _ = chainArtifactStore.Write(zipBytes, map[string]any{
+							"stage":    "plugin_upload",
+							"src_ip":   host,
+							"session":  host,
+							"filename": filename,
+						})
+					}
+					if status, hdrs, uploadBody, handled := plugins.ServeUploadStage(sess, filename); handled {
+						resp.StatusCode = status
+						resp.Body = uploadBody
+						headers := make([]string, 0, len(hdrs))
+						for k, v := range hdrs {
+							headers = append(headers, k+": "+v)
+						}
+						resp.Headers = headers
+						return resp, nil, fireTrace
+					}
+				}
+			}
+
+		// S8 (Task 8): the activation click the exploit follows off S7's
+		// "Activate Plugin" link.
+		case "/wp-admin/plugins.php":
+			if request.Method == http.MethodGet && request.URL.Query().Get("action") == "activate" {
+				if status, hdrs, activateBody, handled := plugins.ServeActivateStage(sess); handled {
+					resp.StatusCode = status
+					resp.Body = activateBody
+					headers := make([]string, 0, len(hdrs))
+					for k, v := range hdrs {
+						headers = append(headers, k+": "+v)
+					}
+					resp.Headers = headers
+					return resp, nil, fireTrace
+				}
+			}
+		}
+
+		// S9 (Task 9): the first command the exploit POSTs to the fake shell
+		// route its S7-uploaded plugin registers (/wp2shell/v1/<route>,
+		// either the ?rest_route= query form or the /wp-json/ pretty-
+		// permalink form — see isWP2ShellCommandRequest). Neither form is a
+		// single static path, so it can't be a case in the switch above;
+		// it's matched separately here, still inside the sess != nil guard.
+		//
+		// Same intentional two-tier contract as S7's upload capture (see
+		// the /wp-admin/update.php case's comment above): CAPTURE is gated
+		// only on sess != nil (any armed service), independent of
+		// sess.uploadOpen — capture-first, so a command sent before (or
+		// instead of) a completed upload is still banked as intel. The
+		// RESPONSE is gated on sess.uploadOpen inside
+		// plugins.ServeCommandStage itself, same pattern as
+		// ServeUploadStage/ServeActivateStage above.
+		//
+		// The captured bytes are the raw {"c":"<base64 command>"} JSON body
+		// exactly as sent, handed ONLY to chainArtifactStore.Write — never
+		// base64-decoded, never passed to os/exec or a shell, never
+		// interpreted at all. That's also true inside
+		// plugins.ServeCommandStage: it never receives the body, only
+		// sess.uploadOpen, and returns a canned JSON string.
+		if isWP2ShellCommandRequest(request) {
+			if chainArtifactStore != nil {
+				host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+				if splitErr != nil {
+					host = request.RemoteAddr
+				}
+				_, _ = chainArtifactStore.Write(bodyBytes, map[string]any{
+					"stage":   "command",
+					"src_ip":  host,
+					"session": host,
+				})
+			}
+			if status, hdrs, cmdBody, handled := plugins.ServeCommandStage(sess); handled {
+				resp.StatusCode = status
+				resp.Body = cmdBody
+				headers := make([]string, 0, len(hdrs))
+				for k, v := range hdrs {
+					headers = append(headers, k+": "+v)
+				}
+				resp.Headers = headers
+				return resp, nil, fireTrace
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------------
 	// Stateful session logic
 	// -------------------------------------------------------------------------
 
@@ -588,7 +885,14 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// request body (no re-read). ok==false means "not a batch we mirror"
 		// — we fall through and return the configured static handler
 		// unchanged, so this is strictly additive.
-		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes); ok {
+		// sess (Task 7): the per-source chain-session looked up above —
+		// nil whenever chainStore is nil (Chain not configured for this
+		// service), which reproduces the shipped literal-only oracle
+		// byte-for-byte. Non-nil arms the fiction-DB blind-read fallback
+		// inside MirrorRespond/MirrorDelayMs, and lets the forge chain's
+		// checkpoints (seeded / admin-created) accumulate on the session so
+		// the auth-stage routing above can answer S4-S6 on a later request.
+		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes, sess); ok {
 			// Time-based oracle (additive): sleep the implied delay before writing,
 			// but ONLY when the batch actually dispatched (a reject returns
 			// Reject.Status, not WrapStatus). Real WP rejects at validation BEFORE
@@ -597,7 +901,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			// depth). Inert: only literal-true conditions delay; nothing is
 			// executed.
 			if mirrorStatus == command.Mirror.WrapStatus {
-				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes); d > 0 {
+				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes, sess); d > 0 {
 					if d > plugins.MaxMirrorDelayMs {
 						d = plugins.MaxMirrorDelayMs
 					}

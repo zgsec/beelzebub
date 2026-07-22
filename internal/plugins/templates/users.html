@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html class="wp-toolbar" lang="en-US">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>Users &lsaquo; Site &#8212; WordPress</title>
+<script type="text/javascript">
+var ajaxurl = '/wp-admin/admin-ajax.php',
+	pagenow = 'users',
+	typenow = '',
+	adminpage = 'users-php',
+	thousandsSeparator = ',',
+	decimalPoint = '.',
+	isRtl = 0;
+</script>
+<link rel='stylesheet' id='common-css' href='/wp-admin/load-styles.php?c=0&amp;dir=ltr&amp;load%5Bchunk_0%5D=dashicons,admin-bar,common,forms,admin-menu,list-tables,edit&amp;ver=6.9.4' media='all' />
+<meta name='robots' content='noindex,noarchive' />
+</head>
+<body class="wp-admin wp-core-ui no-js users-php auto-fold admin-color-fresh">
+<div id="wpadminbar" class="nojq nojs">
+<div class="quicklinks" id="wp-admin-bar-root-default">
+<ul id="wp-admin-bar-top-secondary" class="ab-top-secondary ab-top-menu">
+<li id="wp-admin-bar-my-account" class="menupop with-avatar"><a class="ab-item" href="/wp-admin/profile.php">Howdy, Administrator</a></li>
+</ul>
+</div>
+</div>
+<div id="adminmenumain">
+<div id="adminmenuback"></div>
+<div id="adminmenuwrap">
+<ul id="adminmenu">
+<li id="menu-dashboard"><a href="/wp-admin/index.php"><div class="wp-menu-name">Dashboard</div></a></li>
+<li id="menu-users" class="wp-has-current-submenu wp-menu-open current"><a href="/wp-admin/users.php" class="wp-has-current-submenu"><div class="wp-menu-name">Users</div></a></li>
+</ul>
+</div>
+</div>
+<div id="wpcontent">
+<div id="wpbody">
+<div id="wpbody-content">
+<div class="wrap">
+<h1 class="wp-heading-inline">Users</h1>
+<a href="/wp-admin/user-new.php" class="page-title-action">Add New User</a>
+<hr class="wp-header-end">
+<table class="wp-list-table widefat fixed striped table-view-list users">
+<thead>
+<tr>
+<td id="cb" class="manage-column column-cb check-column"><input id="cb-select-all-1" type="checkbox"></td>
+<th scope="col" class="manage-column column-username column-primary">Username</th>
+<th scope="col" class="manage-column column-name">Name</th>
+<th scope="col" class="manage-column column-email">Email</th>
+<th scope="col" class="manage-column column-role">Role</th>
+<th scope="col" class="manage-column column-posts">Posts</th>
+</tr>
+</thead>
+<tbody id="the-list">
+<tr id="user-2">
+<th scope="row" class="check-column"><input type="checkbox" name="users[]" id="user_2" value="2"></th>
+<td class="username column-username has-row-actions column-primary" data-colname="Username">
+<strong><a href="/wp-admin/user-edit.php?user_id=2">{{USERNAME}}</a></strong>
+<div class="row-actions"><span class="edit"><a href="/wp-admin/user-edit.php?user_id=2">Edit</a></span></div>
+</td>
+<td class="name column-name" data-colname="Name"></td>
+<td class="email column-email" data-colname="Email"><a href="mailto:{{USERNAME}}@example.com">{{USERNAME}}@example.com</a></td>
+<td class="role column-role" data-colname="Role">Administrator</td>
+<td class="posts column-posts num" data-colname="Posts"><a href="/wp-admin/edit.php?author=2" class="edit">0</a></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<script type="text/javascript" src="/wp-admin/load-scripts.php?c=0&amp;load%5Bchunk_0%5D=jquery-core,jquery-migrate,common,list-revisions&amp;ver=6.9.4"></script>
+</body>
+</html>

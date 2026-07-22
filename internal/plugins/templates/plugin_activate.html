@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html class="wp-toolbar" lang="en-US">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>Plugins &lsaquo; Site &#8212; WordPress</title>
+<script type="text/javascript">
+var ajaxurl = '/wp-admin/admin-ajax.php',
+	pagenow = 'plugins',
+	typenow = '',
+	adminpage = 'plugins-php',
+	thousandsSeparator = ',',
+	decimalPoint = '.',
+	isRtl = 0;
+</script>
+<link rel='stylesheet' id='common-css' href='/wp-admin/load-styles.php?c=0&amp;dir=ltr&amp;load%5Bchunk_0%5D=dashicons,admin-bar,common,forms,admin-menu,list-tables,plugin-install&amp;ver=6.9.4' media='all' />
+<meta name='robots' content='noindex,noarchive' />
+</head>
+<body class="wp-admin wp-core-ui no-js plugins-php auto-fold admin-color-fresh">
+<div id="wpadminbar" class="nojq nojs">
+<div class="quicklinks" id="wp-admin-bar-root-default">
+<ul id="wp-admin-bar-top-secondary" class="ab-top-secondary ab-top-menu">
+<li id="wp-admin-bar-my-account" class="menupop with-avatar"><a class="ab-item" href="/wp-admin/profile.php">Howdy, Administrator</a></li>
+</ul>
+</div>
+</div>
+<div id="adminmenumain">
+<div id="adminmenuback"></div>
+<div id="adminmenuwrap">
+<ul id="adminmenu">
+<li id="menu-dashboard"><a href="/wp-admin/index.php"><div class="wp-menu-name">Dashboard</div></a></li>
+<li id="menu-plugins" class="wp-has-current-submenu wp-menu-open current"><a href="/wp-admin/plugins.php" class="wp-has-current-submenu"><div class="wp-menu-name">Plugins</div></a></li>
+</ul>
+</div>
+</div>
+<div id="wpcontent">
+<div id="wpbody">
+<div id="wpbody-content">
+<div class="wrap">
+<h1 class="wp-heading-inline">Plugins</h1>
+<hr class="wp-header-end">
+<div id="message" class="updated notice is-dismissible"><p>Plugin activated.</p></div>
+<table class="wp-list-table widefat plugins" cellspacing="0">
+<tbody id="the-list">
+<tr class="active" data-slug="{{SLUG}}">
+<td class="plugin-title column-primary"><strong>{{SLUG}}</strong>
+<div class="row-actions visible"><span class="deactivate"><a href="/wp-admin/plugins.php?action=deactivate&amp;plugin={{SLUG}}%2F{{SLUG}}.php" aria-label="Deactivate {{SLUG}}">Deactivate</a></span></div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<script type="text/javascript" src="/wp-admin/load-scripts.php?c=0&amp;load%5Bchunk_0%5D=jquery-core,jquery-migrate,common,list-revisions&amp;ver=6.9.4"></script>
+</body>
+</html>

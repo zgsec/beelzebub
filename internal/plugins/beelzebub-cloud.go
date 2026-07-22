@@ -185,6 +185,7 @@ func (beelzebubCloud *beelzebubCloud) verifyConfigurationsChanged() error {
 		if lastConfigurationsHash != configurationsHash {
 			log.Debug("Configurations changed.")
 			exitFunction(0)
+			return nil
 		}
 		time.Sleep(beelzebubCloud.PollingInterval)
 	}

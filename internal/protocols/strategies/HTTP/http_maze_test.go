@@ -23,7 +23,7 @@ func TestBuildHTTPResponse_MazePluginServesDirectoryListing(t *testing.T) {
 	tt := &captureTracer{}
 	servConf := parser.BeelzebubServiceConfiguration{ServerVersion: "Apache/2.4.41 (Ubuntu)"}
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)

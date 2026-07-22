@@ -47,7 +47,14 @@ type mirrorElem struct {
 // sub-request is echoed into that element's body — the only attacker-influenced
 // bytes emitted, always length-capped, optionally hex-decoded, and
 // JSON-escaped. No sub-request body is executed; every structural byte is config.
-func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body string, ok bool) {
+//
+// sess is the (nil-safe) fiction-DB chain session for this source key. nil
+// means "no fiction" — the boolean/forge path falls back to exactly the
+// shipped evalLiteralBool/booleanElement behaviour, so every existing caller
+// that passes nil sees byte-identical output. A non-nil sess additionally lets
+// forgeElement answer a recognized blind-read predicate (recognizeBlindRead +
+// evalBlindPredicate) when the condition isn't a literal constant.
+func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *ChainSession) (status int, body string, ok bool) {
 	if cfg == nil {
 		return 0, "", false
 	}
@@ -92,7 +99,7 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body s
 		budget = defaultMirrorMaxTotal
 	}
 
-	arr, arrOK := mirrorArray(cfg, subs, 0, maxDepth, &budget)
+	arr, arrOK := mirrorArray(cfg, subs, 0, maxDepth, &budget, sess)
 	if !arrOK {
 		return 0, "", false
 	}
@@ -104,7 +111,18 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body s
 // mirrorArray builds the response array for one level of sub-requests, recursing
 // into nested envelopes when configured. Returns ok=false if the element budget
 // is exhausted (hostile amplification) or an assembled element is not valid JSON.
-func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int) (json.RawMessage, bool) {
+func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int, sess *ChainSession) (json.RawMessage, bool) {
+	// Escalation+admin-creation checkpoint (Task 4 / S3): scanned once per
+	// level, over the SAME sub-request list a `POST /wp/v2/users` sibling
+	// would appear in — so the checkpoint below requires BOTH signals in the
+	// same batch. A lone `POST /wp/v2/users` probe with no accompanying
+	// escalation UNION anywhere in this subs slice must never trip it (a
+	// separate, later-arriving escalation forge — a different mirrorArray
+	// call, different subs slice — doesn't count either). sess == nil
+	// short-circuits before the scan, so a nil session sees zero behavioural
+	// or performance difference from before this task.
+	escalationSeen := sess != nil && batchHasEscalationForge(cfg, subs)
+
 	elems := make([]mirrorElem, 0, len(subs))
 	for _, s := range subs {
 		*budget--
@@ -116,7 +134,7 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 		// re-dispatched (route-confusion behaviour) into a nested envelope.
 		if cfg.Recurse != nil && depth < maxDepth {
 			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
-				inner, innerOK := mirrorArray(cfg, nested, depth+1, maxDepth, budget)
+				inner, innerOK := mirrorArray(cfg, nested, depth+1, maxDepth, budget, sess)
 				if !innerOK {
 					return nil, false
 				}
@@ -129,6 +147,24 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 			}
 		}
 
+		// Admin-creation confirmation (Task 4 / S3): only armed when the
+		// escalation forge was seen elsewhere in THIS batch (escalationSeen,
+		// above). A `POST /wp/v2/users` with no accompanying escalation UNION
+		// in the batch falls through untouched to the existing static/reflect
+		// behaviour below — same as every sub-request when sess == nil.
+		if escalationSeen {
+			if username, ok := extractAdminUsername(cfg, s); ok {
+				if ce, built := adminCreatedElement(username); built {
+					sess.mutate(func(cs *ChainSession) {
+						cs.adminCreated = true
+						cs.username = username
+					})
+					elems = append(elems, ce)
+					continue
+				}
+			}
+		}
+
 		path := rawString(s[cfg.PathField])
 
 		// Forge/boolean confirmation channel (opt-in, cfg.Forge != nil): a
@@ -138,7 +174,7 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 		// or the path doesn't parse as an injection, so every non-injecting
 		// and every Forge-disabled sub-request falls through to the exact
 		// pre-existing static/reflect behaviour below, untouched.
-		if fe, forged := forgeElement(cfg, path); forged {
+		if fe, forged := forgeElement(cfg, path, sess); forged {
 			elems = append(elems, fe)
 			continue
 		}
@@ -303,7 +339,17 @@ var reAuthorExclude = regexp.MustCompile(`(?i)[?&]author_exclude=([^&]*)`)
 // same discipline as evalLiteralBool/evalProjection). It never reimplements
 // forge.go's logic, only wires extractUnionProjection / assembleForgedRow /
 // booleanElement together and shapes their result into a mirrorElem.
-func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
+//
+// sess is the (nil-safe) fiction-DB chain session. When the author_exclude
+// condition is not a literal constant (booleanElement declines) and sess !=
+// nil, this additionally tries the fiction fallback: recognizeBlindRead
+// identifies the read intent against the fabricated schema and
+// evalBlindPredicate answers the operator's exact comparison against it,
+// driving the same present/absent element booleanElement would have produced
+// for a literal condition. Unrecognized or unevaluable reads fail closed
+// (the pre-existing "fall through to static/reflect" behaviour), same as a
+// nil sess.
+func forgeElement(cfg *parser.MirrorConfig, path string, sess *ChainSession) (mirrorElem, bool) {
 	if cfg.Forge == nil {
 		return mirrorElem{}, false
 	}
@@ -325,6 +371,16 @@ func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
 		if !assembled {
 			return mirrorElem{}, false
 		}
+		// Seed checkpoint (Task 4 / S2): a UNION-forged row whose content
+		// carries the oembed seed shortcodes ("[embed ...][/embed]") is the
+		// chain's seed-post signal — record it so later stages can gate on
+		// "seeding happened" without re-parsing every forge. Purely additive:
+		// the served row/status/headers below are unchanged either way.
+		if sess != nil && seedRowContainsEmbedSeed(row) {
+			sess.mutate(func(cs *ChainSession) {
+				cs.seeded = true
+			})
+		}
 		rowJSON, err := json.Marshal(row)
 		if err != nil {
 			return mirrorElem{}, false
@@ -344,9 +400,235 @@ func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
 			}
 			return el, true
 		}
+		// booleanElement declined — either the "<n>) AND|OR <cond> -- -"
+		// wrapper didn't match, or it matched but <cond> isn't a literal
+		// constant (evalLiteralBool isLiteral=false). Only the latter is a
+		// fiction-fallback candidate: re-run the same wrapper strip (reBoolWrap,
+		// shared with forge.go in this package) to isolate <cond>, then ask
+		// the fiction DB whether it recognizes the read and can answer it.
+		// sess == nil (every caller before this task, and every Layer-1 test)
+		// short-circuits here, so behaviour is unchanged with no session armed.
+		if sess != nil {
+			if bm := reBoolWrap.FindStringSubmatch(m[1]); bm != nil {
+				// stripOneParenLayer mirrors evalLiteralBool's own tolerance:
+				// a boolean-blind payload conventionally double-wraps its
+				// condition ("0) AND (<cond>)-- -"), and evalBlindPredicate
+				// (unlike evalLiteralBool) does not strip that cosmetic layer
+				// itself — without this, a real double-wrapped blind-read
+				// predicate would recognize fine (recognizeBlindRead is
+				// substring-based) but ALWAYS fail evalBlindPredicate's
+				// top-level operator scan, silently defeating the whole
+				// fallback on the exact payload shape sqlmap-style tooling
+				// actually sends.
+				cond := stripOneParenLayer(bm[1])
+				if fv, recognized := recognizeBlindRead(cond, sess); recognized {
+					if result, evalOK := evalBlindPredicate(cond, fv); evalOK {
+						return booleanFictionElement(result), true
+					}
+				}
+			}
+		}
 	}
 
 	return mirrorElem{}, false
+}
+
+// booleanFictionElement builds the same present/absent batch element shape
+// booleanElement (forge.go) produces for a literal condition, but driven by a
+// fabricated blind-read answer instead of evalLiteralBool. Kept in this file
+// (not forge.go) so the fiction-DB decision lives entirely in the file this
+// task is scoped to extend; the byte shapes are pinned identical to
+// booleanElement's on purpose — an operator's tool can't distinguish a
+// fiction-driven confirmation from a literal-constant one.
+func booleanFictionElement(result bool) mirrorElem {
+	if result {
+		return mirrorElem{
+			Body:    json.RawMessage(`[{"id":1,"status":"publish"}]`),
+			Status:  200,
+			Headers: json.RawMessage(`{"X-WP-Total":1,"X-WP-TotalPages":1,"Allow":"GET"}`),
+		}
+	}
+	return mirrorElem{
+		Body:    json.RawMessage(`[]`),
+		Status:  200,
+		Headers: json.RawMessage(`{"X-WP-Total":0,"X-WP-TotalPages":0,"Allow":"GET"}`),
+	}
+}
+
+// customizeChangesetHexMarker is the hex-encoded post_type literal
+// ("customize_changeset") the WP2Shell escalation UNION plants on one of its
+// forged rows, alongside a `POST /wp/v2/users` sub-request in the same
+// batch. Presence of this exact hex string in a UNION-carrying, decoded
+// sub-request path is the escalation-forge signal (Task 4 / S3) —
+// isEscalationForgePath/batchHasEscalationForge are the only two callers.
+const customizeChangesetHexMarker = "0x637573746f6d697a655f6368616e6765736574"
+
+// isEscalationForgePath reports whether a decoded sub-request path carries
+// the WP2Shell escalation UNION: a UNION [ALL] SELECT projection (same
+// prefix extractUnionProjection requires) that also references
+// customize_changeset via its hex literal. It deliberately does NOT
+// reimplement extractUnionProjection's column parsing — presence of the
+// marker anywhere in a UNION-carrying path is enough to recognize the
+// escalation stage; the actual forged content is still built by the
+// existing assembleForgedRow path in forgeElement, unchanged by this task.
+func isEscalationForgePath(decoded string) bool {
+	if !reUnion.MatchString(decoded) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(decoded), customizeChangesetHexMarker)
+}
+
+// batchHasEscalationForge reports whether any sub-request in this batch
+// LEVEL (the same subs slice one mirrorArray call processes — see its
+// escalationSeen doc comment) carries the escalation UNION forge. Scoped to
+// cfg.Forge != nil, the same gate forgeElement itself applies, so a mirror
+// config with forging disabled can never arm the admin-creation checkpoint.
+// A path that fails to URL-decode is skipped (fail closed), not treated as a
+// match.
+func batchHasEscalationForge(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage) bool {
+	if cfg.Forge == nil {
+		return false
+	}
+	for _, s := range subs {
+		decoded, err := url.QueryUnescape(rawString(s[cfg.PathField]))
+		if err != nil {
+			continue
+		}
+		if isEscalationForgePath(decoded) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractAdminUsername reports whether sub is a `POST .../wp/v2/users`
+// sub-request carrying a non-empty "username" in its JSON body — the S3
+// admin-creation signal (Task 4). method/path are read via the same
+// cfg.MethodField/cfg.PathField keys every other sub-request field in this
+// file uses; "body" is the same fixed key nestedSubs already relies on (this
+// plugin has no configurable body-field knob). A missing/non-object body, or
+// a body with no (or empty) "username", returns ok=false — the caller then
+// falls through to the existing static/reflect behaviour for this
+// sub-request, same as any non-recognized path.
+func extractAdminUsername(cfg *parser.MirrorConfig, sub map[string]json.RawMessage) (string, bool) {
+	if !strings.EqualFold(rawString(sub[cfg.MethodField]), "POST") {
+		return "", false
+	}
+	path := strings.ToLower(rawString(sub[cfg.PathField]))
+	if !strings.Contains(path, "/wp/v2/users") {
+		return "", false
+	}
+	bodyRaw, ok := sub["body"]
+	if !ok {
+		return "", false
+	}
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(bodyRaw, &body); err != nil || body.Username == "" {
+		return "", false
+	}
+	return body.Username, true
+}
+
+// seedRowContainsEmbedSeed reports whether a forged wp_posts row's rendered
+// content carries the oembed seed shortcodes ("[embed ...][/embed]") the
+// exploit's S2 stage plants — the WP2Shell chain's seed-post signal (Task
+// 4). Only the "content" field (wrapped {"rendered": ...} per
+// wpRenderedFields) is inspected; every other forged field is ignored, and a
+// row shaped unexpectedly (no content, non-string rendered value) simply
+// reports false rather than panicking.
+func seedRowContainsEmbedSeed(row map[string]any) bool {
+	content, ok := row["content"].(map[string]any)
+	if !ok {
+		return false
+	}
+	rendered, ok := content["rendered"].(string)
+	if !ok {
+		return false
+	}
+	return strings.Contains(rendered, "[embed")
+}
+
+// adminCreatedTemplate is the byte shape of a successful `POST /wp/v2/users`
+// response element for a freshly forged administrator, pinned to the real
+// WordPress REST response captured in
+// tools/oracle-diff/wordpress-6.9.4/chain_capture.jsonl (seq 90, status 201).
+// "${username}" is substituted (JSON-escaped) with the attacker-supplied
+// login the same sub-request carried; every other byte is static,
+// non-attacker-controlled boilerplate (the standard WP administrator
+// capability set) — no real site or user data is disclosed. The exploit
+// itself never parses this response (poc.py proceeds straight to
+// wp-login.php after sending the batch), so exact field-for-field parity
+// with the capture (avatar_urls, _links, Location header — all of which
+// embed the real site's hostname) isn't required; this shape is plausible
+// enough to read as a genuine "user created" success.
+const adminCreatedTemplate = `{"body":{"id":2,"username":"${username}","name":"${username}","first_name":"","last_name":"","email":"${username}@example.com","url":"","description":"","nickname":"${username}","slug":"${username}","roles":["administrator"],"registered_date":"2020-01-01T00:00:00+00:00","capabilities":{"switch_themes":true,"edit_themes":true,"activate_plugins":true,"edit_plugins":true,"edit_users":true,"edit_files":true,"manage_options":true,"moderate_comments":true,"manage_categories":true,"manage_links":true,"upload_files":true,"import":true,"unfiltered_html":true,"edit_posts":true,"edit_others_posts":true,"edit_published_posts":true,"publish_posts":true,"edit_pages":true,"read":true,"level_10":true,"level_9":true,"level_8":true,"level_7":true,"level_6":true,"level_5":true,"level_4":true,"level_3":true,"level_2":true,"level_1":true,"level_0":true,"edit_others_pages":true,"edit_published_pages":true,"publish_pages":true,"delete_pages":true,"delete_others_pages":true,"delete_published_pages":true,"delete_posts":true,"delete_others_posts":true,"delete_published_posts":true,"delete_private_posts":true,"edit_private_posts":true,"read_private_posts":true,"delete_private_pages":true,"edit_private_pages":true,"read_private_pages":true,"delete_users":true,"create_users":true,"unfiltered_upload":true,"edit_dashboard":true,"update_plugins":true,"delete_plugins":true,"install_plugins":true,"update_themes":true,"install_themes":true,"update_core":true,"list_users":true,"remove_users":true,"promote_users":true,"edit_theme_options":true,"delete_themes":true,"export":true,"administrator":true},"extra_capabilities":{"administrator":true}},"status":201,"headers":{"Allow":"GET, POST"}}`
+
+// adminCreatedElement builds the "user created" batch element for username,
+// JSON-escaping it into adminCreatedTemplate the same way applyReflect
+// escapes a reflected token (marshal, then strip the surrounding quotes) —
+// username is attacker-supplied (the exploit's own JSON body), so it must
+// never be substituted raw into the template. built=false (fail closed) only
+// if the substituted template somehow fails to parse as a mirrorElem, which
+// cannot happen for any username value since JSON-escaping guarantees a
+// valid string literal; kept for the same defensive discipline the rest of
+// this file uses around json.Marshal/Unmarshal.
+func adminCreatedElement(username string) (mirrorElem, bool) {
+	escaped, err := json.Marshal(username)
+	inner := ""
+	if err == nil && len(escaped) >= 2 {
+		inner = string(escaped[1 : len(escaped)-1])
+	}
+	raw := strings.ReplaceAll(adminCreatedTemplate, "${username}", inner)
+	var el mirrorElem
+	if err := json.Unmarshal([]byte(raw), &el); err != nil {
+		return mirrorElem{}, false
+	}
+	return el, true
+}
+
+// stripOneParenLayer removes exactly one layer of wrapping parens ("(x)" ->
+// "x"), the same tolerance evalLiteralBool applies inline for a literal
+// condition. A SQLi payload conventionally double-wraps its condition —
+// "IF((cond),SLEEP(n),0)" / "0) AND (cond)-- -" — and the fiction-fallback
+// evaluators (recognizeBlindRead/evalBlindPredicate) need that cosmetic
+// layer gone before evalBlindPredicate's top-level operator scan, exactly as
+// evalLiteralBool already requires for a literal comparison.
+//
+// It strips ONLY when byte 0 is '(' and that paren's matching close is the
+// LAST byte — i.e. the entire (trimmed) input is one balanced enclosing
+// pair, verified by walking paren depth from index 0 (mirroring the
+// depth-verification matchBareSelectSubquery does in fictiondb.go). A
+// compound condition like "(cond) AND (x)" has its first '(' close well
+// before the last byte, so depth returns to 0 mid-string — not an enclosing
+// pair — and this returns the input unchanged rather than eating the outer
+// parens of the left-hand clause. Unbalanced input ("((a)") and empty input
+// both fall through unchanged without panicking.
+func stripOneParenLayer(cond string) string {
+	s := strings.TrimSpace(cond)
+	if len(s) < 2 || s[0] != '(' {
+		return s
+	}
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return s // unbalanced (stray close) → unchanged
+			}
+			if depth == 0 {
+				if i != len(s)-1 {
+					return s // closes before the end → not one enclosing pair
+				}
+				return strings.TrimSpace(s[1 : len(s)-1])
+			}
+		}
+	}
+	return s // never returned to depth 0 → unbalanced → unchanged
 }
 
 // evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal
@@ -447,7 +729,12 @@ const MaxMirrorDelayMs = 9000
 // delaying n*1000 iff evalLiteralBool(decoded cond) is (true,true) — and only if
 // IfRegex does NOT match, tries BareRegex (unconditional SLEEP(<n>)). Envelope
 // delay = max over sub-requests, clamped to the cap.
-func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
+//
+// sess is the (nil-safe) fiction-DB chain session — see MirrorRespond's doc
+// comment for the shared contract. nil reproduces the shipped
+// evalLiteralBool-only behaviour exactly, so every pre-existing caller
+// (passing nil) sees byte-for-byte-identical delays.
+func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte, sess *ChainSession) int {
 	if cfg == nil || cfg.Timing == nil {
 		return 0
 	}
@@ -463,7 +750,7 @@ func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
 	if !ok {
 		return 0
 	}
-	delay := timingWalk(cfg, subs, 0)
+	delay := timingWalk(cfg, subs, 0, sess)
 
 	cap := cfg.Timing.MaxDelayMs
 	if cap <= 0 || cap > MaxMirrorDelayMs {
@@ -477,17 +764,17 @@ func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
 
 // timingWalk returns the max per-sub-request delay across one level, recursing
 // one nesting level (matching the observed nested-batch injection site).
-func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int) int {
+func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int, sess *ChainSession) int {
 	max := 0
 	for _, s := range subs {
 		if depth < 1 {
 			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
-				if d := timingWalk(cfg, nested, depth+1); d > max {
+				if d := timingWalk(cfg, nested, depth+1, sess); d > max {
 					max = d
 				}
 			}
 		}
-		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField])); d > max {
+		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField]), sess); d > max {
 			max = d
 		}
 	}
@@ -497,7 +784,15 @@ func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, dep
 // sleepDelay extracts the delay a single path implies. IfRegex first (so the
 // inner SLEEP of an IF form is not double-counted by BareRegex); BareRegex only
 // if the IF form is absent.
-func sleepDelay(t *parser.MirrorTiming, path string) int {
+//
+// sess is the (nil-safe) fiction-DB chain session. When the IF condition is
+// not a literal constant (evalLiteralBool isLiteral=false) and sess != nil,
+// this additionally tries the fiction fallback — recognizeBlindRead +
+// evalBlindPredicate — before falling through to "no bare fallthrough". A
+// true fiction answer drives the same n*1000 delay branch a literal-true
+// condition would; false (or unrecognized/unevaluable) stays at the existing
+// flat 0. nil sess reproduces the shipped behaviour exactly.
+func sleepDelay(t *parser.MirrorTiming, path string, sess *ChainSession) int {
 	if t.IfRegex != nil {
 		if m := t.IfRegex.FindStringSubmatch(path); len(m) == 3 {
 			cond, err := url.QueryUnescape(m[1])
@@ -505,12 +800,23 @@ func sleepDelay(t *parser.MirrorTiming, path string) int {
 				cond = m[1]
 			}
 			val, isLit := evalLiteralBool(cond)
+			if !isLit && sess != nil {
+				// stripOneParenLayer: see its doc comment — evalBlindPredicate,
+				// unlike evalLiteralBool, does not tolerate the cosmetic
+				// double-wrap a payload's IF((cond),SLEEP(n),0) form carries.
+				fcond := stripOneParenLayer(cond)
+				if fv, recognized := recognizeBlindRead(fcond, sess); recognized {
+					if result, evalOK := evalBlindPredicate(fcond, fv); evalOK {
+						val, isLit = result, true
+					}
+				}
+			}
 			if isLit && val {
 				if n, err := strconv.Atoi(m[2]); err == nil {
 					return n * 1000
 				}
 			}
-			return 0 // IF matched but condition false/non-literal → no bare fallthrough
+			return 0 // IF matched but condition false/non-literal/unrecognized → no bare fallthrough
 		}
 	}
 	if t.BareRegex != nil {
