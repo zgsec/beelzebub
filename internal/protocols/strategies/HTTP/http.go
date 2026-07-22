@@ -588,7 +588,10 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// request body (no re-read). ok==false means "not a batch we mirror"
 		// — we fall through and return the configured static handler
 		// unchanged, so this is strictly additive.
-		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes); ok {
+		// sess is nil here: the real per-source chain-session lookup is wired
+		// in a later task (T7). nil ⇒ no fiction ⇒ this call reproduces the
+		// shipped literal-only oracle byte-for-byte.
+		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes, nil); ok {
 			// Time-based oracle (additive): sleep the implied delay before writing,
 			// but ONLY when the batch actually dispatched (a reject returns
 			// Reject.Status, not WrapStatus). Real WP rejects at validation BEFORE
@@ -597,7 +600,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			// depth). Inert: only literal-true conditions delay; nothing is
 			// executed.
 			if mirrorStatus == command.Mirror.WrapStatus {
-				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes); d > 0 {
+				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes, nil); d > 0 {
 					if d > plugins.MaxMirrorDelayMs {
 						d = plugins.MaxMirrorDelayMs
 					}

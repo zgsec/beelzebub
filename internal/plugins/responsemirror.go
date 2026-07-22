@@ -47,7 +47,14 @@ type mirrorElem struct {
 // sub-request is echoed into that element's body — the only attacker-influenced
 // bytes emitted, always length-capped, optionally hex-decoded, and
 // JSON-escaped. No sub-request body is executed; every structural byte is config.
-func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body string, ok bool) {
+//
+// sess is the (nil-safe) fiction-DB chain session for this source key. nil
+// means "no fiction" — the boolean/forge path falls back to exactly the
+// shipped evalLiteralBool/booleanElement behaviour, so every existing caller
+// that passes nil sees byte-identical output. A non-nil sess additionally lets
+// forgeElement answer a recognized blind-read predicate (recognizeBlindRead +
+// evalBlindPredicate) when the condition isn't a literal constant.
+func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession) (status int, body string, ok bool) {
 	if cfg == nil {
 		return 0, "", false
 	}
@@ -92,7 +99,7 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body s
 		budget = defaultMirrorMaxTotal
 	}
 
-	arr, arrOK := mirrorArray(cfg, subs, 0, maxDepth, &budget)
+	arr, arrOK := mirrorArray(cfg, subs, 0, maxDepth, &budget, sess)
 	if !arrOK {
 		return 0, "", false
 	}
@@ -104,7 +111,7 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte) (status int, body s
 // mirrorArray builds the response array for one level of sub-requests, recursing
 // into nested envelopes when configured. Returns ok=false if the element budget
 // is exhausted (hostile amplification) or an assembled element is not valid JSON.
-func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int) (json.RawMessage, bool) {
+func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int, sess *chainSession) (json.RawMessage, bool) {
 	elems := make([]mirrorElem, 0, len(subs))
 	for _, s := range subs {
 		*budget--
@@ -116,7 +123,7 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 		// re-dispatched (route-confusion behaviour) into a nested envelope.
 		if cfg.Recurse != nil && depth < maxDepth {
 			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
-				inner, innerOK := mirrorArray(cfg, nested, depth+1, maxDepth, budget)
+				inner, innerOK := mirrorArray(cfg, nested, depth+1, maxDepth, budget, sess)
 				if !innerOK {
 					return nil, false
 				}
@@ -138,7 +145,7 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 		// or the path doesn't parse as an injection, so every non-injecting
 		// and every Forge-disabled sub-request falls through to the exact
 		// pre-existing static/reflect behaviour below, untouched.
-		if fe, forged := forgeElement(cfg, path); forged {
+		if fe, forged := forgeElement(cfg, path, sess); forged {
 			elems = append(elems, fe)
 			continue
 		}
@@ -303,7 +310,17 @@ var reAuthorExclude = regexp.MustCompile(`(?i)[?&]author_exclude=([^&]*)`)
 // same discipline as evalLiteralBool/evalProjection). It never reimplements
 // forge.go's logic, only wires extractUnionProjection / assembleForgedRow /
 // booleanElement together and shapes their result into a mirrorElem.
-func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
+//
+// sess is the (nil-safe) fiction-DB chain session. When the author_exclude
+// condition is not a literal constant (booleanElement declines) and sess !=
+// nil, this additionally tries the fiction fallback: recognizeBlindRead
+// identifies the read intent against the fabricated schema and
+// evalBlindPredicate answers the operator's exact comparison against it,
+// driving the same present/absent element booleanElement would have produced
+// for a literal condition. Unrecognized or unevaluable reads fail closed
+// (the pre-existing "fall through to static/reflect" behaviour), same as a
+// nil sess.
+func forgeElement(cfg *parser.MirrorConfig, path string, sess *chainSession) (mirrorElem, bool) {
 	if cfg.Forge == nil {
 		return mirrorElem{}, false
 	}
@@ -344,9 +361,79 @@ func forgeElement(cfg *parser.MirrorConfig, path string) (mirrorElem, bool) {
 			}
 			return el, true
 		}
+		// booleanElement declined — either the "<n>) AND|OR <cond> -- -"
+		// wrapper didn't match, or it matched but <cond> isn't a literal
+		// constant (evalLiteralBool isLiteral=false). Only the latter is a
+		// fiction-fallback candidate: re-run the same wrapper strip (reBoolWrap,
+		// shared with forge.go in this package) to isolate <cond>, then ask
+		// the fiction DB whether it recognizes the read and can answer it.
+		// sess == nil (every caller before this task, and every Layer-1 test)
+		// short-circuits here, so behaviour is unchanged with no session armed.
+		if sess != nil {
+			if bm := reBoolWrap.FindStringSubmatch(m[1]); bm != nil {
+				// stripOneParenLayer mirrors evalLiteralBool's own tolerance:
+				// a boolean-blind payload conventionally double-wraps its
+				// condition ("0) AND (<cond>)-- -"), and evalBlindPredicate
+				// (unlike evalLiteralBool) does not strip that cosmetic layer
+				// itself — without this, a real double-wrapped blind-read
+				// predicate would recognize fine (recognizeBlindRead is
+				// substring-based) but ALWAYS fail evalBlindPredicate's
+				// top-level operator scan, silently defeating the whole
+				// fallback on the exact payload shape sqlmap-style tooling
+				// actually sends.
+				cond := stripOneParenLayer(bm[1])
+				if fv, recognized := recognizeBlindRead(cond, sess); recognized {
+					if result, evalOK := evalBlindPredicate(cond, fv); evalOK {
+						return booleanFictionElement(result), true
+					}
+				}
+			}
+		}
 	}
 
 	return mirrorElem{}, false
+}
+
+// booleanFictionElement builds the same present/absent batch element shape
+// booleanElement (forge.go) produces for a literal condition, but driven by a
+// fabricated blind-read answer instead of evalLiteralBool. Kept in this file
+// (not forge.go) so the fiction-DB decision lives entirely in the file this
+// task is scoped to extend; the byte shapes are pinned identical to
+// booleanElement's on purpose — an operator's tool can't distinguish a
+// fiction-driven confirmation from a literal-constant one.
+func booleanFictionElement(result bool) mirrorElem {
+	if result {
+		return mirrorElem{
+			Body:    json.RawMessage(`[{"id":1,"status":"publish"}]`),
+			Status:  200,
+			Headers: json.RawMessage(`{"X-WP-Total":1,"X-WP-TotalPages":1,"Allow":"GET"}`),
+		}
+	}
+	return mirrorElem{
+		Body:    json.RawMessage(`[]`),
+		Status:  200,
+		Headers: json.RawMessage(`{"X-WP-Total":0,"X-WP-TotalPages":0,"Allow":"GET"}`),
+	}
+}
+
+// stripOneParenLayer removes exactly one layer of wrapping parens ("(x)" ->
+// "x"), the same tolerance evalLiteralBool applies inline for a literal
+// condition. A SQLi payload conventionally double-wraps its condition —
+// "IF((cond),SLEEP(n),0)" / "0) AND (cond)-- -" — and the fiction-fallback
+// evaluators (recognizeBlindRead/evalBlindPredicate) need that cosmetic
+// layer gone before evalBlindPredicate's top-level operator scan, exactly as
+// evalLiteralBool already requires for a literal comparison. Only strips
+// when the FIRST and LAST bytes are '(' and ')' — a real fiction predicate's
+// right-hand side is always a bare integer literal (see
+// evalBlindPredicate/splitTopLevelCompare), so it never itself ends in ')',
+// making this safe against accidentally eating a structural paren that
+// belongs to the condition rather than to the wrapper.
+func stripOneParenLayer(cond string) string {
+	s := strings.TrimSpace(cond)
+	if len(s) >= 2 && s[0] == '(' && s[len(s)-1] == ')' {
+		return strings.TrimSpace(s[1 : len(s)-1])
+	}
+	return s
 }
 
 // evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal
@@ -447,7 +534,12 @@ const MaxMirrorDelayMs = 9000
 // delaying n*1000 iff evalLiteralBool(decoded cond) is (true,true) — and only if
 // IfRegex does NOT match, tries BareRegex (unconditional SLEEP(<n>)). Envelope
 // delay = max over sub-requests, clamped to the cap.
-func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
+//
+// sess is the (nil-safe) fiction-DB chain session — see MirrorRespond's doc
+// comment for the shared contract. nil reproduces the shipped
+// evalLiteralBool-only behaviour exactly, so every pre-existing caller
+// (passing nil) sees byte-for-byte-identical delays.
+func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession) int {
 	if cfg == nil || cfg.Timing == nil {
 		return 0
 	}
@@ -463,7 +555,7 @@ func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
 	if !ok {
 		return 0
 	}
-	delay := timingWalk(cfg, subs, 0)
+	delay := timingWalk(cfg, subs, 0, sess)
 
 	cap := cfg.Timing.MaxDelayMs
 	if cap <= 0 || cap > MaxMirrorDelayMs {
@@ -477,17 +569,17 @@ func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte) int {
 
 // timingWalk returns the max per-sub-request delay across one level, recursing
 // one nesting level (matching the observed nested-batch injection site).
-func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int) int {
+func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int, sess *chainSession) int {
 	max := 0
 	for _, s := range subs {
 		if depth < 1 {
 			if nested, isNested := nestedSubs(s, cfg.RequestKey); isNested {
-				if d := timingWalk(cfg, nested, depth+1); d > max {
+				if d := timingWalk(cfg, nested, depth+1, sess); d > max {
 					max = d
 				}
 			}
 		}
-		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField])); d > max {
+		if d := sleepDelay(cfg.Timing, rawString(s[cfg.PathField]), sess); d > max {
 			max = d
 		}
 	}
@@ -497,7 +589,15 @@ func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, dep
 // sleepDelay extracts the delay a single path implies. IfRegex first (so the
 // inner SLEEP of an IF form is not double-counted by BareRegex); BareRegex only
 // if the IF form is absent.
-func sleepDelay(t *parser.MirrorTiming, path string) int {
+//
+// sess is the (nil-safe) fiction-DB chain session. When the IF condition is
+// not a literal constant (evalLiteralBool isLiteral=false) and sess != nil,
+// this additionally tries the fiction fallback — recognizeBlindRead +
+// evalBlindPredicate — before falling through to "no bare fallthrough". A
+// true fiction answer drives the same n*1000 delay branch a literal-true
+// condition would; false (or unrecognized/unevaluable) stays at the existing
+// flat 0. nil sess reproduces the shipped behaviour exactly.
+func sleepDelay(t *parser.MirrorTiming, path string, sess *chainSession) int {
 	if t.IfRegex != nil {
 		if m := t.IfRegex.FindStringSubmatch(path); len(m) == 3 {
 			cond, err := url.QueryUnescape(m[1])
@@ -505,12 +605,23 @@ func sleepDelay(t *parser.MirrorTiming, path string) int {
 				cond = m[1]
 			}
 			val, isLit := evalLiteralBool(cond)
+			if !isLit && sess != nil {
+				// stripOneParenLayer: see its doc comment — evalBlindPredicate,
+				// unlike evalLiteralBool, does not tolerate the cosmetic
+				// double-wrap a payload's IF((cond),SLEEP(n),0) form carries.
+				fcond := stripOneParenLayer(cond)
+				if fv, recognized := recognizeBlindRead(fcond, sess); recognized {
+					if result, evalOK := evalBlindPredicate(fcond, fv); evalOK {
+						val, isLit = result, true
+					}
+				}
+			}
 			if isLit && val {
 				if n, err := strconv.Atoi(m[2]); err == nil {
 					return n * 1000
 				}
 			}
-			return 0 // IF matched but condition false/non-literal → no bare fallthrough
+			return 0 // IF matched but condition false/non-literal/unrecognized → no bare fallthrough
 		}
 	}
 	if t.BareRegex != nil {

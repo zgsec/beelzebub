@@ -178,7 +178,7 @@ const (
 )
 
 func TestForgeIntegration_UnionMarker3158(t *testing.T) {
-	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeU3158))
+	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeU3158), nil)
 	if !ok {
 		t.Fatal("MirrorRespond returned ok=false")
 	}
@@ -188,7 +188,7 @@ func TestForgeIntegration_UnionMarker3158(t *testing.T) {
 }
 
 func TestForgeIntegration_UnionMarkerB205(t *testing.T) {
-	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeB205))
+	_, body, ok := MirrorRespond(forgeOnlyMirror(), []byte(forgeB205), nil)
 	if !ok {
 		t.Fatal("MirrorRespond returned ok=false")
 	}
@@ -198,7 +198,7 @@ func TestForgeIntegration_UnionMarkerB205(t *testing.T) {
 }
 
 func TestForgeIntegration_BooleanTrueFalse(t *testing.T) {
-	_, bodyTrue, okT := MirrorRespond(forgeOnlyMirror(), []byte(forgeBTrue))
+	_, bodyTrue, okT := MirrorRespond(forgeOnlyMirror(), []byte(forgeBTrue), nil)
 	if !okT {
 		t.Fatal("MirrorRespond (true) returned ok=false")
 	}
@@ -206,7 +206,7 @@ func TestForgeIntegration_BooleanTrueFalse(t *testing.T) {
 		t.Fatalf("expected X-WP-Total:1 for true condition, got: %s", bodyTrue)
 	}
 
-	_, bodyFalse, okF := MirrorRespond(forgeOnlyMirror(), []byte(forgeBFalse))
+	_, bodyFalse, okF := MirrorRespond(forgeOnlyMirror(), []byte(forgeBFalse), nil)
 	if !okF {
 		t.Fatal("MirrorRespond (false) returned ok=false")
 	}
@@ -226,8 +226,8 @@ func TestForgeIntegration_NoRegressionOnGoldenAllTypes(t *testing.T) {
 	cfgOn := wpMirror()
 	cfgOn.Forge = &parser.MirrorForge{Collection: "wp_posts"}
 
-	_, bodyOff, okOff := MirrorRespond(cfgOff, []byte(req))
-	_, bodyOn, okOn := MirrorRespond(cfgOn, []byte(req))
+	_, bodyOff, okOff := MirrorRespond(cfgOff, []byte(req), nil)
+	_, bodyOn, okOn := MirrorRespond(cfgOn, []byte(req), nil)
 	if !okOff || !okOn {
 		t.Fatalf("ok: off=%v on=%v", okOff, okOn)
 	}
