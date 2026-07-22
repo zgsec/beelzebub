@@ -33,10 +33,11 @@ type fictionValue struct {
 //   - Int-compare family: <left> <op> N, where <left> is a scalar-value
 //     wrapper — {COALESCE|IFNULL}(...) or a bare (SELECT ...) subquery —
 //     evaluated against val.n (only when val.isInt). A <left> that is
-//     itself (or wraps) a time/side-effect call — SLEEP(...),
-//     BENCHMARK(...), a SELECT SLEEP(...) subquery — never matches this
-//     family and fails closed, as defense in depth alongside
-//     recognizeBlindRead's own filtering.
+//     itself (or wraps) a time/lock side-effect call — SLEEP(...),
+//     BENCHMARK(...), GET_LOCK(...), RELEASE_LOCK(...), a SELECT SLEEP(...)
+//     subquery, obfuscated with whitespace or a /* comment */ before the
+//     '(' — never matches this family and fails closed, as defense in
+//     depth alongside recognizeBlindRead's own filtering.
 //
 // Anything outside these shapes — including unbalanced parens, unknown
 // functions, or a bare unwrapped comparison — fails closed: (false, false).
@@ -308,13 +309,30 @@ func matchBareSelectSubquery(s string) (inner string, ok bool) {
 	return body, true
 }
 
+// sqlBlockCommentRe matches SQL block comments (/* ... */, including the
+// empty /**/), non-greedily so multiple comments in one string are stripped
+// individually rather than everything between the first /* and the last */.
+var sqlBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// sideEffectFuncRe matches a MySQL/MariaDB time- or lock-based side-effect
+// function name immediately followed by '(', tolerating whitespace
+// (including tabs/newlines) in between. Applied only after block comments
+// have been stripped, so a comment inserted between the name and '(' — e.g.
+// "SLEEP/**/(9999)" — collapses to "SLEEP(9999)" first and still matches.
+var sideEffectFuncRe = regexp.MustCompile(`(?i)\b(SLEEP|BENCHMARK|GET_LOCK|RELEASE_LOCK)\s*\(`)
+
 // containsSideEffect flags scalar-wrapper content that carries a
-// time/side-effect call (SLEEP, BENCHMARK) anywhere inside it, so the
-// int-compare family fails closed on those even though content is normally
-// ignored — defense in depth alongside recognizeBlindRead's own filtering.
+// time/lock side-effect call (SLEEP, BENCHMARK, GET_LOCK, RELEASE_LOCK)
+// anywhere inside it, so the int-compare family fails closed on those even
+// though content is normally ignored — defense in depth alongside
+// recognizeBlindRead's own filtering. Robust to the two obfuscations a
+// WAF-evasion tamper is likely to reach for first: whitespace between the
+// function name and '(', and a SQL block comment (including the bare
+// "/**/") in that same gap. Never panics: regexp matching on a string is
+// total, and stripping comments via ReplaceAllString only ever shrinks the
+// input, never grows or re-interprets it.
 func containsSideEffect(s string) bool {
-	low := strings.ToLower(s)
-	return strings.Contains(low, "sleep(") || strings.Contains(low, "benchmark(")
+	return sideEffectFuncRe.MatchString(sqlBlockCommentRe.ReplaceAllString(s, ""))
 }
 
 // splitTopLevelArgs splits s on paren-depth-0 commas. Used to pull the

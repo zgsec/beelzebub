@@ -56,6 +56,7 @@ var corpusCases = []corpusCase{
 	{"bare select subquery > false", "(SELECT COUNT(*) FROM wp_users) > 5", corpusIV, false, true},
 	{"bare select subquery < true", "(SELECT COUNT(*) FROM wp_users) < 6", corpusIV, true, true},
 	{"coalesce <= true", "COALESCE((SELECT x),0) <= 5", corpusIV, true, true},
+	{"coalesce >= true, real column read -> tightened screen must not over-reject", "COALESCE((SELECT ID FROM x),0) >= 4", corpusIV, true, true},
 
 	// ---- Whitespace / case / URL-decoded-form variants — must evaluate
 	// identically to their canonical counterparts above. ----
@@ -78,6 +79,18 @@ var corpusCases = []corpusCase{
 	{"coalesce wrapping SLEEP -> side-effect guard", "COALESCE((SELECT SLEEP(9999)),0) >= 1", corpusIV, false, false},
 	{"ifnull wrapping BENCHMARK -> side-effect guard", "IFNULL((SELECT BENCHMARK(1000000,MD5(1))),0) >= 1", corpusIV, false, false},
 	{"bare select wrapping SLEEP -> side-effect guard", "(SELECT SLEEP(9999)) >= 1", corpusIV, false, false},
+
+	// ---- Fail-closed: whitespace/comment obfuscation between a
+	// side-effect function name and its '(' must NOT defeat the guard.
+	// These are the exact tamper-tool shapes a WAF-evasion pass reaches
+	// for first (sqlmap --tamper=space2comment and friends). ----
+	{"ifnull wrapping SLEEP with space before paren -> side-effect guard", "IFNULL((SELECT SLEEP (9999)),0) >= 1", corpusIV, false, false},
+	{"ifnull wrapping SLEEP with tab before paren -> side-effect guard", "IFNULL((SELECT SLEEP\t(9999)),0) >= 1", corpusIV, false, false},
+	{"ifnull wrapping SLEEP with comment before paren -> side-effect guard", "IFNULL((SELECT SLEEP/**/(9999)),0) >= 1", corpusIV, false, false},
+	{"coalesce wrapping BENCHMARK with space before paren -> side-effect guard", "COALESCE((SELECT BENCHMARK (1000000,MD5(1))),0) >= 1", corpusIV, false, false},
+	{"coalesce wrapping GET_LOCK with comment before paren -> side-effect guard", "COALESCE((SELECT GET_LOCK/**/('a',9999)),0) >= 1", corpusIV, false, false},
+	{"ifnull wrapping RELEASE_LOCK, bare -> side-effect guard", "IFNULL((SELECT RELEASE_LOCK('a')),0) >= 1", corpusIV, false, false},
+	{"bare select wrapping GET_LOCK with tab before paren -> side-effect guard", "(SELECT GET_LOCK\t('a',9999)) >= 1", corpusIV, false, false},
 	{"int-compare shape but val is not int", "COALESCE((SELECT x),0) >= 4", corpusSV, false, false},
 	{"char-code shape missing 3rd arg", "ASCII(SUBSTRING(x,1)) >= 119", corpusSV, false, false},
 	{"char-code shape non-1 length arg", "ASCII(SUBSTRING(x,1,2)) >= 119", corpusSV, false, false},
