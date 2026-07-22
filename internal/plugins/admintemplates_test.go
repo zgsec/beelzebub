@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"html"
 	"regexp"
 	"strings"
 	"testing"
@@ -103,6 +104,83 @@ func TestServeAuthStage_S6_PluginInstallNonceMatchesAndPersists(t *testing.T) {
 	}
 	if storedNonce != bodyNonce {
 		t.Errorf("S6: sess.nonce = %q, body nonce = %q, want equal", storedNonce, bodyNonce)
+	}
+}
+
+// maliciousUsername is a username that carries HTML metacharacters and
+// Set-Cookie-hostile characters (';', '|', CR/LF) in one shot, chosen to
+// break out of the S5 users.php table-row markup and, if unsanitized, to
+// inject extra cookie attributes / split the response headers.
+const maliciousUsername = "</td></tr><script>alert(1)</script>"
+
+func TestServeAuthStage_S4_LoginCookieSanitizesUsername(t *testing.T) {
+	sess := armedAdminSession("w2s_probe")
+	_, headers, _, handled := serveAuthStage("/wp-login.php", sess)
+	if !handled {
+		t.Fatalf("S4: handled = false, want true")
+	}
+	setCookie := headers["Set-Cookie"]
+	if !strings.Contains(setCookie, "w2s_probe") {
+		t.Errorf("S4: benign username w2s_probe missing verbatim from Set-Cookie: %q", setCookie)
+	}
+
+	sess2 := armedAdminSession(maliciousUsername)
+	_, headers2, _, handled2 := serveAuthStage("/wp-login.php", sess2)
+	if !handled2 {
+		t.Fatalf("S4 (malicious): handled = false, want true")
+	}
+	setCookie2, ok := headers2["Set-Cookie"]
+	if !ok {
+		t.Fatalf("S4 (malicious): no Set-Cookie header in %v", headers2)
+	}
+	// The cookie value is itself pipe-delimited (username|expiration|
+	// token|hmac, see fabricateAuthCookieValue) and its attribute suffix
+	// ("; path=/; HttpOnly") legitimately carries ';' — those are the
+	// cookie's OWN structure, not attacker input. Isolate the
+	// attacker-controlled username field (the first '|'-delimited segment
+	// after "name=") and check only that for the forbidden characters, so
+	// this test proves the malicious username can't inject a fake extra
+	// field or break out of the field/attribute structure.
+	value := setCookie2
+	if i := strings.IndexByte(value, '='); i >= 0 {
+		value = value[i+1:]
+	}
+	usernameField := value
+	if i := strings.IndexByte(usernameField, '|'); i >= 0 {
+		usernameField = usernameField[:i]
+	} else {
+		t.Fatalf("S4 (malicious): cookie value %q has no '|' field delimiter, want username|expiration|token|hmac", value)
+	}
+	for _, bad := range []string{"<", ">", ";", "|", "\r", "\n"} {
+		if strings.Contains(usernameField, bad) {
+			t.Errorf("S4 (malicious): cookie username field %q contains forbidden character %q", usernameField, bad)
+		}
+	}
+	// And the full cookie value must still parse into exactly 4
+	// '|'-delimited fields — i.e. the sanitized username couldn't smuggle
+	// in an extra field boundary.
+	if got := strings.Count(value, "|"); got != 3 {
+		t.Errorf("S4 (malicious): cookie value has %d '|' delimiters, want exactly 3 (4 fields): %q", got, value)
+	}
+}
+
+func TestServeAuthStage_S5_UsersPageEscapesMaliciousUsername(t *testing.T) {
+	sess := armedAdminSession(maliciousUsername)
+	status, _, body, handled := serveAuthStage("/wp-admin/users.php", sess)
+	if !handled {
+		t.Fatalf("S5 (malicious): handled = false, want true")
+	}
+	if status != 200 {
+		t.Errorf("S5 (malicious) status = %d, want 200", status)
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Errorf("S5 (malicious): body contains an unescaped, executable <script> tag")
+	}
+	if strings.Contains(body, "</td></tr><script>") {
+		t.Errorf("S5 (malicious): body contains an unescaped table-row breakout")
+	}
+	if !strings.Contains(body, html.EscapeString(maliciousUsername)) {
+		t.Errorf("S5 (malicious): body does not contain the HTML-escaped username form")
 	}
 }
 

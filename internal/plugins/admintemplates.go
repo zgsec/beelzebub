@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 )
@@ -120,18 +121,40 @@ func serveAuthStage(path string, sess *chainSession) (status int, headers map[st
 // anything downstream inspects it.
 func serveLoginStage(username string) (int, map[string]string, string, bool) {
 	cookieName := "wordpress_logged_in_" + randomHexToken(4) // 8 hex chars, real WP's COOKIEHASH-derived suffix
-	cookieValue := fabricateAuthCookieValue(username)
+	cookieValue := fabricateAuthCookieValue(sanitizeCookieUsername(username))
 	headers := map[string]string{
 		"Set-Cookie": cookieName + "=" + cookieValue + "; path=/; HttpOnly",
 	}
 	return 200, headers, dashboardTemplate, true
 }
 
+// sanitizeCookieUsername strips sess.username down to the charset a real WP
+// username is already confined to ([A-Za-z0-9_.-], per the w2s_<hex> shape
+// the forge chain mints) before it goes anywhere near a Set-Cookie value. A
+// cookie value can't legally contain CR/LF (header/response splitting),
+// ';' (the WordPress cookie's own attribute delimiter), or '|' (this
+// cookie's own field delimiter, see fabricateAuthCookieValue) — an attacker
+// who sets username to any of those on the forge path must not be able to
+// inject headers or corrupt the cookie's own field structure. Unlike
+// html.EscapeString (used for the S5 HTML body), escaping isn't the right
+// tool for a cookie value, so this drops rather than encodes.
+func sanitizeCookieUsername(username string) string {
+	var b strings.Builder
+	b.Grow(len(username))
+	for _, r := range username {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // fabricateAuthCookieValue mimics the shape of a real WordPress auth
 // cookie's value: username|expiration|token|hmac, pipe-delimited. Nothing
 // downstream parses or validates it — the exploit's cookie jar only needs a
 // value to carry — so plausibility, not cryptographic correctness, is the
-// bar.
+// bar. Caller (serveLoginStage) is responsible for sanitizing username
+// first; this function does not re-sanitize.
 func fabricateAuthCookieValue(username string) string {
 	expiry := time.Now().Add(48 * time.Hour).Unix()
 	token := randomHexToken(20)
@@ -141,8 +164,14 @@ func fabricateAuthCookieValue(username string) string {
 
 // serveUsersStage is S5: the users.php list with sess.username injected
 // into the one row the exploit's raw substring check needs to see.
+// sess.username is attacker-controlled all the way from the forge chain
+// (T1-T4), so it's HTML-escaped before substitution — a benign w2s_<hex>
+// username (alphanumeric+underscore) is unchanged by escaping, so poc.py's
+// raw substring check still matches, but a username carrying HTML
+// metacharacters can't break out of the table row and corrupt the rest of
+// the served page.
 func serveUsersStage(username string) (int, map[string]string, string, bool) {
-	body := strings.ReplaceAll(usersTemplate, "{{USERNAME}}", username)
+	body := strings.ReplaceAll(usersTemplate, "{{USERNAME}}", html.EscapeString(username))
 	return 200, nil, body, true
 }
 
