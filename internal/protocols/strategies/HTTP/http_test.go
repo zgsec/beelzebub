@@ -320,7 +320,7 @@ func TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig(t *testing.T) {
 		RequestBodyMaxBytes: 50,
 		State:               &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestHTTP_SessionCreateSetsCookieAndCaptures(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestHTTP_SessionRequireRejectsUnauthed(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 		},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestHTTP_RawBodyFirst8KB(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +582,7 @@ func TestHTTP_HeaderCaptures(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +631,7 @@ func TestHTTP_CookieForgery_JWT(t *testing.T) {
 	}
 	// Even though sessionAction is require and sess is nil (so we 401),
 	// the forgery info must still appear in Captured.
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -885,7 +885,7 @@ func TestHTTP_MirrorTimingDelay(t *testing.T) {
 		req = req.WithContext(ctx)
 
 		start := time.Now()
-		_, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+		_, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatal(err)
@@ -953,7 +953,7 @@ func TestHTTP_MirrorTimingNoDelayOnReject(t *testing.T) {
 	req = req.WithContext(ctx)
 
 	start := time.Now()
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -1048,7 +1048,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation(t *testing.T) {
 	// mints the fabricated administrator on the chain session keyed by srcIP.
 	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
 		chainEscalationBatchS3("w2s_integration_test"), srcIP+":1234")
-	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1062,7 +1062,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation(t *testing.T) {
 	// Step 2: same source IP (different ephemeral port — RemoteAddr's port
 	// is stripped before the chainStore lookup) hits /wp-admin/users.php.
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", srcIP+":5555")
-	usersResp, err2, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil)
+	usersResp, err2, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil, nil)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
@@ -1108,7 +1108,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin(t *testing.T) {
 	// mints the fabricated administrator on the chain session keyed by srcIP.
 	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
 		chainEscalationBatchS3("w2s_wpadmin_test"), srcIP+":1234")
-	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1123,7 +1123,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin(t *testing.T) {
 	// this must route to ServeAuthStage's S4 login stage exactly like
 	// /wp-login.php does: 200 + a wordpress_logged_in_* Set-Cookie.
 	wpAdminReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/", "", srcIP+":5555")
-	wpAdminResp, err2, _ := buildHTTPResponse(servConf, tt, wpAdminCmd, wpAdminReq, nil, nil, chainStore, nil)
+	wpAdminResp, err2, _ := buildHTTPResponse(servConf, tt, wpAdminCmd, wpAdminReq, nil, nil, chainStore, nil, nil)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
@@ -1160,7 +1160,7 @@ func TestHTTP_ChainWiring_FreshSessionFallsThrough(t *testing.T) {
 		Handler: `{"code":"not_found"}`,
 	}
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", "198.51.100.44:1111")
-	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil)
+	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1186,7 +1186,7 @@ func TestHTTP_ChainWiring_NilChainStoreUnchanged(t *testing.T) {
 	}
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", "203.0.113.77:1234")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, nil /* chainStore */, nil)
+	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, nil /* chainStore */, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1240,7 +1240,7 @@ func escalateChainSession(t *testing.T, chainStore *plugins.ChainStore, tt *capt
 	}
 	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
 		chainEscalationBatchS3(username), srcIP+":1234")
-	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1283,7 @@ func TestHTTP_ChainWiring_UploadStage_S7S8_CapturesZipAndServesActivateFlow(t *t
 		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1320,7 +1320,7 @@ func TestHTTP_ChainWiring_UploadStage_S7S8_CapturesZipAndServesActivateFlow(t *t
 	}
 	activateReq := newChainTestRequest(t, http.MethodGet,
 		"/wp-admin/plugins.php?action=activate&plugin="+wantSlugPath+"&_wpnonce=deadbeef00", "", srcIP+":6666")
-	activateResp, err2, _ := buildHTTPResponse(servConf, tt, activateCmd, activateReq, nil, nil, chainStore, astore)
+	activateResp, err2, _ := buildHTTPResponse(servConf, tt, activateCmd, activateReq, nil, nil, chainStore, astore, nil)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
@@ -1356,7 +1356,7 @@ func TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough(t *testing
 		"/wp-admin/update.php?action=upload-plugin", string(body), "198.51.100.55:1111")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1404,7 +1404,7 @@ func TestHTTP_ChainWiring_UploadStage_BroadCapture_NonAdminCreatedStillCaptures(
 	// freshly created by chainStore.Get inside buildHTTPResponse and never
 	// reaches adminCreated. sess != nil (armed) is still true, which is the
 	// only thing the capture branch checks.
-	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1457,7 +1457,7 @@ func TestHTTP_ChainWiring_UploadStage_NilArtifactStoreStillServesSuccess(t *test
 		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil /* artifactStore */)
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil /* artifactStore */, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1490,7 +1490,7 @@ func TestHTTP_ChainWiring_UploadStage_OversizeArtifactStillServesSuccess(t *test
 		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1532,7 +1532,7 @@ func TestHTTP_ChainWiring_UploadStage_NilChainStoreUnchanged(t *testing.T) {
 		"/wp-admin/update.php?action=upload-plugin", string(body), "203.0.113.102:5555")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, nil /* chainStore */, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, nil /* chainStore */, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1576,7 +1576,7 @@ func armCommandStageSession(t *testing.T, chainStore *plugins.ChainStore, tt *ca
 		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
 	uploadReq.Header.Set("Content-Type", contentType)
 
-	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil)
+	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1625,7 +1625,7 @@ func TestHTTP_ChainWiring_CommandStage_QueryForm_CapturesBodyAndServesMarkerJSON
 		"/?rest_route=/wp2shell/v1/deadbeef01", commandStageBody, srcIP+":8888")
 	cmdReq.Header.Set("Content-Type", "application/json")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1667,7 +1667,7 @@ func TestHTTP_ChainWiring_CommandStage_PrettyPathForm_CapturesBodyAndServesMarke
 		"/wp-json/wp2shell/v1/deadbeef02", commandStageBody, srcIP+":8889")
 	cmdReq.Header.Set("Content-Type", "application/json")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1714,7 +1714,7 @@ func TestHTTP_ChainWiring_CommandStage_GateNotUploadOpenFallsThrough(t *testing.
 		"/?rest_route=/wp2shell/v1/deadbeef03", commandStageBody, srcIP+":8890")
 	cmdReq.Header.Set("Content-Type", "application/json")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, chainStore, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1753,7 +1753,7 @@ func TestHTTP_ChainWiring_CommandStage_NilChainStoreUnchanged(t *testing.T) {
 		"/?rest_route=/wp2shell/v1/deadbeef04", commandStageBody, "203.0.113.153:8891")
 	cmdReq.Header.Set("Content-Type", "application/json")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, nil /* chainStore */, astore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmdCmd, cmdReq, nil, nil, nil /* chainStore */, astore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

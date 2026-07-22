@@ -43,6 +43,11 @@ func New(dir string, maxBodyBytes int) *Store {
 	return &Store{dir: dir, maxBodyBytes: maxBodyBytes}
 }
 
+// MaxBodyBytes is the configured per-artifact size cap (0 = unbounded). The
+// HTTP handler reads it to size the plugin-upload body budget so a real .zip
+// is captured whole rather than truncated at the default 1 MiB read limit.
+func (s *Store) MaxBodyBytes() int { return s.maxBodyBytes }
+
 // Write persists body atomically + writes a meta.json sibling.
 // Idempotent: same body to same store is a no-op on the .bin.
 func (s *Store) Write(body []byte, captures map[string]any) (Artifact, error) {

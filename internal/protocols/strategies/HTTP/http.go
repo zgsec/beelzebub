@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -109,17 +110,14 @@ type HTTPStrategy struct {
 	noveltyStore      *noveltydetect.FingerprintStore
 	noveltyWindowDays int
 
-	// Stateful HTTP session correlation (nil when servConf.State == nil or CookieName == "")
-	cookieStore   *historystore.CookieSessionStore
-	artifactStore *artifactstore.Store
-
-	// WP gadget-chain session store (Task 7). nil unless some command's
-	// ResponseMirror config carries an enabled Chain block — see
-	// findMirrorChain and its call site in Init. nil here is the gate that
-	// keeps every armed-chain code path (the auth-stage routing branch and
-	// the sess argument to MirrorRespond/MirrorDelayMs) a complete no-op for
-	// every service that hasn't opted in.
-	chainStore *plugins.ChainStore
+	// NOTE: stateful-HTTP stores (cookie/artifact) and the WP gadget-chain
+	// store are deliberately NOT fields here. This strategy is a SINGLE
+	// instance shared across every http lure (builder.go), so a per-service
+	// store held on the struct leaks one lure's stateful config into another
+	// lure's handler — that caused a nil-State panic on 2026-07-22 when
+	// marlowe's state: block set a shared cookieStore that stateless lures
+	// then dereferenced. They are now per-service locals in Init, captured by
+	// that service's handler closure, exactly like the Fault injector above.
 }
 
 // chainStoreEntryCap bounds the WP gadget-chain session store passed into
@@ -299,6 +297,63 @@ func isWP2ShellCommandRequest(request *http.Request) bool {
 	return strings.HasPrefix(request.URL.Path, wp2ShellPrettyPathPrefix)
 }
 
+// defaultBodyReadBudget bounds an ordinary request-body read (DoS guard).
+// multipartFramingHeadroom is added on top of the artifact cap for the upload
+// path so a .zip that is exactly the cap size isn't clipped by the multipart
+// envelope around it; the artifact store's own maxBodyBytes stays the authority
+// on whether the extracted part is oversize.
+//
+// maxConcurrentUploadReads bounds how many enlarged plugin-upload bodies may be
+// buffered at once. The enlarged read (up to the artifact cap) is reachable by
+// ANY request shaped like the S7 upload — capture is deliberately capture-first
+// and NOT auth-gated — and the container runs under a hard mem_limit. Without a
+// bound, an attacker spraying large uploads could OOM the whole sensor. Excess
+// uploads fall back to the 1 MiB budget (their capture is dropped as oversize —
+// honest — rather than risking the process). Peak enlarged-buffer memory is
+// therefore bounded by maxConcurrentUploadReads × ~2 × cap (the buffered body
+// plus the extracted part), independent of attacker concurrency.
+const (
+	defaultBodyReadBudget    = 1024 * 1024
+	multipartFramingHeadroom = 64 * 1024
+	maxConcurrentUploadReads = 4
+)
+
+var uploadReadSlots = make(chan struct{}, maxConcurrentUploadReads)
+
+// isPluginUploadRequest reports whether request is the S7 plugin-.zip upload
+// POST — the only path that legitimately carries a multi-MiB body. Mirrors the
+// /wp-admin/update.php?action=upload-plugin branch in buildHTTPResponse so the
+// enlarged read budget applies to exactly the requests that get captured.
+func isPluginUploadRequest(request *http.Request) bool {
+	return request.Method == http.MethodPost &&
+		request.URL.Path == "/wp-admin/update.php" &&
+		request.URL.Query().Get("action") == "upload-plugin"
+}
+
+// acquireUploadReadSlot tries, without blocking, to reserve one enlarged-upload
+// -read slot. On success it returns a release func (call once, when the
+// buffered bytes are no longer needed) and true. On failure it returns a no-op
+// release and false, and the caller MUST use the default 1 MiB budget.
+func acquireUploadReadSlot() (release func(), ok bool) {
+	select {
+	case uploadReadSlots <- struct{}{}:
+		return func() { <-uploadReadSlots }, true
+	default:
+		return func() {}, false
+	}
+}
+
+// enlargedUploadBudget is the read budget for a captured plugin upload: the
+// configured artifact cap plus multipart framing headroom, so a real .zip is
+// captured whole instead of truncated at 1 MiB. Never smaller than the default;
+// the store's own maxBodyBytes stays the authority on oversize.
+func enlargedUploadBudget(artifactStore *artifactstore.Store) int64 {
+	if m := artifactStore.MaxBodyBytes(); m > defaultBodyReadBudget {
+		return int64(m) + multipartFramingHeadroom
+	}
+	return int64(defaultBodyReadBudget)
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Bind the fault injector PER-SERVICE, here, into a local the handler
 	// closure captures — exactly as servConf is captured per service below.
@@ -322,30 +377,36 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		}
 	}
 
-	// Stateful HTTP: create cookie + artifact stores when configured.
+	// Stateful HTTP: per-service cookie + artifact stores, captured as LOCALS
+	// for the handler closure below — NOT stored on httpStrategy. The strategy
+	// is a single shared instance across every http lure, so a field set here
+	// by one lure leaks into another lure's handler (2026-07-22 nil-State
+	// panic). Same per-service-capture pattern as `fault` above.
+	var cookieStore *historystore.CookieSessionStore
+	var artifactStore *artifactstore.Store
 	if servConf.State != nil && servConf.State.CookieName != "" {
 		ttl := time.Duration(servConf.State.TTLSeconds) * time.Second
 		if ttl == 0 {
 			ttl = 30 * time.Minute
 		}
-		httpStrategy.cookieStore = historystore.NewCookieSessionStore(ttl)
+		cookieStore = historystore.NewCookieSessionStore(ttl)
 		if servConf.State.ArtifactPath != "" {
-			httpStrategy.artifactStore = artifactstore.New(
+			artifactStore = artifactstore.New(
 				servConf.State.ArtifactPath,
 				servConf.State.ArtifactMaxBytes,
 			)
 		}
 	}
 
-	// WP gadget-chain session store (Task 7): armed only when some command's
-	// ResponseMirror config carries an enabled Chain block. Chain.Enabled
-	// (not just Chain != nil) gates arming here, so `chain: {enabled: false}`
-	// — a config that opted into the block but explicitly turned it off —
-	// leaves chainStore nil same as no `chain:` key at all. compileMirror
-	// has already defaulted CheckpointTTLSecs (>0) by the time Init runs, so
-	// no additional zero-guard is needed here.
+	// WP gadget-chain session store (Task 7): armed only for THIS service when
+	// its own ResponseMirror config carries an enabled Chain block. Chain.Enabled
+	// (not just Chain != nil) gates arming, so `chain: {enabled: false}` leaves
+	// chainStore nil same as no `chain:` key. Per-service local for the same
+	// shared-instance reason as the stores above. compileMirror has already
+	// defaulted CheckpointTTLSecs (>0) by the time Init runs.
+	var chainStore *plugins.ChainStore
 	if chain := findMirrorChain(servConf); chain != nil && chain.Enabled {
-		httpStrategy.chainStore = plugins.NewChainStore(time.Duration(chain.CheckpointTTLSecs)*time.Second, chainStoreEntryCap)
+		chainStore = plugins.NewChainStore(time.Duration(chain.CheckpointTTLSecs)*time.Second, chainStoreEntryCap)
 	}
 
 	startHTTPSessionCleanup()
@@ -353,17 +414,22 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 	serverMux := http.NewServeMux()
 
 	serverMux.HandleFunc("/", func(responseWriter http.ResponseWriter, request *http.Request) {
-		// Build per-request session context when stateful mode is active.
+		// Build per-request session context when THIS service is stateful.
+		// Gated on the per-service cookieStore local (set in Init only when
+		// this service's own State.CookieName is configured), never on a
+		// shared field — so a stateless lure sharing the strategy instance
+		// can't deref a nil servConf.State here. cookieStore != nil implies
+		// servConf.State != nil && CookieName != "".
 		var sctx *sessionContext
-		if httpStrategy.cookieStore != nil {
+		if cookieStore != nil {
 			sctx = &sessionContext{
-				cookieStore:   httpStrategy.cookieStore,
-				artifactStore: httpStrategy.artifactStore,
+				cookieStore:   cookieStore,
+				artifactStore: artifactStore,
 				cookieName:    servConf.State.CookieName,
 				ttlSeconds:    servConf.State.TTLSeconds,
 			}
 			if c, err := request.Cookie(servConf.State.CookieName); err == nil {
-				if cs, ok := httpStrategy.cookieStore.Get(c.Value); ok {
+				if cs, ok := cookieStore.Get(c.Value); ok {
 					sctx.sess = cs
 				} else if shape := classifyForgedCookie(c.Value); shape != "" {
 					sctx.forgedShape = shape
@@ -387,21 +453,47 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		// "404 Not Found!" while attackers received the configured vLLM envelope.
 		var fireTrace fireTraceFunc
 
-		// Buffer the request body ONLY if some command actually matches on it.
-		// Configs that use no bodyRegex (i.e. every pre-existing one) keep the
-		// old behaviour exactly: the body stays untouched here and is read for
-		// the first time inside buildHTTPResponse.
+		// Buffer the request body when some command matches on it, OR when this
+		// is the plugin-upload capture path (so the full .zip is available to
+		// buildHTTPResponse downstream). Configs that use no bodyRegex and are
+		// not the upload path keep the old behaviour exactly: the body stays
+		// untouched here and is read for the first time inside buildHTTPResponse.
 		//
 		// When we do buffer, request.Body must be restored — it is a one-shot
 		// stream, and buildHTTPResponse reads it downstream for sessionCapture
-		// / artifactCapture. The restore happens even on a read error, so a
-		// partially-drained body is never handed downstream. Bounded to 1 MiB
-		// to match the limit buildHTTPResponse applies.
+		// / artifactCapture. The read budget is 1 MiB by default but expands to
+		// the configured artifact cap for the upload path, so a real plugin
+		// .zip is captured WHOLE rather than silently truncated. Command
+		// matching still only sees a bounded 1 MiB prefix — we never run a
+		// regex over a multi-MiB upload.
+		// preBody holds the single buffered copy of the request body, handed to
+		// buildHTTPResponse so it never re-reads the stream — one buffer, not
+		// two (an earlier double-read held ~2× the enlarged budget resident).
 		reqBody := ""
-		if request.Body != nil && anyBodyRegex(servConf.Commands) {
-			b, _ := io.ReadAll(io.LimitReader(request.Body, 1024*1024))
-			reqBody = string(b)
+		var preBody []byte
+		if request.Body != nil && (anyBodyRegex(servConf.Commands) || isPluginUploadRequest(request)) {
+			budget := int64(defaultBodyReadBudget)
+			// The upload-capture path may read up to the configured artifact cap
+			// so a real .zip is captured whole. That read is memory-amplifying
+			// and reachable without auth, so it runs only while holding one of a
+			// bounded pool of slots; when the pool is saturated we keep the 1 MiB
+			// budget (capture dropped as oversize — honest — never an OOM). The
+			// slot is held for the whole request (buildHTTPResponse still holds
+			// preBody), released by defer when the handler returns.
+			if artifactStore != nil && isPluginUploadRequest(request) {
+				if release, ok := acquireUploadReadSlot(); ok {
+					defer release()
+					budget = enlargedUploadBudget(artifactStore)
+				}
+			}
+			b, _ := io.ReadAll(io.LimitReader(request.Body, budget))
+			preBody = b
 			request.Body = io.NopCloser(bytes.NewReader(b))
+			matchPrefix := b
+			if len(matchPrefix) > defaultBodyReadBudget {
+				matchPrefix = matchPrefix[:defaultBodyReadBudget]
+			}
+			reqBody = string(matchPrefix)
 		}
 
 		for _, command := range servConf.Commands {
@@ -411,7 +503,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore, preBody)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -424,7 +516,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, chainStore, artifactStore, preBody)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -529,7 +621,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store) (httpResponse, error, fireTraceFunc) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store, preBody []byte) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// trace fire (covers static-handler + LLM plugin paths uniformly).
 	// Trace fires from the caller AFTER all resp modifications complete.
@@ -541,9 +633,18 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		StatusCode: command.StatusCode,
 	}
 
-	// Limit body read to 1MB to prevent DoS attacks.
-	// bodyBytes is reused for sessionCapture regex and artifactCapture — read only once.
-	bodyBytes, err := io.ReadAll(io.LimitReader(request.Body, 1024*1024))
+	// Body bytes. When the caller already buffered the body (preBody != nil —
+	// the bodyRegex and plugin-upload paths, where the enlarged, slot-bounded
+	// read happened once, under the DoS/memory guard), reuse that single buffer
+	// rather than re-reading the stream. Otherwise read here, bounded to 1 MiB.
+	// bodyBytes feeds sessionCapture regex and artifactCapture — one buffer only.
+	var bodyBytes []byte
+	var err error
+	if preBody != nil {
+		bodyBytes = preBody
+	} else {
+		bodyBytes, err = io.ReadAll(io.LimitReader(request.Body, defaultBodyReadBudget))
+	}
 	body := ""
 	if err == nil {
 		body = string(bodyBytes)
@@ -692,10 +793,13 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// There is no os.Open/exec/unzip anywhere on this path, and never
 		// will be: the zip is never written under a name or path a
 		// webserver would execute, and this function does nothing else
-		// with its contents. A Write failure (including
-		// artifactstore.ErrOversize) is swallowed deliberately — capture
-		// is best-effort telemetry, not a gate on the exploit's forward
-		// progress, so the success page below is served either way.
+		// with its contents. A Write failure never gates the exploit's
+		// forward progress (capture is best-effort telemetry — the success
+		// page below is served either way), but it is LOGGED, not silently
+		// swallowed: ErrOversize means the cap refused a too-large part (so
+		// an operator porting artifacts knows a capture was dropped and can
+		// widen the cap), and any other error (disk full, bad artifact dir)
+		// must not fail silently on a capture surface.
 		//
 		// plugins.ServeUploadStage re-checks sess.adminCreated itself, so
 		// a request that reaches here without having cleared T4 still
@@ -728,12 +832,22 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 						if splitErr != nil {
 							host = request.RemoteAddr
 						}
-						_, _ = chainArtifactStore.Write(zipBytes, map[string]any{
+						// The store rejects a part larger than its configured cap
+						// with ErrOversize and writes NOTHING — so we never persist
+						// a truncated, corrupt fragment under a SHA that matches no
+						// real file. Surface the oversize drop rather than swallow
+						// it silently, so an operator porting artifacts to analysis
+						// knows a capture was refused (and can widen the cap).
+						if _, werr := chainArtifactStore.Write(zipBytes, map[string]any{
 							"stage":    "plugin_upload",
 							"src_ip":   host,
 							"session":  host,
 							"filename": filename,
-						})
+						}); errors.Is(werr, artifactstore.ErrOversize) {
+							log.Warnf("wp2shell plugin-upload capture from %s exceeded artifact cap — not stored (%d bytes, filename %q)", host, len(zipBytes), filename)
+						} else if werr != nil {
+							log.Warnf("wp2shell plugin-upload capture from %s failed to store: %v", host, werr)
+						}
 					}
 					if status, hdrs, uploadBody, handled := plugins.ServeUploadStage(sess, filename); handled {
 						resp.StatusCode = status
@@ -793,11 +907,18 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 				if splitErr != nil {
 					host = request.RemoteAddr
 				}
-				_, _ = chainArtifactStore.Write(bodyBytes, map[string]any{
+				// Best-effort, like the S7 upload capture: never gates the
+				// response, but a store failure is logged, not swallowed, so a
+				// full/broken artifact dir on a capture surface is visible. S9
+				// bodies are tiny ({"c":"…"} JSON, 1 MiB-bounded) so ErrOversize
+				// is not expected here, but a disk/permission error would be.
+				if _, werr := chainArtifactStore.Write(bodyBytes, map[string]any{
 					"stage":   "command",
 					"src_ip":  host,
 					"session": host,
-				})
+				}); werr != nil {
+					log.Warnf("wp2shell command capture from %s failed to store: %v", host, werr)
+				}
 			}
 			if status, hdrs, cmdBody, handled := plugins.ServeCommandStage(sess); handled {
 				resp.StatusCode = status
