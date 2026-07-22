@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"hash/crc32"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,4 +54,73 @@ func evalBlindPredicate(cond string, val fictionValue) (bool, bool) {
 	}
 
 	return false, false // unrecognized -> fail closed
+}
+
+// The three blind-read signatures below are lifted verbatim from the
+// exploit's own subqueries: a hex-encoded table-suffix probe against
+// INFORMATION_SCHEMA.TABLES, a hex-encoded serialized-capabilities probe
+// against usermeta, and a hex-encoded (post_type, post_name) lookup against
+// the oEmbed cache row the chain minted. Matching is substring-based and
+// case-insensitive — these are literal hex/string signatures the exploit
+// emits verbatim, not a general SQL parse.
+const (
+	// hexPostsSuffix is 0x5f706f737473, the hex encoding of "_posts".
+	hexPostsSuffix = "0x5f706f737473"
+	// hexAdminFlag is the hex encoding of the serialized capabilities
+	// fragment s:13:"administrator";b:1;
+	hexAdminFlag = "0x733a31333a2261646d696e6973747261746f72223b623a313b"
+	// hexOembedCache is the hex encoding of the post_type "oembed_cache".
+	hexOembedCache = "0x6f656d6265645f6361636865"
+)
+
+// rePostName pulls the hex-encoded post_name value (itself the ASCII bytes
+// of an md5 digest) out of a cache-id read predicate, e.g.
+// "post_name=0x666f6f..." -> "666f6f...".
+var rePostName = regexp.MustCompile(`(?i)post_name\s*=\s*0x([0-9a-f]+)`)
+
+// recognizeBlindRead inspects an operator's blind-SQLi read predicate and
+// identifies which of the three values the WP gadget chain reads via blind
+// SQLi (from the exploit's own poc.py): the live table prefix, the
+// administrator's user id, or one of the three oEmbed-cache row ids the
+// chain needs to reference consistently across requests. On a match it
+// returns a fabricated fictionValue standing in for the real read; the
+// cache-id case derives a value deterministic per-md5 and stores the
+// assignment on sess so repeat reads for the same object resolve to the
+// same fabricated id. Anything that doesn't match one of the three exact
+// signatures fails closed: (fictionValue{}, false) — this function never
+// guesses at an unrecognized predicate shape.
+func recognizeBlindRead(cond string, sess *chainSession) (fictionValue, bool) {
+	c := strings.ToLower(cond)
+
+	// 1. Table prefix: SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES ...
+	// RIGHT(TABLE_NAME,6)=0x5f706f737473 ("_posts").
+	if strings.Contains(c, "information_schema.tables") && strings.Contains(c, hexPostsSuffix) {
+		return fictionValue{s: "wp_posts"}, true
+	}
+
+	// 2. Administrator id: usermeta/capabilities row carrying the serialized
+	// s:13:"administrator";b:1; flag.
+	if (strings.Contains(c, "usermeta") || strings.Contains(c, "capabilities")) && strings.Contains(c, hexAdminFlag) {
+		return fictionValue{n: 1, isInt: true}, true
+	}
+
+	// 3. oEmbed cache row id: post_type=0x6f656d6265645f6361636865
+	// ("oembed_cache") AND post_name=0x<hex-encoded md5>.
+	if strings.Contains(c, hexOembedCache) {
+		if m := rePostName.FindStringSubmatch(c); m != nil {
+			key := m[1] // hex-encoded md5, lowercased by c already being lowercase
+			var id int64
+			sess.mutate(func(cs *chainSession) {
+				if existing, ok := cs.cacheIDs[key]; ok {
+					id = existing
+					return
+				}
+				id = 100 + int64(crc32.ChecksumIEEE([]byte(key))%900)
+				cs.cacheIDs[key] = id
+			})
+			return fictionValue{n: id, isInt: true}, true
+		}
+	}
+
+	return fictionValue{}, false // unrecognized -> fail closed
 }
