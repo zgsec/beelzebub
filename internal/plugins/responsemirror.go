@@ -422,18 +422,41 @@ func booleanFictionElement(result bool) mirrorElem {
 // "IF((cond),SLEEP(n),0)" / "0) AND (cond)-- -" — and the fiction-fallback
 // evaluators (recognizeBlindRead/evalBlindPredicate) need that cosmetic
 // layer gone before evalBlindPredicate's top-level operator scan, exactly as
-// evalLiteralBool already requires for a literal comparison. Only strips
-// when the FIRST and LAST bytes are '(' and ')' — a real fiction predicate's
-// right-hand side is always a bare integer literal (see
-// evalBlindPredicate/splitTopLevelCompare), so it never itself ends in ')',
-// making this safe against accidentally eating a structural paren that
-// belongs to the condition rather than to the wrapper.
+// evalLiteralBool already requires for a literal comparison.
+//
+// It strips ONLY when byte 0 is '(' and that paren's matching close is the
+// LAST byte — i.e. the entire (trimmed) input is one balanced enclosing
+// pair, verified by walking paren depth from index 0 (mirroring the
+// depth-verification matchBareSelectSubquery does in fictiondb.go). A
+// compound condition like "(cond) AND (x)" has its first '(' close well
+// before the last byte, so depth returns to 0 mid-string — not an enclosing
+// pair — and this returns the input unchanged rather than eating the outer
+// parens of the left-hand clause. Unbalanced input ("((a)") and empty input
+// both fall through unchanged without panicking.
 func stripOneParenLayer(cond string) string {
 	s := strings.TrimSpace(cond)
-	if len(s) >= 2 && s[0] == '(' && s[len(s)-1] == ')' {
-		return strings.TrimSpace(s[1 : len(s)-1])
+	if len(s) < 2 || s[0] != '(' {
+		return s
 	}
-	return s
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return s // unbalanced (stray close) → unchanged
+			}
+			if depth == 0 {
+				if i != len(s)-1 {
+					return s // closes before the end → not one enclosing pair
+				}
+				return strings.TrimSpace(s[1 : len(s)-1])
+			}
+		}
+	}
+	return s // never returned to depth 0 → unbalanced → unchanged
 }
 
 // evalLiteralBool decides whether a SQL boolean condition is a CONSTANT literal

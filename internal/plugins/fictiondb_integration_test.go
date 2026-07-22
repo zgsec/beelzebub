@@ -209,6 +209,38 @@ func TestFictionOracle_CalibrationUnchanged(t *testing.T) {
 	}
 }
 
+// TestFictionOracle_DoubleWrapped_TimingPath exercises the double-paren-
+// wrapped form on the TIMING path specifically — "SELECT IF((<cond>),SLEEP(n),0)",
+// as opposed to ifSleepFrag's single-paren "SELECT IF(<cond>,SLEEP(n),0)"
+// used by every other test in this file. This is the exact shape
+// stripOneParenLayer's fix targets on sleepDelay's fiction-fallback branch
+// (responsemirror.go): before the fix, an over-eager strip could have masked
+// whether the strip+recognize+eval chain was actually being reached on this
+// path (as opposed to the boolean/forgeElement path, which
+// TestFictionOracle_BooleanContent_PresentAbsent already covers). A
+// fabricated-true recognized blind-read condition must still yield n*1000;
+// fabricated-false must yield 0.
+func TestFictionOracle_DoubleWrapped_TimingPath(t *testing.T) {
+	sess := newChainSession()
+	m := timingMirror()
+
+	doubleIfSleepFrag := func(cond string, n int) string {
+		return url.QueryEscape("SELECT IF((" + cond + "),SLEEP(" + strconv.Itoa(n) + "),0)")
+	}
+
+	trueCond := "COALESCE(" + adminIDSubquery + ",0)=1" // fabricated admin id IS 1 -> true
+	trueBody := sleepBody(doubleIfSleepFrag(trueCond, 7))
+	if got := MirrorDelayMs(m, []byte(trueBody), sess); got != 7000 {
+		t.Fatalf("double-wrapped fiction-true (timing path): MirrorDelayMs = %d, want 7000", got)
+	}
+
+	falseCond := "COALESCE(" + adminIDSubquery + ",0)=999" // fabricated admin id is NOT 999 -> false
+	falseBody := sleepBody(doubleIfSleepFrag(falseCond, 7))
+	if got := MirrorDelayMs(m, []byte(falseBody), sess); got != 0 {
+		t.Fatalf("double-wrapped fiction-false (timing path): MirrorDelayMs = %d, want 0", got)
+	}
+}
+
 // TestFictionOracle_FailClosed proves the fiction fallback fails CLOSED (zero
 // delay, no fabricated answer) for reads recognizeBlindRead must never
 // answer: a credential-column read (hard denylist, even though it superficially

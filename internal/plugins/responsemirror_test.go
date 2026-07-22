@@ -391,6 +391,32 @@ func TestEvalLiteralBool(t *testing.T) {
 	}
 }
 
+// TestStripOneParenLayer pins the balanced-enclosing-pair behavior: strip
+// happens ONLY when the whole (trimmed) input is one matched pair (byte 0 is
+// '(' and ITS matching close is the final byte), never on a bare
+// first/last-byte check. "(cond) AND (x)" is the over-strip regression this
+// guards: naive first/last-byte stripping would mangle it to
+// "cond) AND (x" (the outer parens there belong to two separate clauses, not
+// one enclosing wrapper) — this must come back UNCHANGED.
+func TestStripOneParenLayer(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"single enclosing pair", "(1=1)", "1=1"},
+		{"compound condition NOT over-stripped", "(cond) AND (x)", "(cond) AND (x)"},
+		{"double-wrapped strips one layer", "((a))", "(a)"},
+		{"unbalanced input unchanged", "((a)", "((a)"},
+		{"empty input unchanged", "", ""},
+	}
+	for _, c := range cases {
+		if got := stripOneParenLayer(c.in); got != c.want {
+			t.Errorf("%s: stripOneParenLayer(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
 func timingMirror() *parser.MirrorConfig {
 	m := wpVulnMirror() // reuse the shipped vuln config (reflection intact)
 	ifRe := `IF(?:%28|\()(.+?)(?:%2C|,)SLEEP(?:%28|\()([0-9]+)`
