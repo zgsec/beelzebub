@@ -20,8 +20,15 @@ func TestEvalBlindPredicate(t *testing.T) {
 		// getint probe: COALESCE((subq),0) >= N
 		{"COALESCE((SELECT x),0) >= 4", iv, true, true},
 		{"COALESCE((SELECT x),0) >= 6", iv, false, true},
+		{"COALESCE((SELECT ID FROM x),0) >= 4", iv, true, true},
+		{"COALESCE((SELECT ID FROM x),0) >= 6", iv, false, true},
+		// ASCII/SUBSTRING out-of-range pos -> byte 0, still recognized
+		{"ASCII(SUBSTRING(COALESCE((SELECT x),''),9,1)) >= 1", sv, false, true},
 		// unrecognized predicate -> fail closed
 		{"BENCHMARK(1000000,MD5(1)) >= 1", sv, false, false},
+		// non-COALESCE-wrapped int-looking predicate -> unrecognized, fail
+		// closed (regression guard for the reGe tightening)
+		{"SLEEP(9999) >= 1", iv, false, false},
 	}
 	for _, c := range cases {
 		got, ok := evalBlindPredicate(c.cond, c.val)

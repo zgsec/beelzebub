@@ -18,7 +18,7 @@ type fictionValue struct {
 var (
 	reCharLen = regexp.MustCompile(`(?i)^\s*CHAR_LENGTH\s*\(.*\)\s*>=\s*(\d+)\s*$`)
 	reAscii   = regexp.MustCompile(`(?i)^\s*ASCII\s*\(\s*SUBSTRING\s*\(.*,\s*(\d+)\s*,\s*1\s*\)\s*\)\s*>=\s*(\d+)\s*$`)
-	reGe      = regexp.MustCompile(`(?i)^\s*.*\)\s*>=\s*(\d+)\s*$`) // getint: <coalesce int> >= N
+	reGe      = regexp.MustCompile(`(?i)^\s*COALESCE\s*\(.*\)\s*>=\s*(\d+)\s*$`) // getint: COALESCE((<subquery>),0) >= N
 )
 
 // evalBlindPredicate evaluates an operator's blind-SQLi read predicate
