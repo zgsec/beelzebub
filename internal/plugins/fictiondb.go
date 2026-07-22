@@ -531,6 +531,42 @@ func extractCacheKey(c string) (string, bool) {
 	return "", false
 }
 
+// ---- Hard gate: credential/secret column denylist --------------------------
+//
+// DOCTRINE: this lure must NEVER answer a read of a credential/secret
+// column, no matter what intent shape the surrounding predicate also
+// matches. A tool can scope a user_pass/user_login/... extraction through
+// exactly the same usermeta/capabilities/administrator co-occurrence intent
+// 2 keys on below (e.g. SELECT SUBSTRING(user_pass,1,1) FROM wp_users WHERE
+// ID=(SELECT user_id FROM wp_usermeta WHERE meta_key='capabilities' AND
+// meta_value LIKE '%administrator%' LIMIT 1)) — the outer read is a
+// password byte, not an admin id, even though the WHERE clause
+// co-occurrence looks identical to the legitimate admin-id lookup. Intent
+// recognition is keyed on document-wide token co-occurrence, not on what's
+// actually being SELECTed, so it cannot tell these apart by itself; this
+// denylist is the anchor that does.
+//
+// Checked FIRST in recognizeBlindRead, before any intent matching, as a
+// hard fail-closed screen — the same defense-in-depth role containsSideEffect
+// plays in evalBlindPredicate. Word-boundary matched so "user_pass" doesn't
+// also trip on e.g. "user_passx", and crucially so it does NOT catch
+// "user_id" or "usermeta" — both legitimate, non-secret, and referenced by
+// the real admin-id read (u.ID / m.user_id). Applied to the already
+// comment-stripped/url-decoded/lowercased cond, so the same obfuscations
+// containsSideEffect defeats are handled for free; the (?i) flag is
+// additional defense in depth in case this is ever matched against
+// non-normalized input. No panic, no distinctive behavior on a hit — the
+// caller just fails closed like any other unrecognized shape.
+var credentialColumnRe = regexp.MustCompile(
+	`(?i)\b(user_pass|user_login|user_email|user_activation_key|user_url)\b`)
+
+// hasCredentialColumnRead reports whether c (already normalized) references
+// any wp_users credential/PII column. Never panics: regexp matching over a
+// string is total.
+func hasCredentialColumnRead(c string) bool {
+	return credentialColumnRe.MatchString(c)
+}
+
 // recognizeBlindRead inspects an operator's blind-SQLi read predicate and
 // identifies which of the three values the WP gadget chain reads via blind
 // SQLi: the live table prefix, the administrator's user id, or an
@@ -549,6 +585,13 @@ func extractCacheKey(c string) (string, bool) {
 // input — every regex match and index is total/guarded.
 func recognizeBlindRead(cond string, sess *chainSession) (fictionValue, bool) {
 	c := normalizeReadCond(cond)
+
+	// Hard doctrine gate: NEVER answer a read scoped through a credential/
+	// secret column, regardless of what intent it also appears to match.
+	// Checked before any intent recognition below.
+	if hasCredentialColumnRead(c) {
+		return fictionValue{}, false
+	}
 
 	// 1. Table prefix.
 	if infoSchemaRe.MatchString(c) && hasPostsSuffixFilter(c) {

@@ -500,6 +500,91 @@ func TestReadIntentCorpus_FailClosed(t *testing.T) {
 	}
 }
 
+// TestReadIntentCorpus_CredentialDenylist is the regression guard for the
+// credential-column doctrine gate: a blind read that co-occurs with the
+// SAME usermeta/capabilities/administrator tokens intent 2 keys on, but is
+// actually SELECTing a wp_users credential/PII column scoped through that
+// context, must fail closed — not be misclassified as the admin-id intent.
+// Intent recognition is document-wide co-occurrence, so without the
+// denylist gate these are indistinguishable from a legitimate admin-id
+// read; this test is what proves the gate, not just the intent grammar.
+func TestReadIntentCorpus_CredentialDenylist(t *testing.T) {
+	failClosedCases := []struct {
+		name string
+		cond string
+	}{
+		{
+			"user_pass scoped through admin-id subquery (ID=(SELECT user_id ...))",
+			"SELECT SUBSTRING(user_pass,1,1) FROM wp_users WHERE ID=(SELECT user_id FROM wp_usermeta " +
+				"WHERE meta_key='capabilities' AND meta_value LIKE '%administrator%' LIMIT 1)",
+		},
+		{
+			"user_pass scoped through admin-id join (COALESCE + JOIN-style WHERE)",
+			"COALESCE((SELECT SUBSTRING(u.user_pass,1,1) FROM wp_users u, wp_usermeta m " +
+				"WHERE u.ID=m.user_id AND m.meta_key='wp_capabilities' AND m.meta_value LIKE '%administrator%'),0)",
+		},
+		{
+			"user_login scoped through admin-id context",
+			"SELECT SUBSTRING(user_login,1,1) FROM wp_users u, wp_usermeta m " +
+				"WHERE u.ID=m.user_id AND m.meta_key='capabilities' AND m.meta_value LIKE '%administrator%'",
+		},
+		{
+			"user_email scoped through admin-id context",
+			"SELECT ASCII(SUBSTRING(user_email,1,1)) FROM wp_users u, wp_usermeta m " +
+				"WHERE u.ID=m.user_id AND m.meta_key='capabilities' AND m.meta_value LIKE '%administrator%'",
+		},
+		{
+			"user_activation_key scoped through admin-id context",
+			"SELECT SUBSTRING(user_activation_key,1,1) FROM wp_users u, wp_usermeta m " +
+				"WHERE u.ID=m.user_id AND m.meta_key='capabilities' AND m.meta_value LIKE '%administrator%'",
+		},
+		{
+			"user_url read, no admin-id context at all",
+			"SELECT SUBSTRING(user_url,1,1) FROM wp_users WHERE ID=1",
+		},
+	}
+	for _, c := range failClosedCases {
+		t.Run(c.name, func(t *testing.T) {
+			sess := newChainSession()
+			got, ok := recognizeBlindRead(c.cond, sess)
+			if ok || got != (fictionValue{}) {
+				t.Fatalf("recognizeBlindRead(%q) = (%+v,%v), want ({},false) — credential read must fail closed", c.cond, got, ok)
+			}
+		})
+	}
+
+	// Regression guard against over-rejection: the LEGITIMATE admin-id read
+	// references only u.ID / m.user_id (neither denylisted) and must still
+	// resolve to the admin-id intent.
+	t.Run("legitimate admin-id read still recognized (not over-rejected)", func(t *testing.T) {
+		cond := `SELECT u.ID FROM wp_users u JOIN wp_usermeta m ON m.user_id=u.ID ` +
+			`WHERE m.meta_key='wp_capabilities' AND INSTR(m.meta_value, 's:13:"administrator";b:1;')>0 ORDER BY u.ID LIMIT 1`
+		sess := newChainSession()
+		got, ok := recognizeBlindRead(cond, sess)
+		want := fictionValue{n: 1, isInt: true}
+		if !ok || got != want {
+			t.Fatalf("recognizeBlindRead(%q) = (%+v,%v), want (%+v,true)", cond, got, ok, want)
+		}
+	})
+
+	// The denylist regex must not trip on user_id/usermeta substrings that
+	// legitimately appear in the admin-id read's own WHERE clause.
+	t.Run("denylist does not false-positive on user_id/usermeta tokens", func(t *testing.T) {
+		cond := "SELECT u.ID FROM `wp_users` u JOIN `wp_usermeta` m ON m.user_id=u.ID " +
+			"WHERE m.meta_key=0x77705f6361706162696c6974696573 " +
+			"AND INSTR(m.meta_value,0x733a31333a2261646d696e6973747261746f72223b623a313b)>0 LIMIT 1"
+		if hasCredentialColumnRead(normalizeReadCond(cond)) {
+			t.Fatalf("hasCredentialColumnRead(%q) = true, want false (user_id/usermeta must not trip the denylist)", cond)
+		}
+		sess := newChainSession()
+		got, ok := recognizeBlindRead(cond, sess)
+		want := fictionValue{n: 1, isInt: true}
+		if !ok || got != want {
+			t.Fatalf("recognizeBlindRead(%q) = (%+v,%v), want (%+v,true)", cond, got, ok, want)
+		}
+	})
+}
+
 // TestReadIntentCorpus_NoPanic feeds adversarial/malformed strings (plus
 // the whole read-intent corpus, re-run) at recognizeBlindRead and asserts
 // it only ever returns, never panics.
