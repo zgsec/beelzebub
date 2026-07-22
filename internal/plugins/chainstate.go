@@ -29,11 +29,14 @@ const (
 //
 // A single source key (e.g. one attacker IP) can legitimately drive more
 // than one concurrent connection into the same in-progress chain — mu
-// guards every field below against that. Callers that read or mutate more
-// than one field, or that need a read-modify-write (e.g. "if !adminCreated
-// { adminCreated = true; ... }"), must hold mu for the whole operation;
-// chainSession does not attempt to make individual field accesses
-// implicitly safe on their own.
+// guards every field below against that. Callers MUST touch session fields
+// — reads as well as writes — only inside sess.mutate(...), never by
+// locking/unlocking mu by hand or by reading a field with no lock held at
+// all: cacheIDs is a plain Go map, and an unsynchronized concurrent access
+// to it (even a read racing a write) is a fatal Go runtime panic, not
+// merely a data race. mutate is the one sanctioned accessor; it holds mu
+// for the whole callback, so a read-modify-write (e.g. "if !adminCreated {
+// adminCreated = true; ... }") is automatically atomic.
 type chainSession struct {
 	mu sync.Mutex
 
@@ -63,6 +66,20 @@ func newChainSession() *chainSession {
 	}
 }
 
+// mutate is the sanctioned way to read and/or modify a chainSession's
+// fields from request handlers: it locks mu, invokes fn with the session,
+// and unlocks — including on panic, via defer. Callers must not read or
+// write any field of s (including cacheIDs) outside of a mutate call;
+// cacheIDs is a plain map, so an unsynchronized concurrent access to it is
+// a fatal runtime panic, not just a race. Prefer one mutate call per
+// logical operation over several smaller ones, so a read-modify-write
+// stays atomic across the whole handler step.
+func (s *chainSession) mutate(fn func(*chainSession)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn(s)
+}
+
 // chainStore is a bounded, TTL-evicted map of *chainSession keyed by a
 // per-source key (typically the remote IP, optionally salted by a session
 // nonce for callers that need finer-grained isolation). It reuses the same
@@ -83,11 +100,14 @@ func newChainStore(ttl time.Duration, maxEntries int) *chainStore {
 
 // get returns the chainSession for srcKey, creating one on first sight.
 // The returned pointer is stable for the lifetime of the entry: callers
-// mutate the fields directly, and a later get() for the same key (within
-// the TTL window) observes those mutations rather than a fresh session.
-// Each call refreshes the entry's TTL and LRU recency (idle timeout, not
+// touch fields only through sess.mutate(...) (both reads and writes — see
+// chainSession's doc comment; cacheIDs is a plain map, and an
+// unsynchronized concurrent access to it is a fatal panic, not just a
+// race), and a later get() for the same key (within the TTL window)
+// observes those mutations rather than a fresh session. Each call
+// refreshes the entry's TTL and LRU recency (idle timeout, not
 // fixed-since-creation), matching the "still-in-progress attempt" shape
-// the gadget chain needs. Safe for concurrent use.
+// the gadget chain needs. get() itself is safe for concurrent use.
 func (s *chainStore) get(srcKey string) *chainSession {
 	if existing, ok := s.m.Get(srcKey); ok {
 		// Re-Set to slide the TTL window forward on activity. Same

@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -148,4 +149,46 @@ func TestChainStore_ConcurrentGet_NoRace(t *testing.T) {
 	if got := s.m.Len(); got > 300 {
 		t.Errorf("Len=%d exceeded cap=300 after concurrent churn", got)
 	}
+}
+
+// TestChainSession_Mutate_ConcurrentCacheIDWrites_NoRace proves the
+// sanctioned mutate() accessor makes concurrent read-modify-write access to
+// a single shared chainSession safe. Every goroutine hammers the SAME
+// session (one source key) with a cacheIDs map write plus a bool write on
+// every call, with heavy key overlap across goroutines so the writes
+// genuinely contend on the same map buckets. Without mutate()'s lock,
+// concurrent writes to the plain cacheIDs map are a fatal Go runtime panic
+// ("concurrent map writes"), not merely a data race — so this test also
+// serves as a regression guard against anyone bypassing mutate() to touch
+// fields directly. Run with -race.
+func TestChainSession_Mutate_ConcurrentCacheIDWrites_NoRace(t *testing.T) {
+	s := newChainStore(time.Hour, 100)
+	sess := s.get("shared-source-key")
+
+	const goroutines = 64
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				sess.mutate(func(cs *chainSession) {
+					cs.cacheIDs["k"+strconv.Itoa(i)] = int64(i)
+					cs.adminCreated = true
+				})
+			}
+		}()
+	}
+	wg.Wait()
+
+	sess.mutate(func(cs *chainSession) {
+		if !cs.adminCreated {
+			t.Errorf("adminCreated not observed true after concurrent mutate() calls")
+		}
+		if got := len(cs.cacheIDs); got != iterations {
+			t.Errorf("cacheIDs has %d entries, want %d (a lost write would undercount)", got, iterations)
+		}
+	})
 }
