@@ -8,7 +8,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Task 6: S4-S6 admin-page templates. Exercises serveAuthStage against the
+// Task 6: S4-S6 admin-page templates. Exercises ServeAuthStage against the
 // exploit's actual checks (poc.py): S4 needs a Set-Cookie the cookie jar
 // will carry, S5 needs the raw page to contain sess.username (poc.py does
 // `if username not in users_page: abort`), S6 needs
@@ -16,12 +16,12 @@ import (
 // readable back off the session for a later upload step to check against.
 // ---------------------------------------------------------------------------
 
-// armedAdminSession returns a chainSession that has already cleared T4's
+// armedAdminSession returns a ChainSession that has already cleared T4's
 // forge checkpoint (adminCreated=true) with the given username, i.e. the
-// state serveAuthStage requires before it will answer anything.
-func armedAdminSession(username string) *chainSession {
+// state ServeAuthStage requires before it will answer anything.
+func armedAdminSession(username string) *ChainSession {
 	sess := newChainSession()
-	sess.mutate(func(cs *chainSession) {
+	sess.mutate(func(cs *ChainSession) {
 		cs.adminCreated = true
 		cs.username = username
 	})
@@ -31,7 +31,7 @@ func armedAdminSession(username string) *chainSession {
 func TestServeAuthStage_S4_LoginSetsPlausibleCookie(t *testing.T) {
 	sess := armedAdminSession("w2s_probe")
 
-	status, headers, body, handled := serveAuthStage("/wp-login.php", sess)
+	status, headers, body, handled := ServeAuthStage("/wp-login.php", sess)
 	if !handled {
 		t.Fatalf("S4 (wp-login.php): handled = false, want true")
 	}
@@ -54,7 +54,7 @@ func TestServeAuthStage_S4_LoginSetsPlausibleCookie(t *testing.T) {
 	}
 
 	// /wp-admin/ is documented as an equivalent S4 trigger.
-	status2, headers2, _, handled2 := serveAuthStage("/wp-admin/", sess)
+	status2, headers2, _, handled2 := ServeAuthStage("/wp-admin/", sess)
 	if !handled2 || status2 != 200 || headers2["Set-Cookie"] == "" {
 		t.Errorf("S4 (/wp-admin/): handled=%v status=%d headers=%v, want handled+200+cookie", handled2, status2, headers2)
 	}
@@ -63,7 +63,7 @@ func TestServeAuthStage_S4_LoginSetsPlausibleCookie(t *testing.T) {
 func TestServeAuthStage_S5_UsersPageContainsUsername(t *testing.T) {
 	sess := armedAdminSession("w2s_probe")
 
-	status, _, body, handled := serveAuthStage("/wp-admin/users.php", sess)
+	status, _, body, handled := ServeAuthStage("/wp-admin/users.php", sess)
 	if !handled {
 		t.Fatalf("S5: handled = false, want true")
 	}
@@ -81,7 +81,7 @@ func TestServeAuthStage_S6_PluginInstallNonceMatchesAndPersists(t *testing.T) {
 	sess := armedAdminSession("w2s_probe")
 
 	// Real trigger carries the tab=upload query string.
-	status, _, body, handled := serveAuthStage("/wp-admin/plugin-install.php?tab=upload", sess)
+	status, _, body, handled := ServeAuthStage("/wp-admin/plugin-install.php?tab=upload", sess)
 	if !handled {
 		t.Fatalf("S6: handled = false, want true")
 	}
@@ -96,7 +96,7 @@ func TestServeAuthStage_S6_PluginInstallNonceMatchesAndPersists(t *testing.T) {
 	bodyNonce := m[1]
 
 	var storedNonce string
-	sess.mutate(func(cs *chainSession) {
+	sess.mutate(func(cs *ChainSession) {
 		storedNonce = cs.nonce
 	})
 	if storedNonce == "" {
@@ -115,7 +115,7 @@ const maliciousUsername = "</td></tr><script>alert(1)</script>"
 
 func TestServeAuthStage_S4_LoginCookieSanitizesUsername(t *testing.T) {
 	sess := armedAdminSession("w2s_probe")
-	_, headers, _, handled := serveAuthStage("/wp-login.php", sess)
+	_, headers, _, handled := ServeAuthStage("/wp-login.php", sess)
 	if !handled {
 		t.Fatalf("S4: handled = false, want true")
 	}
@@ -125,7 +125,7 @@ func TestServeAuthStage_S4_LoginCookieSanitizesUsername(t *testing.T) {
 	}
 
 	sess2 := armedAdminSession(maliciousUsername)
-	_, headers2, _, handled2 := serveAuthStage("/wp-login.php", sess2)
+	_, headers2, _, handled2 := ServeAuthStage("/wp-login.php", sess2)
 	if !handled2 {
 		t.Fatalf("S4 (malicious): handled = false, want true")
 	}
@@ -166,7 +166,7 @@ func TestServeAuthStage_S4_LoginCookieSanitizesUsername(t *testing.T) {
 
 func TestServeAuthStage_S5_UsersPageEscapesMaliciousUsername(t *testing.T) {
 	sess := armedAdminSession(maliciousUsername)
-	status, _, body, handled := serveAuthStage("/wp-admin/users.php", sess)
+	status, _, body, handled := ServeAuthStage("/wp-admin/users.php", sess)
 	if !handled {
 		t.Fatalf("S5 (malicious): handled = false, want true")
 	}
@@ -193,7 +193,7 @@ func TestServeAuthStage_Gate_RequiresArmedSession(t *testing.T) {
 
 	t.Run("nil session", func(t *testing.T) {
 		for _, p := range paths {
-			if _, _, _, handled := serveAuthStage(p, nil); handled {
+			if _, _, _, handled := ServeAuthStage(p, nil); handled {
 				t.Errorf("path %q: handled = true with sess=nil, want false", p)
 			}
 		}
@@ -202,7 +202,7 @@ func TestServeAuthStage_Gate_RequiresArmedSession(t *testing.T) {
 	t.Run("session never reached adminCreated", func(t *testing.T) {
 		sess := newChainSession() // adminCreated defaults to false
 		for _, p := range paths {
-			if _, _, _, handled := serveAuthStage(p, sess); handled {
+			if _, _, _, handled := ServeAuthStage(p, sess); handled {
 				t.Errorf("path %q: handled = true with adminCreated=false, want false", p)
 			}
 		}
@@ -210,7 +210,7 @@ func TestServeAuthStage_Gate_RequiresArmedSession(t *testing.T) {
 
 	t.Run("unrecognized path even when armed", func(t *testing.T) {
 		sess := armedAdminSession("w2s_probe")
-		if _, _, _, handled := serveAuthStage("/wp-admin/plugins.php", sess); handled {
+		if _, _, _, handled := ServeAuthStage("/wp-admin/plugins.php", sess); handled {
 			t.Errorf("unrecognized path: handled = true, want false")
 		}
 	})
@@ -267,7 +267,7 @@ func TestAdminTemplates_OPSEC_NoHardcodedAdminEmail(t *testing.T) {
 	// Also check the rendered S5 body for a realistic (non-"admin") forged
 	// username, confirming substitution never produces the forbidden shape.
 	sess := armedAdminSession("w2s_probe")
-	_, _, body, _ := serveAuthStage("/wp-admin/users.php", sess)
+	_, _, body, _ := ServeAuthStage("/wp-admin/users.php", sess)
 	if emailTellRe.MatchString(body) {
 		t.Errorf("rendered users.php body contains a hardcoded admin@/a@example.com email: %s", body)
 	}

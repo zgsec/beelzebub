@@ -57,7 +57,7 @@ func mustLoadAdminTemplate(name string) string {
 	return string(raw)
 }
 
-// serveAuthStage answers the S4-S6 admin-page reads the gadget chain's
+// ServeAuthStage answers the S4-S6 admin-page reads the gadget chain's
 // exploit performs once it believes it holds a freshly forged
 // administrator:
 //
@@ -79,14 +79,14 @@ func mustLoadAdminTemplate(name string) string {
 // handled=false and falls through to whatever ordinary behavior the caller
 // serves for an unauthenticated admin-page request, instead of a free
 // session.
-func serveAuthStage(path string, sess *chainSession) (status int, headers map[string]string, body string, handled bool) {
+func ServeAuthStage(path string, sess *ChainSession) (status int, headers map[string]string, body string, handled bool) {
 	if sess == nil {
 		return 0, nil, "", false
 	}
 
 	var adminCreated bool
 	var username string
-	sess.mutate(func(cs *chainSession) {
+	sess.mutate(func(cs *ChainSession) {
 		adminCreated = cs.adminCreated
 		username = cs.username
 	})
@@ -180,9 +180,9 @@ func serveUsersStage(username string) (int, map[string]string, string, bool) {
 // session via the mandatory mutate accessor (so a later upload step in this
 // same chain can be checked against it), and injects it into the upload
 // form.
-func servePluginInstallStage(sess *chainSession) (int, map[string]string, string, bool) {
+func servePluginInstallStage(sess *ChainSession) (int, map[string]string, string, bool) {
 	nonce := randomHexToken(5) // 5 bytes -> 10 hex chars, matching a real wp_create_nonce() value
-	sess.mutate(func(cs *chainSession) {
+	sess.mutate(func(cs *ChainSession) {
 		cs.nonce = nonce
 	})
 	body := strings.ReplaceAll(pluginInstallTemplate, "{{NONCE}}", nonce)

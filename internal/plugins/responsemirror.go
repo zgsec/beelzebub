@@ -54,7 +54,7 @@ type mirrorElem struct {
 // that passes nil sees byte-identical output. A non-nil sess additionally lets
 // forgeElement answer a recognized blind-read predicate (recognizeBlindRead +
 // evalBlindPredicate) when the condition isn't a literal constant.
-func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession) (status int, body string, ok bool) {
+func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *ChainSession) (status int, body string, ok bool) {
 	if cfg == nil {
 		return 0, "", false
 	}
@@ -111,7 +111,7 @@ func MirrorRespond(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession)
 // mirrorArray builds the response array for one level of sub-requests, recursing
 // into nested envelopes when configured. Returns ok=false if the element budget
 // is exhausted (hostile amplification) or an assembled element is not valid JSON.
-func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int, sess *chainSession) (json.RawMessage, bool) {
+func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth, maxDepth int, budget *int, sess *ChainSession) (json.RawMessage, bool) {
 	// Escalation+admin-creation checkpoint (Task 4 / S3): scanned once per
 	// level, over the SAME sub-request list a `POST /wp/v2/users` sibling
 	// would appear in — so the checkpoint below requires BOTH signals in the
@@ -155,7 +155,7 @@ func mirrorArray(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, de
 		if escalationSeen {
 			if username, ok := extractAdminUsername(cfg, s); ok {
 				if ce, built := adminCreatedElement(username); built {
-					sess.mutate(func(cs *chainSession) {
+					sess.mutate(func(cs *ChainSession) {
 						cs.adminCreated = true
 						cs.username = username
 					})
@@ -349,7 +349,7 @@ var reAuthorExclude = regexp.MustCompile(`(?i)[?&]author_exclude=([^&]*)`)
 // for a literal condition. Unrecognized or unevaluable reads fail closed
 // (the pre-existing "fall through to static/reflect" behaviour), same as a
 // nil sess.
-func forgeElement(cfg *parser.MirrorConfig, path string, sess *chainSession) (mirrorElem, bool) {
+func forgeElement(cfg *parser.MirrorConfig, path string, sess *ChainSession) (mirrorElem, bool) {
 	if cfg.Forge == nil {
 		return mirrorElem{}, false
 	}
@@ -377,7 +377,7 @@ func forgeElement(cfg *parser.MirrorConfig, path string, sess *chainSession) (mi
 		// "seeding happened" without re-parsing every forge. Purely additive:
 		// the served row/status/headers below are unchanged either way.
 		if sess != nil && seedRowContainsEmbedSeed(row) {
-			sess.mutate(func(cs *chainSession) {
+			sess.mutate(func(cs *ChainSession) {
 				cs.seeded = true
 			})
 		}
@@ -734,7 +734,7 @@ const MaxMirrorDelayMs = 9000
 // comment for the shared contract. nil reproduces the shipped
 // evalLiteralBool-only behaviour exactly, so every pre-existing caller
 // (passing nil) sees byte-for-byte-identical delays.
-func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession) int {
+func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte, sess *ChainSession) int {
 	if cfg == nil || cfg.Timing == nil {
 		return 0
 	}
@@ -764,7 +764,7 @@ func MirrorDelayMs(cfg *parser.MirrorConfig, reqBody []byte, sess *chainSession)
 
 // timingWalk returns the max per-sub-request delay across one level, recursing
 // one nesting level (matching the observed nested-batch injection site).
-func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int, sess *chainSession) int {
+func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, depth int, sess *ChainSession) int {
 	max := 0
 	for _, s := range subs {
 		if depth < 1 {
@@ -792,7 +792,7 @@ func timingWalk(cfg *parser.MirrorConfig, subs []map[string]json.RawMessage, dep
 // true fiction answer drives the same n*1000 delay branch a literal-true
 // condition would; false (or unrecognized/unevaluable) stays at the existing
 // flat 0. nil sess reproduces the shipped behaviour exactly.
-func sleepDelay(t *parser.MirrorTiming, path string, sess *chainSession) int {
+func sleepDelay(t *parser.MirrorTiming, path string, sess *ChainSession) int {
 	if t.IfRegex != nil {
 		if m := t.IfRegex.FindStringSubmatch(path); len(m) == 3 {
 			cond, err := url.QueryUnescape(m[1])

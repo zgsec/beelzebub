@@ -8,7 +8,7 @@ import (
 // ---------------------------------------------------------------------------
 // Task 4: recognize the WP2Shell exploit's S2 (oembed seed) and S3
 // (escalation + admin creation) batches through the shipped MirrorRespond
-// plumbing, and set the corresponding chainSession checkpoints. Fixtures
+// plumbing, and set the corresponding ChainSession checkpoints. Fixtures
 // below are copied verbatim (byte-exact, not hand-rolled) from a real
 // captured exploitation run: tools/oracle-diff/wordpress-6.9.4/chain_capture.jsonl
 // (seq 10 = S2 seed batch, seq 90 = S3 escalation+admin-creation batch),
@@ -39,10 +39,10 @@ func escalationBatchS3(username string) string {
 }
 
 // sessSnapshot reads the checkpoint fields under the mandatory mutate
-// accessor (never a bare field read — see chainSession's doc comment) and
+// accessor (never a bare field read — see ChainSession's doc comment) and
 // returns them as plain values for assertions.
-func sessSnapshot(sess *chainSession) (seeded, adminCreated bool, username string) {
-	sess.mutate(func(cs *chainSession) {
+func sessSnapshot(sess *ChainSession) (seeded, adminCreated bool, username string) {
+	sess.mutate(func(cs *ChainSession) {
 		seeded = cs.seeded
 		adminCreated = cs.adminCreated
 		username = cs.username

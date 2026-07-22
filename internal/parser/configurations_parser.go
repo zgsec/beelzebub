@@ -399,13 +399,13 @@ type Command struct {
 // matching how a *patched* server (which does not recurse) behaves — the
 // intended fidelity bar. No recursion, no data-dependent execution.
 type MirrorConfig struct {
-	RequestKey     string        `yaml:"requestKey"`               // JSON key of the sub-request array, e.g. "requests"
-	ResponseKey    string        `yaml:"responseKey"`              // JSON key wrapping the response array, e.g. "responses"
-	WrapStatus     int           `yaml:"wrapStatus"`               // outer HTTP status, e.g. 207
-	PathField      string        `yaml:"pathField"`                // sub-request field holding the route, e.g. "path"
-	MethodField    string        `yaml:"methodField"`              // sub-request field holding the method, e.g. "method"
-	MaxItems       int           `yaml:"maxItems,omitempty"`       // guardrail on sub-request count; 0 => 25
-	AllowedMethods []string      `yaml:"allowedMethods,omitempty"` // permitted sub-request methods; empty => no guard
+	RequestKey     string         `yaml:"requestKey"`               // JSON key of the sub-request array, e.g. "requests"
+	ResponseKey    string         `yaml:"responseKey"`              // JSON key wrapping the response array, e.g. "responses"
+	WrapStatus     int            `yaml:"wrapStatus"`               // outer HTTP status, e.g. 207
+	PathField      string         `yaml:"pathField"`                // sub-request field holding the route, e.g. "path"
+	MethodField    string         `yaml:"methodField"`              // sub-request field holding the method, e.g. "method"
+	MaxItems       int            `yaml:"maxItems,omitempty"`       // guardrail on sub-request count; 0 => 25
+	AllowedMethods []string       `yaml:"allowedMethods,omitempty"` // permitted sub-request methods; empty => no guard
 	Reject         *MirrorReject  `yaml:"reject,omitempty"`         // whole-envelope rejection (method-guard / maxItems trip)
 	Rules          []MirrorRule   `yaml:"rules"`                    // first-match wins
 	Default        MirrorElement  `yaml:"default"`                  // fallthrough when no Rule matches
@@ -414,6 +414,7 @@ type MirrorConfig struct {
 	MaxTotal       int            `yaml:"maxTotal,omitempty"`       // total element budget across recursion; 0 => 200
 	Timing         *MirrorTiming  `yaml:"timing,omitempty"`         // opt-in: time-based SQLi oracle emulation
 	Forge          *MirrorForge   `yaml:"forge,omitempty"`          // opt-in: structural UNION-projection forge + boolean-content channel
+	Chain          *MirrorChain   `yaml:"chain,omitempty"`          // opt-in: cross-request WP gadget-chain session (nil => off)
 }
 
 // MirrorRecurse enables reproducing a *vulnerable* server that re-dispatches a
@@ -484,6 +485,21 @@ type MirrorTiming struct {
 // nil => both channels off.
 type MirrorForge struct {
 	Collection string `yaml:"collection,omitempty"` // supported: "wp_posts" (default when empty)
+}
+
+// MirrorChain arms the cross-request WP gadget-chain session (Task 7): when
+// set, the HTTP strategy looks up a per-source-IP *plugins.ChainSession for
+// every request this mirror handles, threads it into MirrorRespond /
+// MirrorDelayMs (arming the fiction-DB blind-read fallback those already
+// accept — see responsemirror.go), and routes the S4-S6 admin-page reads
+// (wp-login.php, wp-admin/users.php, wp-admin/plugin-install.php) through
+// plugins.ServeAuthStage once the forge chain has minted a fabricated
+// administrator on that session. nil (no `chain:` key in the YAML) is the
+// default and leaves every one of those call sites passing a nil session,
+// reproducing the pre-Task-7 literal-only behavior byte-for-byte.
+type MirrorChain struct {
+	Enabled           bool `yaml:"enabled"`
+	CheckpointTTLSecs int  `yaml:"checkpointTtlSecs,omitempty"` // idle timeout for an in-progress chain attempt; 0 => 1800 (30m)
 }
 
 // MirrorElement is one entry of the response array. Body and Headers are raw
@@ -727,6 +743,9 @@ func compileMirror(m *MirrorConfig) error {
 		if m.Forge.Collection != "wp_posts" {
 			return fmt.Errorf("forge: unsupported collection %q", m.Forge.Collection)
 		}
+	}
+	if m.Chain != nil && m.Chain.CheckpointTTLSecs <= 0 {
+		m.Chain.CheckpointTTLSecs = 1800
 	}
 	if err := validElem("default", m.Default); err != nil {
 		return err

@@ -110,6 +110,38 @@ type HTTPStrategy struct {
 	// Stateful HTTP session correlation (nil when servConf.State == nil or CookieName == "")
 	cookieStore   *historystore.CookieSessionStore
 	artifactStore *artifactstore.Store
+
+	// WP gadget-chain session store (Task 7). nil unless some command's
+	// ResponseMirror config carries an enabled Chain block — see
+	// findMirrorChain and its call site in Init. nil here is the gate that
+	// keeps every armed-chain code path (the auth-stage routing branch and
+	// the sess argument to MirrorRespond/MirrorDelayMs) a complete no-op for
+	// every service that hasn't opted in.
+	chainStore *plugins.ChainStore
+}
+
+// chainStoreEntryCap bounds the WP gadget-chain session store the same way
+// chainStoreMaxEntries bounds it inside package plugins (unexported there,
+// so this is the HTTP-strategy-side sizing decision) — an attacker rotating
+// source IPs across chain attempts evicts old idle sessions instead of
+// growing the map without bound.
+const chainStoreEntryCap = 4096
+
+// findMirrorChain scans a service's commands (main + fallback) for the
+// first ResponseMirror config carrying a Chain block, so Init can decide
+// whether to arm the WP gadget-chain session store for this service.
+// Returns nil when no command's mirror config has Chain set — the default
+// for every service that hasn't added a `chain:` key to its mirror YAML.
+func findMirrorChain(servConf parser.BeelzebubServiceConfiguration) *parser.MirrorChain {
+	for _, c := range servConf.Commands {
+		if c.Mirror != nil && c.Mirror.Chain != nil {
+			return c.Mirror.Chain
+		}
+	}
+	if servConf.FallbackCommand.Mirror != nil && servConf.FallbackCommand.Mirror.Chain != nil {
+		return servConf.FallbackCommand.Mirror.Chain
+	}
+	return nil
 }
 
 // sessionContext bundles per-request stateful HTTP context so it can be
@@ -231,6 +263,17 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		}
 	}
 
+	// WP gadget-chain session store (Task 7): armed only when some command's
+	// ResponseMirror config carries an enabled Chain block. Chain.Enabled
+	// (not just Chain != nil) gates arming here, so `chain: {enabled: false}`
+	// — a config that opted into the block but explicitly turned it off —
+	// leaves chainStore nil same as no `chain:` key at all. compileMirror
+	// has already defaulted CheckpointTTLSecs (>0) by the time Init runs, so
+	// no additional zero-guard is needed here.
+	if chain := findMirrorChain(servConf); chain != nil && chain.Enabled {
+		httpStrategy.chainStore = plugins.NewChainStore(time.Duration(chain.CheckpointTTLSecs)*time.Second, chainStoreEntryCap)
+	}
+
 	startHTTPSessionCleanup()
 	startHTTPNoveltyCleanup(httpStrategy.noveltyStore, httpStrategy.noveltyWindowDays)
 	serverMux := http.NewServeMux()
@@ -294,7 +337,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -307,7 +350,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -412,7 +455,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext) (httpResponse, error, fireTraceFunc) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// trace fire (covers static-handler + LLM plugin paths uniformly).
 	// Trace fires from the caller AFTER all resp modifications complete.
@@ -516,6 +559,53 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	}
 
 	// -------------------------------------------------------------------------
+	// WP gadget-chain session lookup + auth-stage routing (Task 7)
+	// -------------------------------------------------------------------------
+
+	// sess is the (nil-safe) per-source-IP chain session for this request.
+	// chainStore == nil (no command's mirror config has an enabled Chain
+	// block — see findMirrorChain in Init) means sess stays nil for every
+	// request, which is what keeps MirrorRespond/MirrorDelayMs below and the
+	// auth-stage routing that follows byte-identical to pre-Task-7 behavior.
+	// Same RemoteAddr-host extraction the LLM plugin branch and traceRequest
+	// already use, so the chain session is keyed on the same source identity
+	// every other per-IP mechanism in this file uses.
+	var sess *plugins.ChainSession
+	if chainStore != nil {
+		host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+		if splitErr != nil {
+			host = request.RemoteAddr
+		}
+		sess = chainStore.Get(host)
+	}
+
+	// Auth-stage routing: once the forge chain (T1-T4, driven through the
+	// ResponseMirror plugin below) has minted a fabricated administrator on
+	// this session, the exploit's S4-S6 reads — wp-login.php, wp-admin/
+	// users.php, wp-admin/plugin-install.php — need answers that carry that
+	// forged state (the auth cookie, the username, the upload nonce) instead
+	// of whichever static/404 response this service's command configured
+	// for those paths. ServeAuthStage itself gates on sess.adminCreated, so
+	// a chain that hasn't reached that checkpoint yet (or sess == nil, i.e.
+	// chainStore == nil) returns handled=false and every existing behavior
+	// for these paths is untouched.
+	if sess != nil {
+		switch request.URL.Path {
+		case "/wp-login.php", "/wp-admin/users.php", "/wp-admin/plugin-install.php":
+			if status, hdrs, authBody, handled := plugins.ServeAuthStage(request.RequestURI, sess); handled {
+				resp.StatusCode = status
+				resp.Body = authBody
+				headers := make([]string, 0, len(hdrs))
+				for k, v := range hdrs {
+					headers = append(headers, k+": "+v)
+				}
+				resp.Headers = headers
+				return resp, nil, fireTrace
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------------
 	// Stateful session logic
 	// -------------------------------------------------------------------------
 
@@ -588,10 +678,14 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		// request body (no re-read). ok==false means "not a batch we mirror"
 		// — we fall through and return the configured static handler
 		// unchanged, so this is strictly additive.
-		// sess is nil here: the real per-source chain-session lookup is wired
-		// in a later task (T7). nil ⇒ no fiction ⇒ this call reproduces the
-		// shipped literal-only oracle byte-for-byte.
-		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes, nil); ok {
+		// sess (Task 7): the per-source chain-session looked up above —
+		// nil whenever chainStore is nil (Chain not configured for this
+		// service), which reproduces the shipped literal-only oracle
+		// byte-for-byte. Non-nil arms the fiction-DB blind-read fallback
+		// inside MirrorRespond/MirrorDelayMs, and lets the forge chain's
+		// checkpoints (seeded / admin-created) accumulate on the session so
+		// the auth-stage routing above can answer S4-S6 on a later request.
+		if mirrorStatus, mirrorBody, ok := plugins.MirrorRespond(command.Mirror, bodyBytes, sess); ok {
 			// Time-based oracle (additive): sleep the implied delay before writing,
 			// but ONLY when the batch actually dispatched (a reject returns
 			// Reject.Status, not WrapStatus). Real WP rejects at validation BEFORE
@@ -600,7 +694,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 			// depth). Inert: only literal-true conditions delay; nothing is
 			// executed.
 			if mirrorStatus == command.Mirror.WrapStatus {
-				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes, nil); d > 0 {
+				if d := plugins.MirrorDelayMs(command.Mirror, bodyBytes, sess); d > 0 {
 					if d > plugins.MaxMirrorDelayMs {
 						d = plugins.MaxMirrorDelayMs
 					}

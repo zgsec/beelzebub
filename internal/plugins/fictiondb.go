@@ -583,7 +583,7 @@ func hasCredentialColumnRead(c string) bool {
 // Anything that doesn't match one of the three intents fails closed:
 // (fictionValue{}, false), with no distinctive error and no panic on any
 // input — every regex match and index is total/guarded.
-func recognizeBlindRead(cond string, sess *chainSession) (fictionValue, bool) {
+func recognizeBlindRead(cond string, sess *ChainSession) (fictionValue, bool) {
 	c := normalizeReadCond(cond)
 
 	// Hard doctrine gate: NEVER answer a read scoped through a credential/
@@ -607,7 +607,7 @@ func recognizeBlindRead(cond string, sess *chainSession) (fictionValue, bool) {
 	if postTypeOembedRe.MatchString(c) {
 		if key, ok := extractCacheKey(c); ok {
 			var id int64
-			sess.mutate(func(cs *chainSession) {
+			sess.mutate(func(cs *ChainSession) {
 				if existing, ok := cs.cacheIDs[key]; ok {
 					id = existing
 					return

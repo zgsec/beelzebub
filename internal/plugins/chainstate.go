@@ -10,18 +10,18 @@ import (
 const (
 	// chainStoreMaxEntries caps the checkpoint store. An attacker rotating
 	// source IPs across attempts would otherwise grow this map without
-	// bound — every new key allocates a *chainSession that lives forever.
+	// bound — every new key allocates a *ChainSession that lives forever.
 	// Mirrors the sizing rationale used for the LLM honeypot's per-IP rate
 	// limiter (see llm-integration.go's rateLimiterMaxEntries).
 	chainStoreMaxEntries = 10_000
 
 	// chainStoreDefaultTTL is the idle timeout for an in-progress chain
 	// attempt: how long a checkpoint session survives with no further
-	// activity from its source key before the next get() starts fresh.
+	// activity from its source key before the next Get() starts fresh.
 	chainStoreDefaultTTL = 30 * time.Minute
 )
 
-// chainSession holds the small cross-request state the WP gadget chain
+// ChainSession holds the small cross-request state the WP gadget chain
 // threads through a single attack attempt: which checkpoints have been
 // reached so far, the forged identifiers minted along the way, and the
 // cache IDs assigned to fabricated objects the chain needs to reference
@@ -37,7 +37,7 @@ const (
 // merely a data race. mutate is the one sanctioned accessor; it holds mu
 // for the whole callback, so a read-modify-write (e.g. "if !adminCreated {
 // adminCreated = true; ... }") is automatically atomic.
-type chainSession struct {
+type ChainSession struct {
 	mu sync.Mutex
 
 	seeded       bool
@@ -60,13 +60,13 @@ type chainSession struct {
 // newChainSession returns a zero-value chain session with its map field
 // initialized, so callers never have to nil-check cacheIDs before writing
 // to it.
-func newChainSession() *chainSession {
-	return &chainSession{
+func newChainSession() *ChainSession {
+	return &ChainSession{
 		cacheIDs: make(map[string]int64),
 	}
 }
 
-// mutate is the sanctioned way to read and/or modify a chainSession's
+// mutate is the sanctioned way to read and/or modify a ChainSession's
 // fields from request handlers: it locks mu, invokes fn with the session,
 // and unlocks — including on panic, via defer. Callers must not read or
 // write any field of s (including cacheIDs) outside of a mutate call;
@@ -74,41 +74,41 @@ func newChainSession() *chainSession {
 // a fatal runtime panic, not just a race. Prefer one mutate call per
 // logical operation over several smaller ones, so a read-modify-write
 // stays atomic across the whole handler step.
-func (s *chainSession) mutate(fn func(*chainSession)) {
+func (s *ChainSession) mutate(fn func(*ChainSession)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn(s)
 }
 
-// chainStore is a bounded, TTL-evicted map of *chainSession keyed by a
+// ChainStore is a bounded, TTL-evicted map of *ChainSession keyed by a
 // per-source key (typically the remote IP, optionally salted by a session
 // nonce for callers that need finer-grained isolation). It reuses the same
 // LRU+TTL primitive the LLM honeypot's per-IP rate limiter is built on
 // (internal/cache.Map — see llm-integration.go's getRateLimiter), so a
 // flood of unique source keys evicts old idle sessions instead of growing
 // memory without bound.
-type chainStore struct {
-	m *cache.Map[*chainSession]
+type ChainStore struct {
+	m *cache.Map[*ChainSession]
 }
 
-// newChainStore constructs a chainStore with the given idle TTL and entry
+// NewChainStore constructs a ChainStore with the given idle TTL and entry
 // cap. ttl <= 0 or maxEntries <= 0 fall back to internal/cache.New's own
 // defaults (1 hour / 1 entry).
-func newChainStore(ttl time.Duration, maxEntries int) *chainStore {
-	return &chainStore{m: cache.New[*chainSession](maxEntries, ttl)}
+func NewChainStore(ttl time.Duration, maxEntries int) *ChainStore {
+	return &ChainStore{m: cache.New[*ChainSession](maxEntries, ttl)}
 }
 
-// get returns the chainSession for srcKey, creating one on first sight.
+// Get returns the ChainSession for srcKey, creating one on first sight.
 // The returned pointer is stable for the lifetime of the entry: callers
 // touch fields only through sess.mutate(...) (both reads and writes — see
-// chainSession's doc comment; cacheIDs is a plain map, and an
+// ChainSession's doc comment; cacheIDs is a plain map, and an
 // unsynchronized concurrent access to it is a fatal panic, not just a
-// race), and a later get() for the same key (within the TTL window)
+// race), and a later Get() for the same key (within the TTL window)
 // observes those mutations rather than a fresh session. Each call
 // refreshes the entry's TTL and LRU recency (idle timeout, not
 // fixed-since-creation), matching the "still-in-progress attempt" shape
-// the gadget chain needs. get() itself is safe for concurrent use.
-func (s *chainStore) get(srcKey string) *chainSession {
+// the gadget chain needs. Get() itself is safe for concurrent use.
+func (s *ChainStore) Get(srcKey string) *ChainSession {
 	if existing, ok := s.m.Get(srcKey); ok {
 		// Re-Set to slide the TTL window forward on activity. Same
 		// pointer is stored back, so no in-flight checkpoint state is

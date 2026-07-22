@@ -793,3 +793,120 @@ func TestCompileMirrorForge(t *testing.T) {
 		t.Fatal("expected error for unsupported forge collection")
 	}
 }
+
+// TestCompileMirrorChain locks Task 7's parser-level gate: a `chain:` block
+// makes MirrorConfig.Chain non-nil and defaults CheckpointTTLSecs to 1800
+// when left unset (or <=0); omitting `chain:` entirely leaves Chain nil,
+// which is what makes the HTTP-strategy wiring a no-op for every config that
+// hasn't opted in (see http.go's chainStore arming).
+func TestCompileMirrorChain(t *testing.T) {
+	withChainDefaultTTL := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$",
+			Plugin:   "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Chain:   &MirrorChain{Enabled: true},
+			},
+		}},
+	}
+	if err := withChainDefaultTTL.CompileCommandRegex(); err != nil {
+		t.Fatalf("config with chain failed to compile: %v", err)
+	}
+	chain := withChainDefaultTTL.Commands[0].Mirror.Chain
+	if chain == nil {
+		t.Fatal("expected Chain to be non-nil when a chain block is configured")
+	}
+	if !chain.Enabled {
+		t.Fatal("expected Chain.Enabled to be true")
+	}
+	if chain.CheckpointTTLSecs != 1800 {
+		t.Fatalf("expected CheckpointTTLSecs to default to 1800, got %d", chain.CheckpointTTLSecs)
+	}
+
+	withChainExplicitTTL := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$", Plugin: "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+				Chain:   &MirrorChain{Enabled: true, CheckpointTTLSecs: 60},
+			},
+		}},
+	}
+	if err := withChainExplicitTTL.CompileCommandRegex(); err != nil {
+		t.Fatalf("config with explicit chain TTL failed to compile: %v", err)
+	}
+	if got := withChainExplicitTTL.Commands[0].Mirror.Chain.CheckpointTTLSecs; got != 60 {
+		t.Fatalf("expected explicit CheckpointTTLSecs to be preserved, got %d", got)
+	}
+
+	noChain := BeelzebubServiceConfiguration{
+		Commands: []Command{{
+			RegexStr: "^/x$",
+			Plugin:   "ResponseMirror",
+			Mirror: &MirrorConfig{
+				RequestKey: "requests", ResponseKey: "responses", WrapStatus: 207,
+				PathField: "path", MethodField: "method",
+				Default: MirrorElement{Status: 404, Body: `{"code":"x"}`, Headers: `[]`},
+			},
+		}},
+	}
+	if err := noChain.CompileCommandRegex(); err != nil {
+		t.Fatalf("config without chain failed to compile: %v", err)
+	}
+	if noChain.Commands[0].Mirror.Chain != nil {
+		t.Fatal("expected Chain to be nil when no chain block is configured")
+	}
+}
+
+// TestMirrorChain_YAMLUnmarshal locks the actual YAML surface: `chain:
+// {enabled: true}` under a mirror block must unmarshal into a non-nil
+// MirrorConfig.Chain, and a mirror block with no `chain:` key at all must
+// leave it nil — the literal on/off signal the HTTP strategy's arming logic
+// depends on.
+func TestMirrorChain_YAMLUnmarshal(t *testing.T) {
+	yamlWithChain := `
+requestKey: requests
+responseKey: responses
+wrapStatus: 207
+pathField: path
+methodField: method
+default:
+  status: 404
+  body: '{"code":"x"}'
+chain:
+  enabled: true
+`
+	var withChain MirrorConfig
+	if err := yaml.Unmarshal([]byte(yamlWithChain), &withChain); err != nil {
+		t.Fatalf("yaml.Unmarshal failed: %v", err)
+	}
+	if withChain.Chain == nil {
+		t.Fatal("expected Chain to be non-nil after unmarshaling a chain: block")
+	}
+	if !withChain.Chain.Enabled {
+		t.Fatal("expected Chain.Enabled to be true")
+	}
+
+	yamlNoChain := `
+requestKey: requests
+responseKey: responses
+wrapStatus: 207
+pathField: path
+methodField: method
+default:
+  status: 404
+  body: '{"code":"x"}'
+`
+	var noChain MirrorConfig
+	if err := yaml.Unmarshal([]byte(yamlNoChain), &noChain); err != nil {
+		t.Fatalf("yaml.Unmarshal failed: %v", err)
+	}
+	if noChain.Chain != nil {
+		t.Fatal("expected Chain to be nil when the yaml has no chain: key")
+	}
+}
