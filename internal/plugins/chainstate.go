@@ -28,7 +28,6 @@ type ChainSession struct {
 
 	seeded       bool
 	adminCreated bool
-	authOpen     bool
 	uploadOpen   bool
 
 	username string
