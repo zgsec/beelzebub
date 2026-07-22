@@ -230,9 +230,11 @@ var forbiddenOpsecTells = []string{
 
 func TestAdminTemplates_OPSEC_NoOracleOrCaptureTells(t *testing.T) {
 	named := map[string]string{
-		"dashboard.html":      dashboardTemplate,
-		"users.html":          usersTemplate,
-		"plugin_install.html": pluginInstallTemplate,
+		"dashboard.html":       dashboardTemplate,
+		"users.html":           usersTemplate,
+		"plugin_install.html":  pluginInstallTemplate,
+		"plugin_upload.html":   pluginUploadTemplate,
+		"plugin_activate.html": pluginActivateTemplate,
 	}
 	for name, tpl := range named {
 		if tpl == "" {
@@ -254,9 +256,11 @@ var emailTellRe = regexp.MustCompile(`\b(admin|a)@example\.com\b`)
 
 func TestAdminTemplates_OPSEC_NoHardcodedAdminEmail(t *testing.T) {
 	named := map[string]string{
-		"dashboard.html":      dashboardTemplate,
-		"users.html":          usersTemplate,
-		"plugin_install.html": pluginInstallTemplate,
+		"dashboard.html":       dashboardTemplate,
+		"users.html":           usersTemplate,
+		"plugin_install.html":  pluginInstallTemplate,
+		"plugin_upload.html":   pluginUploadTemplate,
+		"plugin_activate.html": pluginActivateTemplate,
 	}
 	for name, tpl := range named {
 		if emailTellRe.MatchString(tpl) {
@@ -271,4 +275,133 @@ func TestAdminTemplates_OPSEC_NoHardcodedAdminEmail(t *testing.T) {
 	if emailTellRe.MatchString(body) {
 		t.Errorf("rendered users.php body contains a hardcoded admin@/a@example.com email: %s", body)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: S7 (plugin .zip upload success page) + S8 (activate acknowledgment).
+// ---------------------------------------------------------------------------
+
+// activateLinkRe mirrors poc.py's own scrape:
+// re.search(r'href="([^"]*plugins\.php\?action=activate[^"]*)"', install_page).
+var activateLinkRe = regexp.MustCompile(`href="([^"]*plugins\.php\?action=activate[^"]*)"`)
+
+func TestServeUploadStage_S7_ActivateLinkCarriesSlugAndSetsSessionState(t *testing.T) {
+	sess := armedAdminSession("w2s_probe")
+
+	status, _, body, handled := ServeUploadStage(sess, "sgio-wp2shell-abc123.zip")
+	if !handled {
+		t.Fatalf("S7: handled = false, want true")
+	}
+	if status != 200 {
+		t.Errorf("S7 status = %d, want 200", status)
+	}
+
+	m := activateLinkRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("S7 body does not contain an activate link poc.py's regex would match; body: %s", body)
+	}
+	link := m[1]
+	wantSlugPath := "plugin=sgio-wp2shell-abc123%2Fsgio-wp2shell-abc123.php"
+	if !strings.Contains(link, wantSlugPath) {
+		t.Errorf("S7 activate link = %q, want it to contain %q", link, wantSlugPath)
+	}
+	if !regexp.MustCompile(`_wpnonce=[0-9a-f]{10}\b`).MatchString(link) {
+		t.Errorf("S7 activate link = %q, want a 10-hex _wpnonce param", link)
+	}
+
+	// The session must carry uploadOpen + the same slug, so a later S8 hit
+	// on the same session can be answered.
+	var uploadOpen bool
+	var slug string
+	sess.mutate(func(cs *ChainSession) {
+		uploadOpen = cs.uploadOpen
+		slug = cs.slug
+	})
+	if !uploadOpen {
+		t.Errorf("S7: sess.uploadOpen = false, want true")
+	}
+	if slug != "sgio-wp2shell-abc123" {
+		t.Errorf("S7: sess.slug = %q, want %q", slug, "sgio-wp2shell-abc123")
+	}
+}
+
+func TestServeUploadStage_SanitizesFilenameIntoSlug(t *testing.T) {
+	sess := armedAdminSession("w2s_probe")
+
+	// A filename carrying HTML metacharacters, a path separator, and mixed
+	// case ".ZIP" — none of that should survive into the slug or the
+	// rendered body unescaped.
+	_, _, body, handled := ServeUploadStage(sess, "../evil<script>.ZIP")
+	if !handled {
+		t.Fatalf("handled = false, want true")
+	}
+	if strings.Contains(body, "<script>") {
+		t.Errorf("body contains an unescaped <script> tag: %s", body)
+	}
+	if strings.Contains(body, "..") || strings.Contains(body, "/evil") {
+		t.Errorf("body leaks the raw path-bearing filename: %s", body)
+	}
+
+	var slug string
+	sess.mutate(func(cs *ChainSession) {
+		slug = cs.slug
+	})
+	if slug == "" {
+		t.Fatalf("sanitizeSlug produced an empty slug")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(slug) {
+		t.Errorf("slug %q contains characters outside [A-Za-z0-9_-]", slug)
+	}
+}
+
+func TestServeUploadStage_Gate_RequiresArmedSession(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		if _, _, _, handled := ServeUploadStage(nil, "plugin.zip"); handled {
+			t.Errorf("handled = true with sess=nil, want false")
+		}
+	})
+
+	t.Run("session never reached adminCreated", func(t *testing.T) {
+		sess := newChainSession()
+		if _, _, _, handled := ServeUploadStage(sess, "plugin.zip"); handled {
+			t.Errorf("handled = true with adminCreated=false, want false")
+		}
+		var uploadOpen bool
+		sess.mutate(func(cs *ChainSession) { uploadOpen = cs.uploadOpen })
+		if uploadOpen {
+			t.Errorf("uploadOpen was set true even though the gate rejected the request")
+		}
+	})
+}
+
+func TestServeActivateStage_S8_RequiresUploadOpen(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		if _, _, _, handled := ServeActivateStage(nil); handled {
+			t.Errorf("handled = true with sess=nil, want false")
+		}
+	})
+
+	t.Run("session never reached uploadOpen", func(t *testing.T) {
+		sess := armedAdminSession("w2s_probe") // adminCreated, but never uploaded
+		if _, _, _, handled := ServeActivateStage(sess); handled {
+			t.Errorf("handled = true with uploadOpen=false, want false")
+		}
+	})
+
+	t.Run("armed via upload", func(t *testing.T) {
+		sess := armedAdminSession("w2s_probe")
+		if _, _, _, handled := ServeUploadStage(sess, "sgio-wp2shell-xyz.zip"); !handled {
+			t.Fatalf("setup: ServeUploadStage did not handle")
+		}
+		status, _, body, handled := ServeActivateStage(sess)
+		if !handled {
+			t.Fatalf("S8: handled = false, want true")
+		}
+		if status != 200 {
+			t.Errorf("S8 status = %d, want 200", status)
+		}
+		if !strings.Contains(strings.ToLower(body), "activated") {
+			t.Errorf("S8 body does not contain an activation acknowledgment: %s", body)
+		}
+	})
 }

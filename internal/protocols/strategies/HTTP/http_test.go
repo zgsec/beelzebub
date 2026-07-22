@@ -1,7 +1,11 @@
 package HTTP
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -316,7 +320,7 @@ func TestBuildHTTPResponse_RequestBodyCapturedFromServiceConfig(t *testing.T) {
 		RequestBodyMaxBytes: 50,
 		State:               &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +368,7 @@ func TestHTTP_SessionCreateSetsCookieAndCaptures(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +437,7 @@ func TestHTTP_SessionRequireRejectsUnauthed(t *testing.T) {
 		State:       &parser.State{CookieName: ".ASPXAUTH", TTLSeconds: 600},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +503,7 @@ func TestHTTP_ArtifactCaptureWritesAndAddsSHA(t *testing.T) {
 		},
 	}
 
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +542,7 @@ func TestHTTP_RawBodyFirst8KB(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +582,7 @@ func TestHTTP_HeaderCaptures(t *testing.T) {
 		ServiceType: "svc",
 		State:       &parser.State{CookieName: ".X", TTLSeconds: 1800},
 	}
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +631,7 @@ func TestHTTP_CookieForgery_JWT(t *testing.T) {
 	}
 	// Even though sessionAction is require and sess is nil (so we 401),
 	// the forgery info must still appear in Captured.
-	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, fireTrace := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -881,7 +885,7 @@ func TestHTTP_MirrorTimingDelay(t *testing.T) {
 		req = req.WithContext(ctx)
 
 		start := time.Now()
-		_, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+		_, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatal(err)
@@ -949,7 +953,7 @@ func TestHTTP_MirrorTimingNoDelayOnReject(t *testing.T) {
 	req = req.WithContext(ctx)
 
 	start := time.Now()
-	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil)
+	resp, err, _ := buildHTTPResponse(servConf, tt, cmd, req, nil, sctx, nil, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -1044,7 +1048,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation(t *testing.T) {
 	// mints the fabricated administrator on the chain session keyed by srcIP.
 	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
 		chainEscalationBatchS3("w2s_integration_test"), srcIP+":1234")
-	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore)
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1058,7 +1062,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation(t *testing.T) {
 	// Step 2: same source IP (different ephemeral port — RemoteAddr's port
 	// is stripped before the chainStore lookup) hits /wp-admin/users.php.
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", srcIP+":5555")
-	usersResp, err2, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore)
+	usersResp, err2, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
@@ -1104,7 +1108,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin(t *testing.T) {
 	// mints the fabricated administrator on the chain session keyed by srcIP.
 	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
 		chainEscalationBatchS3("w2s_wpadmin_test"), srcIP+":1234")
-	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore)
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1119,7 +1123,7 @@ func TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin(t *testing.T) {
 	// this must route to ServeAuthStage's S4 login stage exactly like
 	// /wp-login.php does: 200 + a wordpress_logged_in_* Set-Cookie.
 	wpAdminReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/", "", srcIP+":5555")
-	wpAdminResp, err2, _ := buildHTTPResponse(servConf, tt, wpAdminCmd, wpAdminReq, nil, nil, chainStore)
+	wpAdminResp, err2, _ := buildHTTPResponse(servConf, tt, wpAdminCmd, wpAdminReq, nil, nil, chainStore, nil)
 	if err2 != nil {
 		t.Fatal(err2)
 	}
@@ -1156,7 +1160,7 @@ func TestHTTP_ChainWiring_FreshSessionFallsThrough(t *testing.T) {
 		Handler: `{"code":"not_found"}`,
 	}
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", "198.51.100.44:1111")
-	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore)
+	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, chainStore, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1182,12 +1186,296 @@ func TestHTTP_ChainWiring_NilChainStoreUnchanged(t *testing.T) {
 	}
 	usersReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/users.php", "", "203.0.113.77:1234")
 
-	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, nil /* chainStore */)
+	resp, err, _ := buildHTTPResponse(servConf, tt, usersCmd, usersReq, nil, nil, nil /* chainStore */, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != 404 || resp.Body != `{"code":"not_found"}` {
 		t.Fatalf("chainStore==nil must leave auth-stage routing untouched, got %d: %s", resp.StatusCode, resp.Body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: S7 (plugin .zip upload capture) + S8 (activate) wiring in http.go.
+// ---------------------------------------------------------------------------
+
+// buildPluginUploadMultipart constructs a multipart/form-data body shaped
+// like poc.py's upload-plugin POST: a "_wpnonce" field, a
+// "_wp_http_referer" field, and a "pluginzip" file part carrying zipBytes
+// under filename. Returns the exact Content-Type header value (boundary
+// included) the caller must set on the request, and the encoded body.
+func buildPluginUploadMultipart(t *testing.T, filename string, zipBytes []byte) (contentType string, body []byte) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("_wpnonce", "deadbeef00"); err != nil {
+		t.Fatalf("WriteField _wpnonce: %v", err)
+	}
+	if err := w.WriteField("_wp_http_referer", "/wp-admin/plugin-install.php?tab=upload"); err != nil {
+		t.Fatalf("WriteField _wp_http_referer: %v", err)
+	}
+	fw, err := w.CreateFormFile("pluginzip", filename)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write(zipBytes); err != nil {
+		t.Fatalf("write zip bytes: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	return w.FormDataContentType(), buf.Bytes()
+}
+
+// escalateChainSession drives chainEscalationBatchS3 through the batch/v1
+// ResponseMirror path, same as TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation
+// does — the only way to reach adminCreated=true on a *plugins.ChainSession
+// from this package (its fields are unexported to internal/plugins).
+func escalateChainSession(t *testing.T, chainStore *plugins.ChainStore, tt *captureTracer, servConf parser.BeelzebubServiceConfiguration, srcIP, username string) {
+	t.Helper()
+	batchCmd := parser.Command{
+		Name: "wp/batch", StatusCode: 207, Handler: "{}",
+		Plugin: plugins.ResponseMirrorName,
+		Mirror: chainTestMirrorConfig(),
+	}
+	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
+		chainEscalationBatchS3(username), srcIP+":1234")
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batchResp.StatusCode != 207 || !strings.Contains(batchResp.Body, username) {
+		t.Fatalf("escalation batch did not forge the admin-created element: %d %s", batchResp.StatusCode, batchResp.Body)
+	}
+}
+
+// TestHTTP_ChainWiring_UploadStage_S7S8_CapturesZipAndServesActivateFlow is
+// the end-to-end lock for Task 8: an armed session (adminCreated via the
+// same escalation batch Task 7's tests use) POSTs the exact multipart shape
+// poc.py sends to /wp-admin/update.php?action=upload-plugin. Asserts the
+// zip bytes reached artifactStore.Write byte-for-byte (the ONLY thing done
+// with them — see extractPluginZipPart's and ServeUploadStage's doc
+// comments: no os.Open/exec/unzip anywhere on this path), that the response
+// carries a plugins.php?action=activate link with the derived slug, and
+// that a follow-up GET to that link (S8) succeeds — which only happens if
+// ServeUploadStage actually set sess.uploadOpen, proving that state flowed
+// through even though this package can't read the unexported field
+// directly.
+func TestHTTP_ChainWiring_UploadStage_S7S8_CapturesZipAndServesActivateFlow(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.99"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0 /* no size limit */)
+
+	escalateChainSession(t, chainStore, tt, servConf, srcIP, "w2s_upload_test")
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	zipBytes := []byte("PK\x03\x04-not-a-real-zip-just-test-bytes-for-the-artifact-store")
+	contentType, body := buildPluginUploadMultipart(t, "sgio-wp2shell-upltest.zip", zipBytes)
+
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	uploadResp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploadResp.StatusCode != 200 {
+		t.Fatalf("expected ServeUploadStage's 200 for the armed session, got %d: %s", uploadResp.StatusCode, uploadResp.Body)
+	}
+	if strings.Contains(uploadResp.Body, "not_found") {
+		t.Fatalf("upload served the command's static fallback instead of the chain upload-stage response: %s", uploadResp.Body)
+	}
+	wantSlugPath := "plugin=sgio-wp2shell-upltest%2Fsgio-wp2shell-upltest.php"
+	if !strings.Contains(uploadResp.Body, "plugins.php?action=activate") || !strings.Contains(uploadResp.Body, wantSlugPath) {
+		t.Fatalf("expected an activate link carrying %q, got body: %s", wantSlugPath, uploadResp.Body)
+	}
+
+	// The artifact store must hold the EXACT zip bytes, addressed by their
+	// own sha256 — proving the multipart part was captured byte-for-byte
+	// and nowhere else.
+	sum := sha256.Sum256(zipBytes)
+	wantSHA := hex.EncodeToString(sum[:])
+	binPath := strings.Join([]string{dir, wantSHA + ".bin"}, string(os.PathSeparator))
+	gotBytes, statErr := os.ReadFile(binPath)
+	if statErr != nil {
+		t.Fatalf("artifact .bin file not found at %s: %v", binPath, statErr)
+	}
+	if !bytes.Equal(gotBytes, zipBytes) {
+		t.Fatalf("captured artifact bytes differ from the uploaded zip: got %q, want %q", gotBytes, zipBytes)
+	}
+
+	// S8: follow the activate link (same source IP, so the same chain
+	// session) — 200 proves sess.uploadOpen was actually set by S7.
+	activateCmd := parser.Command{
+		Name: "wp-admin-plugins", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	activateReq := newChainTestRequest(t, http.MethodGet,
+		"/wp-admin/plugins.php?action=activate&plugin="+wantSlugPath+"&_wpnonce=deadbeef00", "", srcIP+":6666")
+	activateResp, err2, _ := buildHTTPResponse(servConf, tt, activateCmd, activateReq, nil, nil, chainStore, astore)
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	if activateResp.StatusCode != 200 {
+		t.Fatalf("expected ServeActivateStage's 200 after upload, got %d: %s", activateResp.StatusCode, activateResp.Body)
+	}
+	if strings.Contains(activateResp.Body, "not_found") {
+		t.Fatalf("activate served the command's static fallback instead of the chain activate-stage response: %s", activateResp.Body)
+	}
+}
+
+// TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough is the
+// NOT-handled half: chainStore is armed and the multipart body is
+// well-formed, but this source IP never drove the forge chain to
+// adminCreated, so ServeUploadStage must return handled=false and
+// buildHTTPResponse must fall through to the command's ordinary configured
+// (here: static 404) response, unchanged — same contract as
+// TestHTTP_ChainWiring_FreshSessionFallsThrough for S4-S6.
+func TestHTTP_ChainWiring_UploadStage_GateNonAdminCreatedFallsThrough(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0)
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	contentType, body := buildPluginUploadMultipart(t, "plugin.zip", []byte("zip-bytes"))
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), "198.51.100.55:1111")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 404 || resp.Body != `{"code":"not_found"}` {
+		t.Fatalf("expected the command's static fallback for a fresh (not-adminCreated) session, got %d: %s",
+			resp.StatusCode, resp.Body)
+	}
+}
+
+// TestHTTP_ChainWiring_UploadStage_NilArtifactStoreStillServesSuccess
+// verifies the "no-store path" from Task 8's contract: an armed session but
+// a nil artifactStore (ArtifactPath not configured for this service) must
+// still serve the S7 success page — capture is best-effort telemetry, not a
+// gate on the exploit's forward progress.
+func TestHTTP_ChainWiring_UploadStage_NilArtifactStoreStillServesSuccess(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.100"
+
+	escalateChainSession(t, chainStore, tt, servConf, srcIP, "w2s_nostore_test")
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	contentType, body := buildPluginUploadMultipart(t, "plugin.zip", []byte("zip-bytes"))
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, nil /* artifactStore */)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || !strings.Contains(resp.Body, "plugins.php?action=activate") {
+		t.Fatalf("nil artifactStore must not block the S7 success page, got %d: %s", resp.StatusCode, resp.Body)
+	}
+}
+
+// TestHTTP_ChainWiring_UploadStage_OversizeArtifactStillServesSuccess covers
+// artifactstore.ErrOversize: the store rejects the write (body bigger than
+// its configured maxBodyBytes), but the S7 success page must still be
+// served — a Write failure never gates the response, only the write itself.
+func TestHTTP_ChainWiring_UploadStage_OversizeArtifactStillServesSuccess(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.101"
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 1 /* 1 byte cap -> every real zip is oversize */)
+
+	escalateChainSession(t, chainStore, tt, servConf, srcIP, "w2s_oversize_test")
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	contentType, body := buildPluginUploadMultipart(t, "plugin.zip", []byte("more-than-one-byte-of-zip"))
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), srcIP+":5555")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, chainStore, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || !strings.Contains(resp.Body, "plugins.php?action=activate") {
+		t.Fatalf("ErrOversize from artifactStore.Write must not block the S7 success page, got %d: %s", resp.StatusCode, resp.Body)
+	}
+
+	// Confirm no .bin file was actually written (Write really did reject
+	// it, this isn't a false pass from a store that ignored the cap).
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".bin") {
+			t.Errorf("expected no .bin artifact for an oversize write, found %s", e.Name())
+		}
+	}
+}
+
+// TestHTTP_ChainWiring_UploadStage_NilChainStoreUnchanged is the
+// zero-regression half for S7/S8: chainStore == nil means sess is never
+// looked up, so the update.php/plugins.php routing branches added in Task 8
+// must be a complete no-op — including never touching artifactStore, even
+// though the request is a well-formed, correctly-routed multipart upload.
+func TestHTTP_ChainWiring_UploadStage_NilChainStoreUnchanged(t *testing.T) {
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+
+	dir := t.TempDir()
+	astore := artifactstore.New(dir, 0)
+
+	uploadCmd := parser.Command{
+		Name: "wp-admin-update", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+	contentType, body := buildPluginUploadMultipart(t, "plugin.zip", []byte("zip-bytes"))
+	uploadReq := newChainTestRequest(t, http.MethodPost,
+		"/wp-admin/update.php?action=upload-plugin", string(body), "203.0.113.102:5555")
+	uploadReq.Header.Set("Content-Type", contentType)
+
+	resp, err, _ := buildHTTPResponse(servConf, tt, uploadCmd, uploadReq, nil, nil, nil /* chainStore */, astore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 404 || resp.Body != `{"code":"not_found"}` {
+		t.Fatalf("chainStore==nil must leave upload-stage routing untouched, got %d: %s", resp.StatusCode, resp.Body)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("ReadDir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("chainStore==nil must never write to artifactStore, found %d entries in %s", len(entries), dir)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"regexp"
@@ -225,6 +227,53 @@ func anyBodyRegex(commands []parser.Command) bool {
 	return false
 }
 
+// extractPluginZipPart pulls the "pluginzip" file part out of a
+// multipart/form-data body — the shape poc.py's upload-plugin POST uses
+// (name="pluginzip"; filename="<slug>.zip"). contentType is the request's
+// raw Content-Type header value, which carries the multipart boundary as a
+// parameter; body is the already-buffered (and already 1MiB-capped, see
+// buildHTTPResponse's bodyBytes read) request body. Returns an error if
+// contentType isn't multipart, has no boundary, the body doesn't parse, or
+// no part named "pluginzip" is present — callers treat any of those as
+// "not a request this stage handles" and fall through unchanged.
+//
+// This function only ever reads the part into memory and returns its
+// bytes; it never writes them to disk itself (that's chainArtifactStore.Write,
+// the sole consumer of its return value) and never opens, unzips, or
+// executes anything.
+func extractPluginZipPart(contentType string, body []byte) (filename string, data []byte, err error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", nil, fmt.Errorf("extractPluginZipPart: parse content-type: %w", err)
+	}
+	if !strings.HasPrefix(mediaType, "multipart/") {
+		return "", nil, fmt.Errorf("extractPluginZipPart: not multipart (%s)", mediaType)
+	}
+	boundary, ok := params["boundary"]
+	if !ok || boundary == "" {
+		return "", nil, fmt.Errorf("extractPluginZipPart: no multipart boundary")
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, partErr := reader.NextPart()
+		if partErr == io.EOF {
+			return "", nil, fmt.Errorf("extractPluginZipPart: no pluginzip part found")
+		}
+		if partErr != nil {
+			return "", nil, fmt.Errorf("extractPluginZipPart: %w", partErr)
+		}
+		if part.FormName() != "pluginzip" {
+			continue
+		}
+		zipBytes, readErr := io.ReadAll(part)
+		if readErr != nil {
+			return "", nil, fmt.Errorf("extractPluginZipPart: reading pluginzip part: %w", readErr)
+		}
+		return part.FileName(), zipBytes, nil
+	}
+}
+
 func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer) error {
 	// Bind the fault injector PER-SERVICE, here, into a local the handler
 	// closure captures — exactly as servConf is captured per service below.
@@ -337,7 +386,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 			}
 			matched = true
 			{
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -350,7 +399,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 		if !matched {
 			command := servConf.FallbackCommand
 			if command.Handler != "" || command.Plugin != "" {
-				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore)
+				resp, err, fireTrace = buildHTTPResponse(servConf, tr, command, request, httpStrategy.noveltyStore, sctx, httpStrategy.chainStore, httpStrategy.artifactStore)
 				if err != nil {
 					log.Errorf("error building http response: %s: %v", request.RequestURI, err)
 					applyLLMOfflineResponse(&resp, servConf.LLMOfflineResponse)
@@ -455,7 +504,7 @@ func (httpStrategy *HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigura
 // fixes the ordering.
 type fireTraceFunc func(finalResp *httpResponse)
 
-func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore) (httpResponse, error, fireTraceFunc) {
+func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request, ns *noveltydetect.FingerprintStore, sctx *sessionContext, chainStore *plugins.ChainStore, chainArtifactStore *artifactstore.Store) (httpResponse, error, fireTraceFunc) {
 	// v8: response timing — measure from buildHTTPResponse entry through
 	// trace fire (covers static-handler + LLM plugin paths uniformly).
 	// Trace fires from the caller AFTER all resp modifications complete.
@@ -601,6 +650,73 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 				}
 				resp.Headers = headers
 				return resp, nil, fireTrace
+			}
+
+		// S7 (Task 8): the plugin .zip the exploit uploads once it has an
+		// admin session + S6's nonce. WordPress overloads update.php for
+		// dozens of unrelated admin actions via ?action=, so both the
+		// method and the exact action value are checked before this branch
+		// touches the request body — a GET, or a POST with any other
+		// action, falls straight through to the command's ordinary
+		// configured response.
+		//
+		// The uploaded bytes are parsed out of the multipart body and
+		// handed ONLY to chainArtifactStore.Write (a content-addressable,
+		// inert capture — see internal/artifactstore/store.go's package
+		// doc: "a research artifact pipeline, not a malware dropbox").
+		// There is no os.Open/exec/unzip anywhere on this path, and never
+		// will be: the zip is never written under a name or path a
+		// webserver would execute, and this function does nothing else
+		// with its contents. A Write failure (including
+		// artifactstore.ErrOversize) is swallowed deliberately — capture
+		// is best-effort telemetry, not a gate on the exploit's forward
+		// progress, so the success page below is served either way.
+		//
+		// plugins.ServeUploadStage re-checks sess.adminCreated itself, so
+		// a request that reaches here without having cleared T4 still
+		// falls through unhandled, same as the S4-S6 case above.
+		case "/wp-admin/update.php":
+			if request.Method == http.MethodPost && request.URL.Query().Get("action") == "upload-plugin" {
+				if filename, zipBytes, parseErr := extractPluginZipPart(request.Header.Get("Content-Type"), bodyBytes); parseErr == nil {
+					if chainArtifactStore != nil {
+						host, _, splitErr := net.SplitHostPort(request.RemoteAddr)
+						if splitErr != nil {
+							host = request.RemoteAddr
+						}
+						_, _ = chainArtifactStore.Write(zipBytes, map[string]any{
+							"stage":    "plugin_upload",
+							"src_ip":   host,
+							"session":  host,
+							"filename": filename,
+						})
+					}
+					if status, hdrs, uploadBody, handled := plugins.ServeUploadStage(sess, filename); handled {
+						resp.StatusCode = status
+						resp.Body = uploadBody
+						headers := make([]string, 0, len(hdrs))
+						for k, v := range hdrs {
+							headers = append(headers, k+": "+v)
+						}
+						resp.Headers = headers
+						return resp, nil, fireTrace
+					}
+				}
+			}
+
+		// S8 (Task 8): the activation click the exploit follows off S7's
+		// "Activate Plugin" link.
+		case "/wp-admin/plugins.php":
+			if request.Method == http.MethodGet && request.URL.Query().Get("action") == "activate" {
+				if status, hdrs, activateBody, handled := plugins.ServeActivateStage(sess); handled {
+					resp.StatusCode = status
+					resp.Body = activateBody
+					headers := make([]string, 0, len(hdrs))
+					for k, v := range hdrs {
+						headers = append(headers, k+": "+v)
+					}
+					resp.Headers = headers
+					return resp, nil, fireTrace
+				}
 			}
 		}
 	}
