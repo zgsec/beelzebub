@@ -7,20 +7,6 @@ import (
 	"github.com/beelzebub-labs/beelzebub/v3/internal/cache"
 )
 
-const (
-	// chainStoreMaxEntries caps the checkpoint store. An attacker rotating
-	// source IPs across attempts would otherwise grow this map without
-	// bound — every new key allocates a *ChainSession that lives forever.
-	// Mirrors the sizing rationale used for the LLM honeypot's per-IP rate
-	// limiter (see llm-integration.go's rateLimiterMaxEntries).
-	chainStoreMaxEntries = 10_000
-
-	// chainStoreDefaultTTL is the idle timeout for an in-progress chain
-	// attempt: how long a checkpoint session survives with no further
-	// activity from its source key before the next Get() starts fresh.
-	chainStoreDefaultTTL = 30 * time.Minute
-)
-
 // ChainSession holds the small cross-request state the WP gadget chain
 // threads through a single attack attempt: which checkpoints have been
 // reached so far, the forged identifiers minted along the way, and the

@@ -1073,6 +1073,74 @@ func TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation(t *testing.T) {
 	}
 }
 
+// TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin locks the http.go dispatch
+// switch's coverage of "/wp-admin/" (a bare GET/POST hit, not
+// /wp-admin/users.php or /wp-admin/plugin-install.php): ServeAuthStage
+// already matches "/wp-admin/" for its S4 login-check stage, but until now
+// the HTTP-strategy-side switch in buildHTTPResponse only listed
+// /wp-login.php, /wp-admin/users.php and /wp-admin/plugin-install.php, so an
+// exploit variant that goes straight to /wp-admin/ for the S4 check fell
+// through to the command's ordinary (static/404) response instead of the
+// dashboard+Set-Cookie. This is the same escalate-then-hit-a-stage shape as
+// TestHTTP_ChainWiring_AuthStageRoutesAfterEscalation, targeting /wp-admin/
+// instead of /wp-admin/users.php.
+func TestHTTP_ChainWiring_AuthStageRoutesBareWPAdmin(t *testing.T) {
+	chainStore := plugins.NewChainStore(time.Hour, 100)
+	tt := &captureTracer{}
+	servConf := parser.BeelzebubServiceConfiguration{}
+	const srcIP = "203.0.113.88"
+
+	batchCmd := parser.Command{
+		Name: "wp/batch", StatusCode: 207, Handler: "{}",
+		Plugin: plugins.ResponseMirrorName,
+		Mirror: chainTestMirrorConfig(),
+	}
+	wpAdminCmd := parser.Command{
+		Name: "wp-admin-root", StatusCode: 404,
+		Handler: `{"code":"not_found"}`,
+	}
+
+	// Step 1: drive the escalation batch through the batch/v1 endpoint —
+	// mints the fabricated administrator on the chain session keyed by srcIP.
+	batchReq := newChainTestRequest(t, http.MethodPost, "/?rest_route=/batch/v1",
+		chainEscalationBatchS3("w2s_wpadmin_test"), srcIP+":1234")
+	batchResp, err, _ := buildHTTPResponse(servConf, tt, batchCmd, batchReq, nil, nil, chainStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batchResp.StatusCode != 207 {
+		t.Fatalf("expected the batch to dispatch (207), got %d: %s", batchResp.StatusCode, batchResp.Body)
+	}
+	if !strings.Contains(batchResp.Body, `"status":201`) || !strings.Contains(batchResp.Body, "w2s_wpadmin_test") {
+		t.Fatalf("escalation batch did not forge the admin-created element: %s", batchResp.Body)
+	}
+
+	// Step 2: same source IP hits bare /wp-admin/ (no trailing page name) —
+	// this must route to ServeAuthStage's S4 login stage exactly like
+	// /wp-login.php does: 200 + a wordpress_logged_in_* Set-Cookie.
+	wpAdminReq := newChainTestRequest(t, http.MethodGet, "/wp-admin/", "", srcIP+":5555")
+	wpAdminResp, err2, _ := buildHTTPResponse(servConf, tt, wpAdminCmd, wpAdminReq, nil, nil, chainStore)
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	if wpAdminResp.StatusCode != 200 {
+		t.Fatalf("expected ServeAuthStage's 200 for /wp-admin/ on the armed session, got %d", wpAdminResp.StatusCode)
+	}
+	if strings.Contains(wpAdminResp.Body, "not_found") {
+		t.Fatalf("/wp-admin/ served the command's static fallback instead of the chain auth-stage response: %s", wpAdminResp.Body)
+	}
+	var gotAuthCookie bool
+	for _, h := range wpAdminResp.Headers {
+		if strings.HasPrefix(h, "Set-Cookie: wordpress_logged_in_") {
+			gotAuthCookie = true
+			break
+		}
+	}
+	if !gotAuthCookie {
+		t.Fatalf("expected a wordpress_logged_in_* Set-Cookie header for /wp-admin/, got headers: %v", wpAdminResp.Headers)
+	}
+}
+
 // TestHTTP_ChainWiring_FreshSessionFallsThrough is the NOT-handled half of
 // Task 7's contract: a chainStore IS armed, but this source IP has never
 // driven the forge chain to adminCreated — ServeAuthStage must return

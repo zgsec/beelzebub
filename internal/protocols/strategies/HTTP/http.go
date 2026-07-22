@@ -120,11 +120,11 @@ type HTTPStrategy struct {
 	chainStore *plugins.ChainStore
 }
 
-// chainStoreEntryCap bounds the WP gadget-chain session store the same way
-// chainStoreMaxEntries bounds it inside package plugins (unexported there,
-// so this is the HTTP-strategy-side sizing decision) — an attacker rotating
-// source IPs across chain attempts evicts old idle sessions instead of
-// growing the map without bound.
+// chainStoreEntryCap bounds the WP gadget-chain session store passed into
+// plugins.NewChainStore — the single cap for that store; package plugins
+// itself defines no cap of its own. An attacker rotating source IPs across
+// chain attempts evicts old idle sessions instead of growing the map
+// without bound.
 const chainStoreEntryCap = 4096
 
 // findMirrorChain scans a service's commands (main + fallback) for the
@@ -591,7 +591,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	// for these paths is untouched.
 	if sess != nil {
 		switch request.URL.Path {
-		case "/wp-login.php", "/wp-admin/users.php", "/wp-admin/plugin-install.php":
+		case "/wp-login.php", "/wp-admin/", "/wp-admin/users.php", "/wp-admin/plugin-install.php":
 			if status, hdrs, authBody, handled := plugins.ServeAuthStage(request.RequestURI, sess); handled {
 				resp.StatusCode = status
 				resp.Body = authBody
