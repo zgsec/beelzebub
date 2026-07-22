@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -113,6 +114,80 @@ func TestPluginUploadOversizeNotStored(t *testing.T) {
 
 	if bins := countBins(t, dir); len(bins) != 0 {
 		t.Fatalf("oversize upload was persisted (%v) — a truncated fragment must never be stored", bins)
+	}
+}
+
+// TestPluginUploadWholeThroughHandler is the end-to-end lock on the slot-gated
+// enlarged read: it stands up a real armed listener via Init and POSTs a >1 MiB
+// plugin upload, exercising the FULL wiring the unit tests bypass — handler
+// acquires a slot, sets the enlarged budget, reads the whole body into preBody,
+// threads it to buildHTTPResponse, captures, releases. A regression that
+// dropped `budget = enlargedUploadBudget(...)` or `preBody = b` would truncate
+// the read and fail this test (the whole-zip SHA would never land), while still
+// passing every other test.
+func TestPluginUploadWholeThroughHandler(t *testing.T) {
+	dir := t.TempDir()
+	const cap = 8 * 1024 * 1024
+	strategy := &HTTPStrategy{}
+	armed := parser.BeelzebubServiceConfiguration{
+		Protocol: "http",
+		Address:  "127.0.0.1:19196",
+		State:    &parser.State{CookieName: "wp", TTLSeconds: 600, ArtifactPath: dir, ArtifactMaxBytes: cap},
+		Commands: []parser.Command{
+			// matches the upload path so buildHTTPResponse is invoked
+			{RegexStr: "^/wp-admin/update.php", Regex: regexp.MustCompile("^/wp-admin/update.php"), Handler: "ok", StatusCode: 200},
+			// carries the chain arm (findMirrorChain scans all commands); never
+			// needs to match a request. Plugin is unset so no mirror response runs.
+			{RegexStr: "^/__arm$", Regex: regexp.MustCompile("^/__arm$"), Handler: "x", StatusCode: 200,
+				Mirror: &parser.MirrorConfig{Chain: &parser.MirrorChain{Enabled: true, CheckpointTTLSecs: 1800}}},
+		},
+	}
+	if err := strategy.Init(armed, &captureTracer{}); err != nil {
+		t.Fatalf("Init armed: %v", err)
+	}
+
+	payload := bytes.Repeat([]byte{0xAB, 0xCD, 0xEF, 0x01}, 512*1024) // 2 MiB (> 1 MiB)
+	wantSHA := hex.EncodeToString(func() []byte { s := sha256.Sum256(payload); return s[:] }())
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("pluginzip", "backdoor.zip")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatalf("write part: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	bodyBytes := buf.Bytes()
+	ct := w.FormDataContentType()
+	url := "http://127.0.0.1:19196/wp-admin/update.php?action=upload-plugin"
+
+	var lastErr error
+	posted := false
+	for i := 0; i < 50; i++ {
+		resp, err := http.Post(url, ct, bytes.NewReader(bodyBytes))
+		if err == nil {
+			resp.Body.Close()
+			posted = true
+			break
+		}
+		lastErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !posted {
+		t.Fatalf("upload POST never succeeded: %v", lastErr)
+	}
+
+	binPath := filepath.Join(dir, wantSHA+".bin")
+	got, statErr := os.ReadFile(binPath)
+	if statErr != nil {
+		t.Fatalf("whole-zip not captured through the handler at %s (slot/budget/preBody wiring regression?): %v", binPath, statErr)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("captured artifact is not the whole zip: got %d bytes, want %d", len(got), len(payload))
 	}
 }
 

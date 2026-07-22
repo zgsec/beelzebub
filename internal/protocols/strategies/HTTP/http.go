@@ -907,11 +907,18 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 				if splitErr != nil {
 					host = request.RemoteAddr
 				}
-				_, _ = chainArtifactStore.Write(bodyBytes, map[string]any{
+				// Best-effort, like the S7 upload capture: never gates the
+				// response, but a store failure is logged, not swallowed, so a
+				// full/broken artifact dir on a capture surface is visible. S9
+				// bodies are tiny ({"c":"…"} JSON, 1 MiB-bounded) so ErrOversize
+				// is not expected here, but a disk/permission error would be.
+				if _, werr := chainArtifactStore.Write(bodyBytes, map[string]any{
 					"stage":   "command",
 					"src_ip":  host,
 					"session": host,
-				})
+				}); werr != nil {
+					log.Warnf("wp2shell command capture from %s failed to store: %v", host, werr)
+				}
 			}
 			if status, hdrs, cmdBody, handled := plugins.ServeCommandStage(sess); handled {
 				resp.StatusCode = status
