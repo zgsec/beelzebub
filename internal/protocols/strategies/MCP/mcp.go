@@ -57,6 +57,10 @@ type MCPStrategy struct {
 	agentLastSeen map[string]time.Time
 	timingMu      sync.RWMutex
 
+	// MCP client handshake capture (per-IP, populated by the initialize hook)
+	clientInfo   map[string]mcpClientInfo
+	clientInfoMu sync.RWMutex
+
 	// Cached LLM instance for tool-call enrichment (nil when LLM not configured)
 	llmInstance *plugins.LLMHoneypot
 
@@ -303,6 +307,7 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	mcpStrategy.toolHistory = make(map[string][]toolCallRecord)
 	mcpStrategy.agentTimings = make(map[string][]int64)
 	mcpStrategy.agentLastSeen = make(map[string]time.Time)
+	mcpStrategy.clientInfo = make(map[string]mcpClientInfo)
 	// Novelty detection: create store if enabled in config
 	if servConf.NoveltyDetection.Enabled && mcpStrategy.noveltyStore == nil {
 		mcpStrategy.noveltyStore = noveltydetect.NewStore()
@@ -352,11 +357,52 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 		)
 	}
 
+	// Capture the client's `initialize` handshake — the one place an MCP
+	// client (SDK / agent framework) self-reports its name and version. We
+	// stash it per-IP so every subsequent tool event carries the attribution,
+	// and emit a dedicated trace so the handshake itself is on the record.
+	mcpHooks := &server.Hooks{}
+	mcpHooks.AddAfterInitialize(func(ctx context.Context, _ any, message *mcp.InitializeRequest, _ *mcp.InitializeResult) {
+		remoteAddr, ok := ctx.Value(remoteAddrCtxKey{}).(string)
+		if !ok || remoteAddr == "" {
+			return
+		}
+		host, port, _ := net.SplitHostPort(remoteAddr)
+		ci := extractMCPClientInfo(message)
+		mcpStrategy.setClientInfo(host, ci)
+
+		sessionKey := "MCP" + host
+		if !mcpStrategy.Sessions.HasKey(sessionKey) {
+			mcpStrategy.Sessions.SetSessionID(sessionKey, uuid.New().String())
+		}
+
+		tr.TraceEvent(tracer.Event{
+			Msg:                   "MCP initialize",
+			Protocol:              tracer.MCP.String(),
+			Status:                tracer.Interaction.String(),
+			RemoteAddr:            remoteAddr,
+			SourceIp:              host,
+			SourcePort:            port,
+			ID:                    mcpStrategy.Sessions.GetSessionID(sessionKey),
+			Description:           servConf.Description,
+			ServiceType:           servConf.ServiceType,
+			Command:               "initialize",
+			SessionKey:            sessionKey,
+			MCPClientName:         ci.Name,
+			MCPClientVersion:      ci.Version,
+			MCPClientTitle:        ci.Title,
+			MCPProtocolVersion:    ci.ProtocolVersion,
+			MCPClientCapabilities: ci.Capabilities,
+			ServicePort:           destPort,
+		})
+	})
+
 	mcpServer := server.NewMCPServer(
 		servConf.Description,
 		"3.12.1-rc1",
 		server.WithToolCapabilities(false),
 		server.WithInstructions(serverInstructions),
+		server.WithHooks(mcpHooks),
 	)
 
 	for _, toolConfig := range servConf.Tools {
@@ -452,8 +498,9 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				faultResp, faultType, faulted := mcpStrategy.Fault.ApplyWithSequence(seq)
 				if faulted {
 					// Classify even faulted events
+					faultClientMeta, faultHadInitialize := mcpStrategy.getClientInfo(host)
 					faultSig := agentdetect.Signal{
-						HasMCPInitialize:    seq == 1,
+						HasMCPInitialize:    faultHadInitialize || seq == 1,
 						ToolChainDepth:      0,
 						InterEventTimingsMs: timings,
 						HasIdenticalRetries: isRetry,
@@ -496,6 +543,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 						NoveltyCategory: faultNoveltyVerdict.Category,
 						NoveltySignals:  faultNoveltyVerdict.SignalsString(),
 						ServicePort:     destPort,
+
+						MCPClientName:         faultClientMeta.Name,
+						MCPClientVersion:      faultClientMeta.Version,
+						MCPClientTitle:        faultClientMeta.Title,
+						MCPProtocolVersion:    faultClientMeta.ProtocolVersion,
+						MCPClientCapabilities: faultClientMeta.Capabilities,
 					})
 					return mcp.NewToolResultText(faultResp), nil
 				}
@@ -551,8 +604,13 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 			mcpStrategy.recordToolCall(host, request.Params.Name, response)
 
+			// A captured initialize handshake is a stronger agent signal than
+			// the positional seq==1 guess; prefer it, keeping seq==1 as fallback
+			// for clients that skip a recorded handshake (e.g. SSE reconnects).
+			clientMeta, hadInitialize := mcpStrategy.getClientInfo(host)
+
 			sig := agentdetect.Signal{
-				HasMCPInitialize:    seq == 1,
+				HasMCPInitialize:    hadInitialize || seq == 1,
 				ToolChainDepth:      chainDepth,
 				InterEventTimingsMs: timings,
 				HasIdenticalRetries: isRetry,
@@ -595,6 +653,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				NoveltyCategory:  noveltyVerdict.Category,
 				NoveltySignals:   noveltyVerdict.SignalsString(),
 				ServicePort:      destPort,
+
+				MCPClientName:         clientMeta.Name,
+				MCPClientVersion:      clientMeta.Version,
+				MCPClientTitle:        clientMeta.Title,
+				MCPProtocolVersion:    clientMeta.ProtocolVersion,
+				MCPClientCapabilities: clientMeta.Capabilities,
 			})
 			return mcp.NewToolResultText(response), nil
 		})

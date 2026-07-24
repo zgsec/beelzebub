@@ -59,6 +59,14 @@ type Event struct {
 	ToolName      string `json:"ToolName,omitempty"`
 	ToolArguments string `json:"ToolArguments,omitempty"`
 
+	// MCP client handshake (captured verbatim at the initialize step; the
+	// richest client-framework attribution available on the MCP surface)
+	MCPClientName         string `json:"MCPClientName,omitempty"`
+	MCPClientVersion      string `json:"MCPClientVersion,omitempty"`
+	MCPClientTitle        string `json:"MCPClientTitle,omitempty"`
+	MCPProtocolVersion    string `json:"MCPProtocolVersion,omitempty"`
+	MCPClientCapabilities string `json:"MCPClientCapabilities,omitempty"`
+
 	// Timing
 	InterEventMs int64 `json:"InterEventMs,omitempty"`
 
