@@ -451,6 +451,10 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			if mcpStrategy.Fault != nil {
 				faultResp, faultType, faulted := mcpStrategy.Fault.ApplyWithSequence(seq)
 				if faulted {
+					// Render request-time placeholders (${request.uuid_short}, ...)
+					// in error templates, matching the success and fallback paths,
+					// so a template placeholder is never served literally.
+					faultResp = mcpStrategy.renderResponse(faultResp)
 					// Classify even faulted events
 					faultSig := agentdetect.Signal{
 						HasMCPInitialize:    seq == 1,
@@ -541,6 +545,12 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			if mcpStrategy.Bridge != nil {
 				response = mcpStrategy.enrichWithBridge(host, request.Params.Name, response)
 			}
+
+			// Substitute request-time placeholders in the finalized tool response,
+			// mirroring the HTTP fallback path and the fault path above, so every
+			// MCP response — success or error — renders placeholders consistently.
+			// Applied before recordToolCall so chain-detection sees the wire form.
+			response = mcpStrategy.renderResponse(response)
 
 			var crossRef string
 			if mcpStrategy.Bridge != nil {
@@ -973,6 +983,17 @@ var bridgeEnrichedTools = map[string]bool{
 	"cdf/configstore.kv":   true,
 	"tool:resource-store":  true,
 	"cdf/platform.inspect": true,
+}
+
+// renderResponse substitutes request-time placeholders (${request.*}, ${time.*})
+// in a finalized MCP response, exactly as the HTTP fallback path does. MCP has
+// no stateful per-request session context, so sessionVars and requestBody are
+// nil. Centralizing this keeps placeholder rendering identical across every MCP
+// response — success, error, or faulted — so a template placeholder is never
+// served to a client verbatim.
+func (s *MCPStrategy) renderResponse(body string) string {
+	out, _ := responsesubs.Apply(body, nil, nil, nil)
+	return out
 }
 
 func (s *MCPStrategy) enrichWithBridge(ip, toolName, response string) string {
